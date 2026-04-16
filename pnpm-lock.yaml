@@ -50,9 +50,15 @@ importers:
       '@hono/zod-validator':
         specifier: ^0.7.2
         version: 0.7.6(hono@4.12.14)(zod@4.3.6)
+      bullmq:
+        specifier: ^5.63.1
+        version: 5.74.1
       hono:
         specifier: ^4.9.6
         version: 4.12.14
+      ioredis:
+        specifier: ^5.8.1
+        version: 5.10.1
       zod:
         specifier: ^4.1.12
         version: 4.3.6
