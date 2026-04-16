@@ -1,0 +1,12 @@
+{
+  "name": "@genergi/web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -p tsconfig.json && vite build",
+    "test": "echo web tests pending",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  }
+}

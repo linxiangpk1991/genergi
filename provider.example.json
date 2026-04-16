@@ -1,0 +1,19 @@
+{
+  "providers": {
+    "text": {
+      "type": "anthropic-compatible",
+      "baseUrl": "https://example.com",
+      "modelRegistryKey": "text.default"
+    },
+    "image": {
+      "type": "openai-compatible",
+      "baseUrl": "https://example.com",
+      "modelRegistryKey": "image.final"
+    },
+    "video": {
+      "type": "openai-compatible",
+      "baseUrl": "https://example.com",
+      "modelRegistryKey": "video.final"
+    }
+  }
+}

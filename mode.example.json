@@ -1,0 +1,22 @@
+{
+  "modes": [
+    {
+      "id": "mass_production",
+      "displayName": "量产模式",
+      "textModelId": "text.default",
+      "imageDraftModelId": "image.draft",
+      "imageFinalModelId": "image.final",
+      "videoDraftModelId": "video.draft",
+      "videoFinalModelId": "video.final"
+    },
+    {
+      "id": "high_quality",
+      "displayName": "高质量模式",
+      "textModelId": "text.default",
+      "imageDraftModelId": "image.final",
+      "imageFinalModelId": "image.premium",
+      "videoDraftModelId": "video.final",
+      "videoFinalModelId": "video.hd"
+    }
+  ]
+}

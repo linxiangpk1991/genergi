@@ -1,0 +1,24 @@
+{
+  "name": "genergi",
+  "private": true,
+  "version": "0.1.0",
+  "description": "GENERGI 自动化视频平台",
+  "packageManager": "pnpm@10.12.4",
+  "engines": {
+    "node": ">=24.0.0",
+    "pnpm": ">=10.12.4"
+  },
+  "scripts": {
+    "dev": "turbo dev",
+    "build": "turbo build",
+    "lint": "turbo lint",
+    "test": "turbo test",
+    "typecheck": "turbo typecheck",
+    "format": "prettier --write ."
+  },
+  "devDependencies": {
+    "prettier": "^3.6.2",
+    "turbo": "^2.5.8",
+    "typescript": "^5.9.2"
+  }
+}
