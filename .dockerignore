@@ -1,0 +1,12 @@
+.git
+node_modules
+**/node_modules
+.turbo
+**/.turbo
+dist
+**/dist
+coverage
+.codex-output
+.superpowers
+apps/api/.data
+.tmp*
