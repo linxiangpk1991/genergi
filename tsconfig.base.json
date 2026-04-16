@@ -9,6 +9,11 @@
     "allowSyntheticDefaultImports": true,
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
-    "baseUrl": "."
+    "baseUrl": ".",
+    "paths": {
+      "@genergi/shared": ["packages/shared/src/index.ts"],
+      "@genergi/config": ["packages/config/src/index.ts"],
+      "@genergi/ui": ["packages/ui/src/index.ts"]
+    }
   }
 }

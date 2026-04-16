@@ -4,9 +4,20 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "node src/index.ts",
-    "build": "tsc -p tsconfig.json",
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.json --outDir dist",
     "test": "echo api tests pending",
     "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@genergi/config": "workspace:*",
+    "@genergi/shared": "workspace:*",
+    "@hono/node-server": "^1.19.4",
+    "@hono/zod-validator": "^0.7.2",
+    "hono": "^4.9.6",
+    "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "@types/node": "^24.12.2"
   }
 }

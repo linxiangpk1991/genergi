@@ -9,3 +9,4 @@ coverage/
 .pnpm-store/
 .codex-output/
 .superpowers/
+apps/api/.data/

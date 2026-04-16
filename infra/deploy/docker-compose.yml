@@ -1,0 +1,63 @@
+services:
+  postgres:
+    image: postgres:18
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: genergi
+      POSTGRES_USER: genergi
+      POSTGRES_PASSWORD: genergi_dev_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - genergi_postgres:/var/lib/postgresql/data
+
+  redis:
+    image: redis:8
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - genergi_redis:/data
+
+  api:
+    image: node:24-bookworm
+    working_dir: /app
+    command: sh -lc "corepack enable && pnpm install && pnpm --filter @genergi/api dev"
+    environment:
+      PORT: 8787
+      REDIS_URL: redis://redis:6379
+    volumes:
+      - ../../:/app
+    ports:
+      - "8787:8787"
+    depends_on:
+      - redis
+      - postgres
+
+  worker:
+    image: node:24-bookworm
+    working_dir: /app
+    command: sh -lc "corepack enable && pnpm install && pnpm --filter @genergi/worker dev"
+    environment:
+      REDIS_URL: redis://redis:6379
+    volumes:
+      - ../../:/app
+    depends_on:
+      - redis
+
+  web:
+    image: node:24-bookworm
+    working_dir: /app
+    command: sh -lc "corepack enable && pnpm install && pnpm --filter @genergi/web dev -- --host"
+    environment:
+      VITE_API_BASE_URL: http://localhost:8787
+    volumes:
+      - ../../:/app
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+
+volumes:
+  genergi_postgres:
+  genergi_redis:
