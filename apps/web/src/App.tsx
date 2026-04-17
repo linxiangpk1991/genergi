@@ -7,6 +7,7 @@ import { HomePage } from "./pages/HomePage"
 import { KeyframeReviewPage } from "./pages/KeyframeReviewPage"
 import { LoginPage } from "./pages/LoginPage"
 import { AssetsPage } from "./pages/AssetsPage"
+import { UserCenterPage } from "./pages/UserCenterPage"
 import { StoryboardReviewPage } from "./pages/StoryboardReviewPage"
 
 export function App() {
@@ -44,6 +45,7 @@ export function App() {
         <Route path="/keyframe-review" element={<KeyframeReviewPage />} />
         <Route path="/batch-dashboard" element={<BatchDashboardPage />} />
         <Route path="/asset-center" element={<AssetsPage />} />
+        <Route path="/user-center" element={<UserCenterPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </AppLayout>

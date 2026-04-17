@@ -120,6 +120,58 @@ export const createTaskInputSchema = z.object({
 })
 export type CreateTaskInput = z.infer<typeof createTaskInputSchema>
 
+export const userStatusSchema = z.enum(["active", "disabled"])
+export type UserStatus = z.infer<typeof userStatusSchema>
+
+export const userSourceSchema = z.enum(["file", "env"])
+export type UserSource = z.infer<typeof userSourceSchema>
+
+export const storedUserSchema = z.object({
+  id: z.string(),
+  username: z.string().min(1),
+  displayName: z.string().min(1),
+  passwordHash: z.string().min(1),
+  status: userStatusSchema,
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  lastLoginAt: z.string().nullable(),
+})
+export type StoredUser = z.infer<typeof storedUserSchema>
+
+export const publicUserSchema = storedUserSchema
+  .omit({
+    passwordHash: true,
+    createdAt: true,
+    updatedAt: true,
+    lastLoginAt: true,
+  })
+  .extend({
+    source: userSourceSchema,
+  })
+export type PublicUser = z.infer<typeof publicUserSchema>
+
+export const createUserInputSchema = z.object({
+  username: z.string().min(1),
+  displayName: z.string().min(1).optional(),
+  password: z.string().min(1),
+  status: userStatusSchema.optional(),
+  rememberPassword: z.boolean().optional(),
+})
+export type CreateUserInput = z.infer<typeof createUserInputSchema>
+
+export const updateUserInputSchema = z.object({
+  username: z.string().min(1).optional(),
+  displayName: z.string().min(1).optional(),
+  status: userStatusSchema.optional(),
+})
+export type UpdateUserInput = z.infer<typeof updateUserInputSchema>
+
+export const resetUserPasswordInputSchema = z.object({
+  password: z.string().min(1),
+  rememberPassword: z.boolean().optional(),
+})
+export type ResetUserPasswordInput = z.infer<typeof resetUserPasswordInputSchema>
+
 export interface HealthSnapshot {
   app: AppId
   status: "ok" | "degraded"

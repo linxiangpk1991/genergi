@@ -1,6 +1,6 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises"
 import path from "node:path"
-import type { AssetRecord, TaskDetail, TaskSummary } from "./index.js"
+import type { AssetRecord, StoredUser, TaskDetail, TaskSummary } from "./index.js"
 
 function resolveDataDir() {
   return process.env.GENERGI_DATA_DIR
@@ -20,6 +20,8 @@ function resolveFiles() {
     tempRuntimeFile: path.join(dataDir, "runtime-status.tmp.json"),
     assetsFile: path.join(dataDir, "assets.json"),
     tempAssetsFile: path.join(dataDir, "assets.tmp.json"),
+    usersFile: path.join(dataDir, "users.json"),
+    tempUsersFile: path.join(dataDir, "users.tmp.json"),
   }
 }
 
@@ -235,4 +237,45 @@ export async function upsertTaskAssets(taskId: string, assets: AssetRecord[]) {
 export async function readTaskAssets(taskId: string) {
   const records = await readAssetRecords()
   return records[taskId] ?? []
+}
+
+async function writeUserRecords(records: StoredUser[]) {
+  const { dataDir, usersFile, tempUsersFile } = resolveFiles()
+  await mkdir(dataDir, { recursive: true })
+  await writeFile(tempUsersFile, JSON.stringify(records, null, 2), "utf8")
+  await rename(tempUsersFile, usersFile)
+}
+
+export async function ensureUserDataFile() {
+  const { dataDir, usersFile } = resolveFiles()
+  await mkdir(dataDir, { recursive: true })
+  try {
+    const content = await readFile(usersFile, "utf8")
+    if (!content.trim()) {
+      await writeUserRecords([])
+    }
+  } catch {
+    await writeUserRecords([])
+  }
+}
+
+export async function readUserRecords(): Promise<StoredUser[]> {
+  const { usersFile } = resolveFiles()
+  await ensureUserDataFile()
+  try {
+    const content = await readFile(usersFile, "utf8")
+    if (!content.trim()) {
+      await writeUserRecords([])
+      return []
+    }
+
+    return JSON.parse(content) as StoredUser[]
+  } catch {
+    await writeUserRecords([])
+    return []
+  }
+}
+
+export async function replaceUserRecords(records: StoredUser[]) {
+  await writeUserRecords(records)
 }

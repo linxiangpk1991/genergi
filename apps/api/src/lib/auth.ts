@@ -1,40 +1,20 @@
 import { createHmac, timingSafeEqual } from "node:crypto"
 import type { Context, Next } from "hono"
 import { deleteCookie, getCookie, setCookie } from "hono/cookie"
+import {
+  getAuthConfigStatus,
+  getSessionSecret,
+  resolveLoginCredentials,
+  findUserByUsername,
+} from "./user-store.js"
 
 const SESSION_COOKIE = "genergi_session"
-
-type AuthConfig = {
-  username: string
-  password: string
-  secret: string
-}
-
-function resolveAuthConfig(): AuthConfig | null {
-  const username = process.env.GENERGI_ADMIN_USERNAME
-  const password = process.env.GENERGI_ADMIN_PASSWORD
-  const secret = process.env.GENERGI_SESSION_SECRET
-
-  if (username && password && secret) {
-    return { username, password, secret }
-  }
-
-  if (process.env.NODE_ENV !== "production") {
-    return {
-      username: "admin",
-      password: "genergi-local-only",
-      secret: "genergi-local-dev-secret",
-    }
-  }
-
-  return null
-}
 
 function buildSignature(username: string, secret: string) {
   return createHmac("sha256", secret).update(username).digest("hex")
 }
 
-function buildSessionValue(username: string, secret: string) {
+export function buildSessionValue(username: string, secret: string) {
   return `${username}.${buildSignature(username, secret)}`
 }
 
@@ -54,37 +34,47 @@ function parseSessionValue(value: string | undefined) {
   }
 }
 
-export function getSessionUser(c: Context) {
-  const config = resolveAuthConfig()
-  if (!config) {
-    return null
-  }
-
-  const session = parseSessionValue(getCookie(c, SESSION_COOKIE))
-  if (!session) {
-    return null
-  }
-
-  const expected = Buffer.from(buildSignature(session.username, config.secret), "utf8")
-  const actual = Buffer.from(session.signature, "utf8")
-  if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) {
-    return null
-  }
-
-  return session.username === config.username ? session.username : null
+function verifySessionSignature(username: string, signature: string, secret: string) {
+  const expected = Buffer.from(buildSignature(username, secret), "utf8")
+  const actual = Buffer.from(signature, "utf8")
+  return expected.length === actual.length && timingSafeEqual(expected, actual)
 }
 
-export function loginWithPassword(c: Context, username: string, password: string) {
-  const config = resolveAuthConfig()
-  if (!config) {
-    return { ok: false as const, reason: "AUTH_NOT_CONFIGURED" }
+export async function getSessionUserFromCookieValue(value: string | undefined) {
+  const secret = getSessionSecret()
+  if (!secret) {
+    return null
   }
 
-  if (username !== config.username || password !== config.password) {
-    return { ok: false as const, reason: "INVALID_CREDENTIALS" }
+  const session = parseSessionValue(value)
+  if (!session || !verifySessionSignature(session.username, session.signature, secret)) {
+    return null
   }
 
-  setCookie(c, SESSION_COOKIE, buildSessionValue(username, config.secret), {
+  const user = await findUserByUsername(session.username)
+  if (!user || user.status !== "active") {
+    return null
+  }
+
+  return user
+}
+
+export async function getSessionUser(c: Context) {
+  return getSessionUserFromCookieValue(getCookie(c, SESSION_COOKIE))
+}
+
+export async function loginWithPassword(c: Context, username: string, password: string) {
+  const result = await resolveLoginCredentials(username, password)
+  if (!result.ok) {
+    return { ok: false as const, reason: result.reason }
+  }
+
+  const secret = getSessionSecret()
+  if (!secret) {
+    return { ok: false as const, reason: "AUTH_NOT_CONFIGURED" as const }
+  }
+
+  setCookie(c, SESSION_COOKIE, buildSessionValue(result.user.username, secret), {
     httpOnly: true,
     sameSite: "Lax",
     path: "/",
@@ -92,7 +82,7 @@ export function loginWithPassword(c: Context, username: string, password: string
     maxAge: 60 * 60 * 12,
   })
 
-  return { ok: true as const, username }
+  return { ok: true as const, user: result.user }
 }
 
 export function clearSession(c: Context) {
@@ -101,20 +91,18 @@ export function clearSession(c: Context) {
 
 export function requireAuth() {
   return async (c: Context, next: Next) => {
-    const username = getSessionUser(c)
-    if (!username) {
+    const user = await getSessionUser(c)
+    if (!user) {
       return c.json({ message: "UNAUTHORIZED" }, 401)
     }
 
-    c.set("operator", username)
+    c.set("operator", user.username)
     await next()
   }
 }
 
 export function getAuthStatus() {
-  const config = resolveAuthConfig()
-  return {
-    configured: Boolean(config),
-    localDevFallback: !process.env.GENERGI_ADMIN_USERNAME && process.env.NODE_ENV !== "production",
-  }
+  return getAuthConfigStatus()
 }
+
+export { resolveLoginCredentials }

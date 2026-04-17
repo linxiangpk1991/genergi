@@ -5,10 +5,25 @@ import { Hono, type Context } from "hono"
 import { cors } from "hono/cors"
 import { z } from "zod"
 import { BRAND, CHANNELS, MODE_MODELS } from "@genergi/config"
-import { createTaskInputSchema, readRuntimeStatus, updateRuntimeStatus } from "@genergi/shared"
+import {
+  createTaskInputSchema,
+  createUserInputSchema,
+  readRuntimeStatus,
+  resetUserPasswordInputSchema,
+  updateRuntimeStatus,
+  updateUserInputSchema,
+} from "@genergi/shared"
 import { clearSession, getAuthStatus, getSessionUser, loginWithPassword, requireAuth } from "./lib/auth.js"
 import { enqueueTask } from "./lib/queue/enqueue.js"
 import { createTask, getTaskAsset, getTaskAssets, getTaskDetail, listTasks } from "./lib/task-store.js"
+import {
+  createStoredUser,
+  getEnvFallbackUser,
+  findStoredUserById,
+  listUsers,
+  updateStoredUser,
+  updateStoredUserPassword,
+} from "./lib/user-store.js"
 
 const app = new Hono()
 app.use("*", cors())
@@ -40,31 +55,101 @@ app.get("/api/system/status", async (c) => {
   return c.json({ runtime: next })
 })
 
-app.get("/api/auth/session", (c) => {
-  const username = getSessionUser(c)
+app.get("/api/auth/session", async (c) => {
+  const user = await getSessionUser(c)
   return c.json({
-    authenticated: Boolean(username),
-    operator: username ?? null,
+    authenticated: Boolean(user),
+    operator: user?.username ?? null,
+    user: user ?? null,
     auth: getAuthStatus(),
   })
 })
 
-app.post("/api/auth/login", zValidator("json", loginSchema), (c) => {
+app.post("/api/auth/login", zValidator("json", loginSchema), async (c) => {
   const payload = c.req.valid("json")
-  const result = loginWithPassword(c, payload.username, payload.password)
+  const result = await loginWithPassword(c, payload.username, payload.password)
   if (!result.ok) {
     return c.json({ message: result.reason }, result.reason === "AUTH_NOT_CONFIGURED" ? 503 : 401)
   }
 
   return c.json({
     authenticated: true,
-    operator: result.username,
+    operator: result.user.username,
+    user: result.user,
   })
 })
 
 app.post("/api/auth/logout", (c) => {
   clearSession(c)
   return c.json({ authenticated: false })
+})
+
+app.use("/api/users", requireAuth())
+
+app.get("/api/users", async (c) => {
+  const users = await listUsers()
+  return c.json({ users })
+})
+
+app.post("/api/users", zValidator("json", createUserInputSchema), async (c) => {
+  const payload = c.req.valid("json")
+  try {
+    const user = await createStoredUser(payload)
+    return c.json({ user }, 201)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "UNKNOWN_ERROR"
+    if (message === "USERNAME_TAKEN") {
+      return c.json({ message }, 409)
+    }
+
+    throw error
+  }
+})
+
+app.patch("/api/users/:userId", zValidator("json", updateUserInputSchema), async (c) => {
+  const payload = c.req.valid("json")
+  const userId = c.req.param("userId")
+  const currentUser = await findStoredUserById(userId)
+  if (!currentUser) {
+    const envUser = getEnvFallbackUser()
+    if (envUser?.id === userId) {
+      return c.json({ message: "USER_READ_ONLY" }, 409)
+    }
+
+    return c.json({ message: "USER_NOT_FOUND" }, 404)
+  }
+
+  try {
+    const user = await updateStoredUser(userId, payload)
+    if (!user) {
+      return c.json({ message: "USER_NOT_FOUND" }, 404)
+    }
+
+    return c.json({ user })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "UNKNOWN_ERROR"
+    if (message === "USERNAME_TAKEN") {
+      return c.json({ message }, 409)
+    }
+
+    throw error
+  }
+})
+
+app.post("/api/users/:userId/reset-password", zValidator("json", resetUserPasswordInputSchema), async (c) => {
+  const userId = c.req.param("userId")
+  const payload = c.req.valid("json")
+  const user = await updateStoredUserPassword(userId, payload.password)
+  if (!user) {
+    const envUser = getEnvFallbackUser()
+    if (envUser?.id === userId) {
+      return c.json({ message: "USER_READ_ONLY" }, 409)
+    }
+
+    return c.json({ message: "USER_NOT_FOUND" }, 404)
+  }
+
+  return c.json({ user })
 })
 
 app.get("/api/bootstrap", (c) => {

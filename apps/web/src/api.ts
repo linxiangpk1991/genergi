@@ -38,6 +38,31 @@ export type SessionResponse = {
   }
 }
 
+export type UserStatus = "active" | "disabled"
+
+export type UserRecord = {
+  id: string
+  username: string
+  displayName: string
+  password?: string
+  status: UserStatus
+}
+
+export type UsersResponse = {
+  users: UserRecord[]
+}
+
+export type UserPayload = {
+  username: string
+  displayName: string
+  password?: string
+  status: UserStatus
+}
+
+export type ResetPasswordPayload = {
+  password: string
+}
+
 export type RuntimeServiceState = {
   name: string
   status: "healthy" | "degraded"
@@ -148,6 +173,22 @@ export const api = {
       method: "POST",
     }),
   bootstrap: () => request<BootstrapResponse>("/api/bootstrap"),
+  listUsers: () => request<UsersResponse>("/api/users"),
+  createUser: (payload: UserPayload) =>
+    request<{ user: UserRecord }>("/api/users", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  updateUser: (userId: string, payload: Partial<UserPayload>) =>
+    request<{ user: UserRecord }>(`/api/users/${userId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+  resetUserPassword: (userId: string, payload: ResetPasswordPayload) =>
+    request<{ user: UserRecord }>(`/api/users/${userId}/reset-password`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
   listTasks: () => request<{ tasks: TaskSummary[] }>("/api/tasks"),
   getTaskDetail: (taskId: string) => request<{ detail: TaskDetail }>(`/api/tasks/${taskId}`),
   getTaskAssets: (taskId: string) => request<{ assets: AssetRecord[] }>(`/api/tasks/${taskId}/assets`),

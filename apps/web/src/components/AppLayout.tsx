@@ -8,6 +8,7 @@ const navItems = [
   { to: "/keyframe-review", label: "脚本审阅" },
   { to: "/batch-dashboard", label: "批量任务" },
   { to: "/asset-center", label: "素材资产" },
+  { to: "/user-center", label: "用户中心" },
 ]
 
 type AppLayoutProps = PropsWithChildren<{
@@ -36,7 +37,13 @@ export function AppLayout({ children, operator }: AppLayoutProps) {
         </div>
         <nav className="nav-list">
           {navItems.map((item) => (
-            <Link key={item.to} className={location.pathname === item.to ? "nav-item nav-item--active" : "nav-item"} to={item.to}>
+            <Link
+              key={item.to}
+              className={location.pathname === item.to || (item.to !== "/" && location.pathname.startsWith(item.to))
+                ? "nav-item nav-item--active"
+                : "nav-item"}
+              to={item.to}
+            >
               {item.label}
             </Link>
           ))}
