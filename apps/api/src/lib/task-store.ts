@@ -227,17 +227,24 @@ export async function getTaskDetail(taskId: string) {
     return null
   }
 
-  const taskRunConfig = buildDefaultTaskRunConfig(task.modeId, task.channelId, task.targetDurationSec)
+  const taskRunConfig = buildDefaultTaskRunConfig(
+    task.modeId,
+    task.channelId,
+    task.targetDurationSec,
+    task.generationMode,
+  )
   if (existing) {
     const totalSceneDuration = existing.scenes.reduce((total, scene) => total + scene.durationSec, 0)
     const hasExpectedDuration = existing.taskRunConfig.targetDurationSec === task.targetDurationSec
-    if (hasExpectedDuration && totalSceneDuration === task.targetDurationSec) {
+    const hasExpectedRoute = existing.taskRunConfig.generationRoute === task.generationRoute
+    if (hasExpectedDuration && hasExpectedRoute && totalSceneDuration === task.targetDurationSec) {
       return existing
     }
 
     const normalized: TaskDetail = {
       ...existing,
       taskRunConfig,
+      actualDurationSec: existing.actualDurationSec ?? task.actualDurationSec,
       scenes: buildStoryboardScenes({
         script: existing.script,
         targetDurationSec: task.targetDurationSec,
@@ -255,6 +262,7 @@ export async function getTaskDetail(taskId: string) {
     title: task.title,
     script,
     taskRunConfig,
+    actualDurationSec: task.actualDurationSec,
     scenes: buildStoryboardScenes({
       script,
       targetDurationSec: task.targetDurationSec,
@@ -282,13 +290,23 @@ export async function createTask(input: CreateTaskInput): Promise<{ task: TaskSu
   const tasks = await listTasks()
   const estimate = estimateCost(input.modeId)
   const timestamp = now()
-  const taskRunConfig = buildDefaultTaskRunConfig(input.modeId, input.channelId, input.targetDurationSec)
+  const taskRunConfig = buildDefaultTaskRunConfig(
+    input.modeId,
+    input.channelId,
+    input.targetDurationSec,
+    input.generationMode,
+  )
   const task: TaskSummary = {
     id: `task_${Date.now()}`,
     title: input.title,
     modeId: input.modeId,
     channelId: input.channelId,
     targetDurationSec: input.targetDurationSec,
+    generationMode: input.generationMode,
+    generationRoute: taskRunConfig.generationRoute,
+    routeReason: taskRunConfig.routeReason,
+    planningVersion: taskRunConfig.planningVersion,
+    actualDurationSec: null,
     status: "queued" satisfies TaskStatus,
     progressPct: 0,
     retryCount: 0,
@@ -304,6 +322,7 @@ export async function createTask(input: CreateTaskInput): Promise<{ task: TaskSu
     title: task.title,
     script: input.script,
     taskRunConfig,
+    actualDurationSec: null,
     scenes: buildStoryboardScenes({
       script: input.script,
       targetDurationSec: input.targetDurationSec,

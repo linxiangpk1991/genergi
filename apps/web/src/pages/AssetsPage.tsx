@@ -53,13 +53,18 @@ export function AssetsPage() {
     return { readyCount, previewableCount, directoryCount, missingCount }
   }, [assets])
 
+  const selectedTask = useMemo(
+    () => tasks.find((task) => task.id === selectedTaskId) ?? null,
+    [tasks, selectedTaskId],
+  )
+
   return (
     <>
       <header className="topbar">
         <div>
           <div className="eyebrow">Asset Center</div>
           <h1>素材资产中心</h1>
-          <p>集中查看当前任务的脚本、分镜、关键帧与运行时资产状态，作为后续文件中心与导出中心的入口。</p>
+          <p>集中查看当前任务的脚本、分镜、关键帧与规划摘要，作为后续文件中心与导出中心的入口。</p>
         </div>
         <div className="topbar-actions">
           <span className="pill">英语内容产线</span>
@@ -73,10 +78,18 @@ export function AssetsPage() {
           <select className="input" value={selectedTaskId} onChange={(event) => setSelectedTaskId(event.target.value)}>
             {tasks.map((task) => (
               <option key={task.id} value={task.id}>
-                {task.title}
+                {task.title} · {task.targetDurationSec}s · {task.planning?.generationRouteLabel ?? "待预判"}
               </option>
             ))}
           </select>
+          <div className="planning-summary-card">
+            <strong>{selectedTask?.planning?.generationRouteLabel ?? "待预判"}</strong>
+            <span>{selectedTask?.planning?.planningSummary ?? "这里会展示 route、时长和规划策略的兼容摘要。"}</span>
+            <div className="planning-summary-tags">
+              <span className="pill pill--sm">{selectedTask?.planning?.generationPreferenceLabel ?? "待接入"}</span>
+              <span className="pill pill--sm">{selectedTask?.targetDurationSec ?? 0}s</span>
+            </div>
+          </div>
           <div className="asset-metrics">
             {[
               { label: "资产总数", value: assets.length },
@@ -193,8 +206,8 @@ export function AssetsPage() {
           <section className="card card--compact">
             <h3>后续规划</h3>
             <div className="task-list compact-list">
+              <div className="task-item"><strong>规划摘要</strong><span>{selectedTask?.planning?.planningSummary ?? "待接入真实规划字段"}</span></div>
               <div className="task-item"><strong>文件导出</strong><span>脚本、SRT、图片、视频、成片</span></div>
-              <div className="task-item"><strong>对象存储</strong><span>S3 / 云存储接入预留</span></div>
               <div className="task-item"><strong>版本追踪</strong><span>按任务与 scene 做资产版本管理</span></div>
             </div>
           </section>

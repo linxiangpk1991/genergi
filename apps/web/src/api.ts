@@ -23,11 +23,32 @@ export type HealthResponse = {
   version: string
 }
 
+export type GenerationPreferenceId = "user_locked" | "system_enhanced"
+
+export type GenerationRouteId = "single_shot" | "multi_scene"
+
+export type TaskPlanningSnapshot = {
+  generationMode: GenerationPreferenceId | null
+  generationPreferenceLabel: string
+  generationRoute: GenerationRouteId
+  generationRouteLabel: string
+  targetDurationSec: number
+  sceneCount: number
+  planningSummary: string
+  planningKeywords: string[]
+  planningSourceLabel: string
+}
+
 export type BootstrapResponse = {
   brand: { productName: string; companyName: string; domain: string }
   durationOptions: number[]
   channels: Array<{ id: string; label: string; description: string }>
-  modes: Array<{ id: string; label: string; description: string; budgetLimitCny: number }>
+  modes: Array<{ id: string; label: string; description: string; budgetLimitCny: number; maxSingleShotSec: number }>
+  generationPreferences: Array<{
+    id: GenerationPreferenceId
+    label: string
+    description: string
+  }>
 }
 
 export type SessionResponse = {
@@ -91,6 +112,7 @@ export type TaskSummary = {
   estimatedCostCny: number
   createdAt: string
   updatedAt: string
+  planning?: TaskPlanningSnapshot
 }
 
 export type StoryboardScene = {
@@ -121,6 +143,7 @@ export type TaskDetail = {
   }
   scenes: StoryboardScene[]
   updatedAt: string
+  planning?: TaskPlanningSnapshot
 }
 
 export type AssetRecord = {
@@ -161,6 +184,7 @@ export type CreateTaskPayload = {
   channelId: string
   aspectRatio: string
   targetDurationSec: number
+  generationMode?: GenerationPreferenceId
 }
 
 export const api = {

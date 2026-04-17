@@ -44,17 +44,22 @@ export function KeyframeReviewPage() {
     return detail.scenes.find((scene) => scene.id === selectedSceneId) ?? detail.scenes[0] ?? null
   }, [detail, selectedSceneId])
 
+  const selectedTask = useMemo(
+    () => tasks.find((task) => task.id === selectedTaskId) ?? null,
+    [tasks, selectedTaskId],
+  )
+
   return (
     <>
       <header className="topbar">
         <div>
           <div className="eyebrow">Keyframe Review</div>
           <h1>关键帧审阅工作台</h1>
-          <p>确认画面质量、风格一致性与进入视频生成前的最终视觉判断。</p>
+          <p>确认画面、时长和风格策略在进入视频生成前是否对齐内容母本。</p>
         </div>
         <div className="topbar-actions">
-          <span className="pill">预算使用 65%</span>
-          <span className="pill pill--accent">Scene 02 / 08</span>
+          <span className="pill">{detail?.planning?.generationRouteLabel ?? selectedTask?.planning?.generationRouteLabel ?? "待预判"}</span>
+          <span className="pill pill--accent">{detail?.planning?.generationPreferenceLabel ?? selectedTask?.planning?.generationPreferenceLabel ?? "待接入"}</span>
         </div>
       </header>
 
@@ -64,10 +69,18 @@ export function KeyframeReviewPage() {
           <select className="input" value={selectedTaskId} onChange={(event) => setSelectedTaskId(event.target.value)}>
             {tasks.map((task) => (
               <option key={task.id} value={task.id}>
-                {task.title}
+                {task.title} · {task.targetDurationSec}s · {task.planning?.generationRouteLabel ?? "待预判"}
               </option>
             ))}
           </select>
+          <div className="planning-summary-card">
+            <strong>{selectedTask?.planning?.generationRouteLabel ?? "待预判"}</strong>
+            <span>{selectedTask?.planning?.planningSummary ?? "系统会先预判这条任务的视觉编排，再进入关键帧审阅。"}</span>
+            <div className="planning-summary-tags">
+              <span className="pill pill--sm">{selectedTask?.planning?.generationPreferenceLabel ?? "待接入"}</span>
+              <span className="pill pill--sm">{selectedTask?.targetDurationSec ?? 0}s</span>
+            </div>
+          </div>
           <h3>关键帧缩略图</h3>
           <div className="scene-list">
             {detail?.scenes.map((scene) => (
@@ -85,6 +98,10 @@ export function KeyframeReviewPage() {
 
         <section className="card review-main review-main--visual">
           <h3>关键帧预览</h3>
+          <div className="planning-inline">
+            <span className="pill pill--sm">{detail?.planning?.generationRouteLabel ?? "待预判"}</span>
+            <span className="pill pill--sm">{detail?.planning?.planningSourceLabel ?? "前端兼容预判"}</span>
+          </div>
           <div className="visual-preview">
             <div className="visual-placeholder">{selectedScene?.title ?? "Preview Frame"}</div>
           </div>
@@ -92,6 +109,7 @@ export function KeyframeReviewPage() {
             <div className="metric-card"><span>分辨率</span><strong>1080 × 1920</strong></div>
             <div className="metric-card"><span>时间轴</span><strong>{selectedScene ? `${selectedScene.startLabel} - ${selectedScene.endLabel}` : "--"}</strong></div>
             <div className="metric-card"><span>模型</span><strong>{detail?.taskRunConfig.imageFinalModel?.label ?? "Gemini 3 Pro"}</strong></div>
+            <div className="metric-card"><span>预判分镜</span><strong>{detail?.planning?.sceneCount ?? detail?.scenes.length ?? "--"}</strong></div>
           </div>
           <div className="review-block">
             <label className="field-label">图像提示词</label>

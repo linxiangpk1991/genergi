@@ -4,7 +4,14 @@ import { zValidator } from "@hono/zod-validator"
 import { Hono, type Context } from "hono"
 import { cors } from "hono/cors"
 import { z } from "zod"
-import { BRAND, CHANNELS, MODE_MODELS, VIDEO_DURATION_PRESETS } from "@genergi/config"
+import {
+  BRAND,
+  CHANNELS,
+  GENERATION_PREFERENCES,
+  MODE_MODELS,
+  VIDEO_DURATION_PRESETS,
+  resolveVideoModelCapability,
+} from "@genergi/config"
 import {
   createTaskInputSchema,
   createUserInputSchema,
@@ -32,6 +39,113 @@ const loginSchema = z.object({
   username: z.string().min(1),
   password: z.string().min(1),
 })
+
+type TaskPlanningSnapshot = {
+  generationPreference: "user_locked" | "system_enhanced"
+  generationPreferenceLabel: string
+  generationRoute: "single_shot" | "multi_scene"
+  generationRouteLabel: string
+  targetDurationSec: number
+  sceneCount: number
+  planningSummary: string
+  planningKeywords: string[]
+  planningSourceLabel: string
+  routeReason: string
+}
+
+const taskPlanningState = new Map<string, TaskPlanningSnapshot>()
+
+function getSceneCountHint(targetDurationSec: number) {
+  if (targetDurationSec <= 15) {
+    return 3
+  }
+
+  if (targetDurationSec <= 30) {
+    return 5
+  }
+
+  if (targetDurationSec <= 45) {
+    return 7
+  }
+
+  return 8
+}
+
+function getGenerationPreferenceMeta(generationPreference: "user_locked" | "system_enhanced") {
+  return (
+    GENERATION_PREFERENCES.find((item) => item.id === generationPreference) ?? GENERATION_PREFERENCES[0]
+  )
+}
+
+function getGenerationRouteLabel(route: "single_shot" | "multi_scene") {
+  return route === "single_shot" ? "单段直出" : "多分镜编排"
+}
+
+function buildPlanningSummary(
+  generationRoute: "single_shot" | "multi_scene",
+  generationPreference: "user_locked" | "system_enhanced",
+  routeReason: string,
+) {
+  const routeSummary =
+    generationRoute === "single_shot"
+      ? "当前按单段直出预判，优先保证内容连贯性。"
+      : "当前按多分镜编排预判，优先保证节奏展开与镜头切换。"
+
+  const preferenceMeta = getGenerationPreferenceMeta(generationPreference)
+
+  return `${routeSummary} · ${preferenceMeta.description} · ${routeReason}`
+}
+
+function buildPlanningSnapshot(
+  targetDurationSec: number,
+  sceneCount: number,
+  generationPreference: "user_locked" | "system_enhanced",
+  generationRoute: "single_shot" | "multi_scene",
+  routeReason: string,
+  sourceLabel = "任务持久化",
+): TaskPlanningSnapshot {
+  const generationPreferenceMeta = getGenerationPreferenceMeta(generationPreference)
+  return {
+    generationPreference,
+    generationPreferenceLabel: generationPreferenceMeta.label,
+    generationRoute,
+    generationRouteLabel: getGenerationRouteLabel(generationRoute),
+    targetDurationSec,
+    sceneCount,
+    planningSummary: buildPlanningSummary(generationRoute, generationPreference, routeReason),
+    planningKeywords: generationPreferenceMeta.keywords,
+    planningSourceLabel: sourceLabel,
+    routeReason,
+  }
+}
+
+function enrichSummary(task: Awaited<ReturnType<typeof listTasks>>[number]) {
+  const cached = taskPlanningState.get(task.id)
+  const planning =
+    cached ??
+    buildPlanningSnapshot(
+      task.targetDurationSec,
+      getSceneCountHint(task.targetDurationSec),
+      task.generationMode,
+      task.generationRoute,
+      task.routeReason,
+    )
+  return { ...task, planning }
+}
+
+function enrichDetail(detail: NonNullable<Awaited<ReturnType<typeof getTaskDetail>>>) {
+  const cached = taskPlanningState.get(detail.taskId)
+  const planning =
+    cached ??
+    buildPlanningSnapshot(
+      detail.taskRunConfig.targetDurationSec,
+      detail.scenes.length,
+      detail.taskRunConfig.generationMode,
+      detail.taskRunConfig.generationRoute,
+      detail.taskRunConfig.routeReason,
+    )
+  return { ...detail, planning }
+}
 
 app.get("/api/health", (c) => {
   return c.json({
@@ -158,6 +272,11 @@ app.get("/api/bootstrap", (c) => {
     brand: BRAND,
     durationOptions: VIDEO_DURATION_PRESETS,
     channels: Object.entries(CHANNELS).map(([id, value]) => ({ id, ...value })),
+    generationPreferences: GENERATION_PREFERENCES.map(({ id, label, description }) => ({
+      id,
+      label,
+      description,
+    })),
     modes: Object.entries(MODE_MODELS).map(([id, mode]) => ({
       id,
       label: id === "mass_production" ? "量产模式" : "高质量模式",
@@ -166,6 +285,7 @@ app.get("/api/bootstrap", (c) => {
           ? "侧重效率、批量生产与成本控制"
           : "侧重品牌表现、审阅质量与最终画面效果",
       budgetLimitCny: mode.budgetLimitCny,
+      maxSingleShotSec: resolveVideoModelCapability(mode.videoDraftModel.id).maxSingleShotSec,
     })),
   })
 })
@@ -174,7 +294,7 @@ app.use("/api/tasks", requireAuth())
 
 app.get("/api/tasks", async (c) => {
   const tasks = await listTasks()
-  return c.json({ tasks })
+  return c.json({ tasks: tasks.map(enrichSummary) })
 })
 
 app.get("/api/tasks/:taskId", async (c) => {
@@ -183,7 +303,7 @@ app.get("/api/tasks/:taskId", async (c) => {
     return c.json({ message: "TASK_NOT_FOUND" }, 404)
   }
 
-  return c.json({ detail })
+  return c.json({ detail: enrichDetail(detail) })
 })
 
 app.get("/api/tasks/:taskId/assets", async (c) => {
@@ -235,11 +355,36 @@ app.get("/api/tasks/:taskId/assets/:assetId/preview", async (c) => {
   return sendAssetFile(c, asset, "inline")
 })
 
-app.post("/api/tasks", zValidator("json", createTaskInputSchema), async (c) => {
-  const payload = c.req.valid("json")
-  const result = await createTask(payload)
+app.post("/api/tasks", async (c) => {
+  const rawBody = await c.req.json().catch(() => null)
+  const normalizedBody =
+    rawBody && typeof rawBody === "object"
+      ? {
+          ...rawBody,
+          generationMode:
+            (rawBody as Record<string, unknown>).generationMode ??
+            (rawBody as Record<string, unknown>).generationPreference,
+        }
+      : rawBody
+  const parsed = createTaskInputSchema.safeParse(normalizedBody)
+  if (!parsed.success) {
+    return c.json({ message: "INVALID_TASK_PAYLOAD" }, 400)
+  }
+
+  const result = await createTask(parsed.data)
   const queue = await enqueueTask(result.task.id)
-  return c.json({ ...result, queue }, 201)
+  const createdDetail = await getTaskDetail(result.task.id)
+  const planning = buildPlanningSnapshot(
+    result.task.targetDurationSec,
+    createdDetail?.scenes.length ?? getSceneCountHint(result.task.targetDurationSec),
+    result.task.generationMode,
+    result.task.generationRoute,
+    result.task.routeReason,
+    "任务持久化",
+  )
+  taskPlanningState.set(result.task.id, planning)
+
+  return c.json({ ...result, task: { ...result.task, planning }, queue }, 201)
 })
 
 const port = Number(process.env.PORT || 8787)

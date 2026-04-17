@@ -4,7 +4,15 @@ import path from "node:path"
 
 import axios from "axios"
 
-import { buildStoryboardScenes, type StoryboardScene, type TaskDetail } from "@genergi/shared"
+import {
+  buildStoryboardScenes,
+  planningSceneSchema,
+  textPlanningOutputSchema,
+  type StoryboardScene,
+  type TaskDetail,
+  type TextPlanningOutput,
+} from "@genergi/shared"
+import { GENERATION_PREFERENCES, resolveVideoModelCapability } from "@genergi/config"
 import { EdgeTTS } from "./edge-tts.js"
 import { concatVideos, extractKeyframeFromVideo, muxNarrationIntoVideo, trimVideoDuration } from "./ffmpeg.js"
 
@@ -320,6 +328,106 @@ function extractOpenAIText(payload: any) {
   return ""
 }
 
+function extractJsonObject(text: string) {
+  const fencedMatch = text.match(/```json\s*([\s\S]*?)```/i)
+  if (fencedMatch?.[1]) {
+    return fencedMatch[1].trim()
+  }
+
+  const firstBrace = text.indexOf("{")
+  const lastBrace = text.lastIndexOf("}")
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    return text.slice(firstBrace, lastBrace + 1)
+  }
+
+  return text.trim()
+}
+
+export function buildPlanningPromptContext(input: {
+  originalScript: string
+  targetDurationSec: number
+  platform: string
+  generationMode: "user_locked" | "system_enhanced"
+  generationRoute: "single_shot" | "multi_scene"
+  routeReason: string
+  maxSingleShotSec: number
+  enhancementKeywords: string[]
+}) {
+  return [
+    `platform: ${input.platform}`,
+    `target duration: ${input.targetDurationSec}s`,
+    `generation mode: ${input.generationMode}`,
+    `generation route: ${input.generationRoute}`,
+    `route reason: ${input.routeReason}`,
+    `model single-shot ceiling: ${input.maxSingleShotSec}s`,
+    input.enhancementKeywords.length
+      ? `enhancement keywords: ${input.enhancementKeywords.join(", ")}`
+      : "enhancement keywords: none",
+    "original script:",
+    input.originalScript,
+    "output requirements:",
+    "- return machine-usable JSON only",
+    "- do not output explanations",
+    "- do not output markdown separators",
+    "- do not output what changed and why",
+    "- finalVoiceoverScript must be direct voiceover text",
+    input.generationRoute === "single_shot"
+      ? "- scenePlan must contain exactly one scene"
+      : "- scenePlan must contain multiple scenes and their duration total must match the target duration",
+  ].join("\n")
+}
+
+export function validatePlanningOutput(
+  raw: unknown,
+  expected: {
+    generationRoute: "single_shot" | "multi_scene"
+    targetDurationSec: number
+  },
+):
+  | { ok: true; value: TextPlanningOutput }
+  | {
+      ok: false
+      reason: string
+    } {
+  if (raw && typeof raw === "object" && "commentary" in raw) {
+    return { ok: false, reason: "commentary field is not allowed in planning output" }
+  }
+
+  const parsed = textPlanningOutputSchema.safeParse(raw)
+  if (!parsed.success) {
+    return { ok: false, reason: `planning output schema invalid: ${parsed.error.issues[0]?.message ?? "unknown error"}` }
+  }
+
+  const output = parsed.data
+  if (output.generationRoute !== expected.generationRoute) {
+    return { ok: false, reason: `route mismatch: expected ${expected.generationRoute}, received ${output.generationRoute}` }
+  }
+
+  if (output.targetDurationSec !== expected.targetDurationSec) {
+    return { ok: false, reason: `target duration mismatch: expected ${expected.targetDurationSec}, received ${output.targetDurationSec}` }
+  }
+
+  const totalDuration = output.scenePlan.reduce((sum, scene) => sum + scene.durationSec, 0)
+  if (totalDuration !== expected.targetDurationSec) {
+    return { ok: false, reason: `scene duration total ${totalDuration}s does not match target ${expected.targetDurationSec}s` }
+  }
+
+  if (output.generationRoute === "single_shot" && output.scenePlan.length !== 1) {
+    return { ok: false, reason: "single_shot output must contain exactly one scene" }
+  }
+
+  if (output.generationRoute === "multi_scene" && output.scenePlan.length <= 1) {
+    return { ok: false, reason: "multi_scene output must contain more than one scene" }
+  }
+
+  const invalidScene = output.scenePlan.find((scene) => !planningSceneSchema.safeParse(scene).success)
+  if (invalidScene) {
+    return { ok: false, reason: "scenePlan contains invalid scene entries" }
+  }
+
+  return { ok: true, value: output }
+}
+
 function calculateWordBudget(targetDurationSec: number) {
   return Math.max(12, Math.floor(targetDurationSec * 2.2))
 }
@@ -329,6 +437,7 @@ export function normalizeRewriteToVoiceoverScript(text: string, targetDurationSe
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean)
+    .filter((line) => !/^[-–—]{3,}$/.test(line))
     .filter((line) => !/^here('|’)s a tighter/i.test(line))
     .filter((line) => !/^a few notes/i.test(line))
     .filter((line) => !/^want me to/i.test(line))
@@ -336,9 +445,61 @@ export function normalizeRewriteToVoiceoverScript(text: string, targetDurationSe
     .map((line) => line.replace(/\*\*/g, ""))
     .map((line) => line.replace(/^[A-Za-z ]+\(\d+\s*-\s*\d+s\):\s*/i, ""))
 
-  const normalized = lines.join(" ").replace(/\s+/g, " ").trim()
-  const words = normalized.split(/\s+/).filter(Boolean)
-  return words.slice(0, calculateWordBudget(targetDurationSec)).join(" ").trim()
+  const normalized = lines
+    .join(" ")
+    .replace(/^[-–—\s]+/, "")
+    .replace(/\s+/g, " ")
+    .trim()
+
+  const rawSentences = normalized
+    .split(/(?<=[.!?])\s+/)
+    .map((sentence) => sentence.trim())
+    .filter(Boolean)
+
+  const sentences =
+    /[.!?"]$/.test(normalized) || rawSentences.length <= 1
+      ? rawSentences
+      : rawSentences.slice(0, -1)
+
+  const budget = calculateWordBudget(targetDurationSec)
+  const sentenceWordCounts = sentences.map((sentence) => sentence.split(/\s+/).filter(Boolean).length)
+  const totalWords = sentenceWordCounts.reduce((sum, count) => sum + count, 0)
+  if (totalWords <= budget) {
+    return sentences.join(" ").replace(/^[-–—\s]+/, "").trim()
+  }
+
+  const selectedIndices = new Set<number>()
+  selectedIndices.add(0)
+  const lastIndex = sentences.length - 1
+  if (lastIndex > 0) {
+    selectedIndices.add(lastIndex)
+  }
+
+  let usedWords = sentenceWordCounts[0] ?? 0
+  const reservedEndingWords = lastIndex > 0 ? sentenceWordCounts[lastIndex] ?? 0 : 0
+  if (lastIndex > 0) {
+    usedWords += reservedEndingWords
+  }
+
+  for (let index = 1; index < lastIndex; index += 1) {
+    const sentence = sentences[index]
+    const sentenceWords = sentenceWordCounts[index]
+    const isLowValueBridge = /^here('|’)s the thing[.!?]?$/i.test(sentence)
+    if (isLowValueBridge) {
+      continue
+    }
+
+    if (usedWords + sentenceWords > budget) {
+      continue
+    }
+
+    selectedIndices.add(index)
+    usedWords += sentenceWords
+  }
+
+  const selected = sentences.filter((_, index) => selectedIndices.has(index))
+
+  return selected.join(" ").replace(/^[-–—\s]+/, "").trim()
 }
 
 function alignDetailScenes(detail: TaskDetail, script: string): TaskDetail {
@@ -354,33 +515,68 @@ function alignDetailScenes(detail: TaskDetail, script: string): TaskDetail {
   }
 }
 
-export async function rewriteTaskWithTextProvider(detail: TaskDetail): Promise<TaskDetail> {
+function buildPlanningFallback(detail: TaskDetail): TextPlanningOutput {
+  const scenes = buildStoryboardScenes({
+    script: detail.script,
+    targetDurationSec: detail.taskRunConfig.targetDurationSec ?? 30,
+    aspectRatio: detail.taskRunConfig.aspectRatio,
+  })
+
+  return {
+    generationRoute: detail.taskRunConfig.generationRoute,
+    targetDurationSec: detail.taskRunConfig.targetDurationSec,
+    finalVoiceoverScript: detail.script,
+    visualStyleGuide: detail.taskRunConfig.generationMode === "system_enhanced" ? "System enhanced social-video pacing." : "Preserve original tone with minimal structural cleanup.",
+    ctaLine: scenes.at(-1)?.script ?? detail.script,
+    scenePlan: scenes.map((scene) => ({
+      sceneIndex: scene.index,
+      scenePurpose: scene.title,
+      durationSec: scene.durationSec,
+      script: scene.script,
+      imagePrompt: scene.imagePrompt,
+      videoPrompt: scene.videoPrompt,
+      transitionHint: scene.index === 0 ? "open" : scene.index === scenes.length - 1 ? "close" : "cut",
+    })),
+  }
+}
+
+async function requestStructuredPlanning(detail: TaskDetail): Promise<TextPlanningOutput | null> {
   const provider = process.env.GENERGI_TEXT_PROVIDER ?? ""
   const apiKey = process.env.GENERGI_TEXT_API_KEY ?? ""
   const baseUrl = (process.env.GENERGI_TEXT_BASE_URL ?? "").replace(/\/+$/, "")
   const model = process.env.GENERGI_TEXT_MODEL ?? "claude-opus-4.6"
 
   if (!provider || !apiKey || !baseUrl) {
-    return alignDetailScenes(detail, detail.script)
+    return null
   }
 
-  try {
-    let rewritten = ""
+  const preference = GENERATION_PREFERENCES.find((item) => item.id === detail.taskRunConfig.generationMode)
+  const capability = resolveVideoModelCapability(detail.taskRunConfig.videoDraftModel.id)
+  const promptContext = buildPlanningPromptContext({
+    originalScript: detail.script,
+    targetDurationSec: detail.taskRunConfig.targetDurationSec,
+    platform: detail.taskRunConfig.channelId,
+    generationMode: detail.taskRunConfig.generationMode,
+    generationRoute: detail.taskRunConfig.generationRoute,
+    routeReason: detail.taskRunConfig.routeReason,
+    maxSingleShotSec: capability.maxSingleShotSec,
+    enhancementKeywords: preference?.keywords ?? [],
+  })
+
+  const systemPrompt =
+    "You are a short-form video director and planner. Return only valid JSON that matches the requested planning structure. Do not explain your decisions."
+
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    let rawText = ""
 
     if (provider === "anthropic-native") {
       const response = await axios.post(
         `${baseUrl}/v1/messages`,
         {
           model,
-          max_tokens: 800,
-          system:
-            "You are a short-form social video strategist. Return concise English social-video writing that feels native to English-speaking markets.",
-          messages: [
-            {
-              role: "user",
-              content: `Rewrite this script to feel more native-English and more platform-ready for TikTok/Reels/Shorts. Keep it concise.\n\nSCRIPT:\n${detail.script}`,
-            },
-          ],
+          max_tokens: 1200,
+          system: systemPrompt,
+          messages: [{ role: "user", content: promptContext }],
         },
         {
           headers: {
@@ -391,23 +587,17 @@ export async function rewriteTaskWithTextProvider(detail: TaskDetail): Promise<T
           timeout: 120000,
         },
       )
-      rewritten = extractAnthropicText(response.data)
+      rawText = extractAnthropicText(response.data)
     } else if (provider === "openai-compatible") {
       const response = await axios.post(
         `${baseUrl}/v1/chat/completions`,
         {
           model,
-          temperature: 0.7,
+          temperature: 0.4,
+          response_format: { type: "json_object" },
           messages: [
-            {
-              role: "system",
-              content:
-                "You are a short-form social video strategist. Return concise English social-video writing that feels native to English-speaking markets.",
-            },
-            {
-              role: "user",
-              content: `Rewrite this script to feel more native-English and more platform-ready for TikTok/Reels/Shorts. Keep it concise.\n\nSCRIPT:\n${detail.script}`,
-            },
+            { role: "system", content: systemPrompt },
+            { role: "user", content: promptContext },
           ],
         },
         {
@@ -418,21 +608,69 @@ export async function rewriteTaskWithTextProvider(detail: TaskDetail): Promise<T
           timeout: 120000,
         },
       )
-      rewritten = extractOpenAIText(response.data)
+      rawText = extractOpenAIText(response.data)
     }
 
-    if (!rewritten) {
-      return alignDetailScenes(detail, detail.script)
+    if (!rawText) {
+      continue
     }
 
-    const normalizedRewrite = normalizeRewriteToVoiceoverScript(
-      rewritten,
-      detail.taskRunConfig.targetDurationSec ?? 30,
-    )
+    let parsedJson: unknown
+    try {
+      parsedJson = JSON.parse(extractJsonObject(rawText))
+    } catch {
+      continue
+    }
 
-    return alignDetailScenes(detail, normalizedRewrite || detail.script)
+    const validated = validatePlanningOutput(parsedJson, {
+      generationRoute: detail.taskRunConfig.generationRoute,
+      targetDurationSec: detail.taskRunConfig.targetDurationSec,
+    })
+
+    if (validated.ok) {
+      return validated.value
+    }
+  }
+
+  return null
+}
+
+export async function rewriteTaskWithTextProvider(detail: TaskDetail): Promise<TaskDetail> {
+  try {
+    const planned = (await requestStructuredPlanning(detail)) ?? buildPlanningFallback(detail)
+    const normalizedRewrite = normalizeRewriteToVoiceoverScript(planned.finalVoiceoverScript, detail.taskRunConfig.targetDurationSec ?? 30)
+    const scenes = planned.scenePlan.map((scene, index) => ({
+      id: `scene_${index + 1}`,
+      index,
+      title: scene.scenePurpose,
+      script: scene.script,
+      imagePrompt: scene.imagePrompt,
+      videoPrompt: scene.videoPrompt,
+      durationSec: scene.durationSec,
+      startLabel: detail.scenes[index]?.startLabel ?? "00:00",
+      endLabel: detail.scenes[index]?.endLabel ?? "00:00",
+      reviewStatus: detail.scenes[index]?.reviewStatus ?? (index === 0 ? "approved" : "pending"),
+      keyframeStatus: detail.scenes[index]?.keyframeStatus ?? "pending",
+    }))
+
+    let cursorSec = 0
+    const normalizedScenes = scenes.map((scene) => {
+      const startLabel = `${String(Math.floor(cursorSec / 60)).padStart(2, "0")}:${String(cursorSec % 60).padStart(2, "0")}`
+      cursorSec += scene.durationSec
+      const endLabel = `${String(Math.floor(cursorSec / 60)).padStart(2, "0")}:${String(cursorSec % 60).padStart(2, "0")}`
+      return { ...scene, startLabel, endLabel }
+    })
+
+    return {
+      ...detail,
+      script: normalizedRewrite || detail.script,
+      visualStyleGuide: planned.visualStyleGuide,
+      ctaLine: planned.ctaLine,
+      scenes: normalizedScenes,
+      updatedAt: new Date().toISOString(),
+    }
   } catch (error) {
-    console.warn(`[worker] ${provider} rewrite skipped:`, error instanceof Error ? error.message : String(error))
+    console.warn(`[worker] structured planning skipped:`, error instanceof Error ? error.message : String(error))
     return alignDetailScenes(detail, detail.script)
   }
 }

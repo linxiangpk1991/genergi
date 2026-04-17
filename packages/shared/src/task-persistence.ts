@@ -37,6 +37,11 @@ export function seedTaskSummaries(): TaskSummary[] {
       modeId: "mass_production",
       channelId: "tiktok",
       targetDurationSec: 30,
+      generationMode: "user_locked",
+      generationRoute: "multi_scene",
+      routeReason: "legacy seed task normalized to multi-scene",
+      planningVersion: "v1",
+      actualDurationSec: null,
       status: "running",
       progressPct: 40,
       retryCount: 0,
@@ -50,6 +55,11 @@ export function seedTaskSummaries(): TaskSummary[] {
       modeId: "high_quality",
       channelId: "reels",
       targetDurationSec: 45,
+      generationMode: "user_locked",
+      generationRoute: "multi_scene",
+      routeReason: "legacy seed task normalized to multi-scene",
+      planningVersion: "v1",
+      actualDurationSec: null,
       status: "failed",
       progressPct: 62,
       retryCount: 2,
@@ -91,12 +101,36 @@ export async function readTaskSummaries(): Promise<TaskSummary[]> {
   }
 
   try {
-    const tasks = JSON.parse(content) as Array<TaskSummary & { targetDurationSec?: number }>
+    const tasks = JSON.parse(content) as Array<
+      TaskSummary & {
+        targetDurationSec?: number
+        generationMode?: TaskSummary["generationMode"]
+        generationRoute?: TaskSummary["generationRoute"]
+        routeReason?: string
+        planningVersion?: TaskSummary["planningVersion"]
+        actualDurationSec?: number | null
+      }
+    >
     const normalized = tasks.map((task) => ({
       ...task,
       targetDurationSec: task.targetDurationSec ?? 30,
+      generationMode: task.generationMode ?? "user_locked",
+      generationRoute: task.generationRoute ?? "multi_scene",
+      routeReason: task.routeReason ?? "legacy task normalized to multi-scene",
+      planningVersion: task.planningVersion ?? "v1",
+      actualDurationSec: task.actualDurationSec ?? null,
     })) as TaskSummary[]
-    if (normalized.some((task, index) => tasks[index].targetDurationSec == null)) {
+    if (
+      normalized.some(
+        (task, index) =>
+          tasks[index].targetDurationSec == null ||
+          tasks[index].generationMode == null ||
+          tasks[index].generationRoute == null ||
+          tasks[index].routeReason == null ||
+          tasks[index].planningVersion == null ||
+          tasks[index].actualDurationSec === undefined,
+      )
+    ) {
       await writeTaskSummaries(normalized)
     }
     return normalized

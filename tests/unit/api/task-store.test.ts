@@ -29,13 +29,19 @@ describe("API task store", () => {
       channelId: "reels",
       aspectRatio: "9:16",
       targetDurationSec: 30,
+      generationMode: "system_enhanced",
     })
 
     expect(created.task.targetDurationSec).toBe(30)
     expect(created.taskRunConfig.targetDurationSec).toBe(30)
+    expect(created.task.generationMode).toBe("system_enhanced")
+    expect(created.taskRunConfig.generationMode).toBe("system_enhanced")
+    expect(created.task.generationRoute).toBe("multi_scene")
+    expect(created.task.routeReason).toContain("single-shot limit")
 
     const detail = await store.getTaskDetail(created.task.id)
     expect(detail?.taskRunConfig.targetDurationSec).toBe(30)
+    expect(detail?.taskRunConfig.generationRoute).toBe("multi_scene")
     expect(detail?.scenes).toHaveLength(5)
     expect(detail?.scenes.reduce((total, scene) => total + scene.durationSec, 0)).toBe(30)
     expect(detail?.scenes.some((scene) => scene.script.includes("Show the product in action"))).toBe(false)

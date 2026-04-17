@@ -1,4 +1,14 @@
-import type { ChannelProfileId, CostEstimate, ModelRef, ProductionModeId, TaskRunConfig, VideoDurationSec } from "@genergi/shared"
+import type {
+  ChannelProfileId,
+  CostEstimate,
+  GenerationMode,
+  ModelRef,
+  ProductionModeId,
+  TaskRunConfig,
+  VideoDurationSec,
+  VideoModelCapability,
+} from "@genergi/shared"
+import { resolveGenerationRoute } from "@genergi/shared"
 
 export const BRAND = {
   productName: "GENERGI 自动化视频平台",
@@ -7,6 +17,50 @@ export const BRAND = {
 } as const
 
 export const VIDEO_DURATION_PRESETS = [15, 30, 45, 60] as const
+
+export const GENERATION_PREFERENCES: Array<{
+  id: GenerationMode
+  label: string
+  description: string
+  keywords: string[]
+}> = [
+  {
+    id: "user_locked",
+    label: "忠于原脚本",
+    description: "尽量保留你原本的内容表达，只做最小必要的结构整理。",
+    keywords: ["preserve original tone", "minimal structural cleanup"],
+  },
+  {
+    id: "system_enhanced",
+    label: "启用系统增强",
+    description: "在不偏离主题的前提下，自动补充更适合平台传播的提示词。",
+    keywords: ["stronger hook", "native pacing", "clear CTA", "platform-native framing"],
+  },
+]
+
+export const VIDEO_MODEL_CAPABILITIES: Record<string, VideoModelCapability> = {
+  "video.draft": {
+    modelId: "video.draft",
+    provider: "openai-compatible",
+    label: "Veo 3.1 Fast",
+    maxSingleShotSec: 8,
+    supportedSingleShotDurations: [4, 6, 8],
+  },
+  "video.final": {
+    modelId: "video.final",
+    provider: "openai-compatible",
+    label: "Veo 3.1 Portrait",
+    maxSingleShotSec: 8,
+    supportedSingleShotDurations: [4, 6, 8],
+  },
+  "video.hd": {
+    modelId: "video.hd",
+    provider: "openai-compatible",
+    label: "Veo 3.1 Portrait HD",
+    maxSingleShotSec: 8,
+    supportedSingleShotDurations: [4, 6, 8],
+  },
+}
 
 export const CHANNELS: Record<ChannelProfileId, { label: string; description: string }> = {
   tiktok: { label: "TikTok", description: "短节奏、强钩子、英语优先" },
@@ -49,16 +103,37 @@ export const MODE_MODELS: Record<ProductionModeId, {
   },
 }
 
+export function resolveVideoModelCapability(modelId: string): VideoModelCapability {
+  return VIDEO_MODEL_CAPABILITIES[modelId] ?? {
+    modelId,
+    provider: "unknown",
+    label: modelId,
+    maxSingleShotSec: 8,
+    supportedSingleShotDurations: [4, 6, 8],
+  }
+}
+
 export function buildDefaultTaskRunConfig(
   modeId: ProductionModeId,
   channelId: ChannelProfileId,
   targetDurationSec: VideoDurationSec = 30,
+  generationMode: GenerationMode = "user_locked",
 ): TaskRunConfig {
   const mode = MODE_MODELS[modeId]
+  const enhancementMode = generationMode === "system_enhanced" ? "system_enhanced" : "user_locked"
+  const routeDecision = resolveGenerationRoute({
+    targetDurationSec,
+    maxSingleShotSec: resolveVideoModelCapability(mode.videoDraftModel.id).maxSingleShotSec,
+  })
   return {
     modeId,
     channelId,
     targetDurationSec,
+    generationMode,
+    enhancementMode,
+    generationRoute: routeDecision.generationRoute,
+    routeReason: routeDecision.routeReason,
+    planningVersion: "v1",
     textModel: mode.textModel,
     imageDraftModel: mode.imageDraftModel,
     imageFinalModel: mode.imageFinalModel,

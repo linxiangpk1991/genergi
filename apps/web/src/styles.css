@@ -256,6 +256,12 @@ select {
   color: var(--genergi-text);
 }
 
+.section-note {
+  margin: -4px 0 14px;
+  color: var(--genergi-muted);
+  line-height: 1.6;
+}
+
 .input,
 .textarea,
 select.input {
@@ -318,6 +324,13 @@ select.input {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.generation-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+
 .mode-card,
 .channel-card {
   border: 1px solid var(--genergi-border);
@@ -339,6 +352,39 @@ select.input {
 .channel-card--active {
   border-color: var(--genergi-primary);
   box-shadow: 0 0 0 2px rgba(0, 71, 171, 0.08);
+}
+
+.generation-card {
+  border: 1px solid var(--genergi-border);
+  border-radius: 14px;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+  padding: 14px;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s, transform 0.1s;
+}
+
+.generation-card:hover {
+  border-color: rgba(0, 71, 171, 0.2);
+  box-shadow: 0 8px 18px rgba(0, 71, 171, 0.06);
+}
+
+.generation-card--active {
+  border-color: var(--genergi-primary);
+  box-shadow: 0 0 0 2px rgba(0, 71, 171, 0.08);
+}
+
+.generation-card__title {
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--genergi-primary-deep);
+}
+
+.generation-card__desc {
+  margin-top: 6px;
+  color: var(--genergi-muted);
+  font-size: 13px;
+  line-height: 1.5;
 }
 
 .mode-title,
@@ -364,6 +410,12 @@ select.input {
   margin-bottom: 6px;
 }
 
+.metric-row--stacked {
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 8px;
+}
+
 .progress-track {
   width: 100%;
   height: 8px;
@@ -382,6 +434,95 @@ select.input {
 .task-list {
   display: grid;
   gap: 8px;
+}
+
+.keyword-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.keyword-pill {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 5px 10px;
+  background: rgba(0, 71, 171, 0.08);
+  color: var(--genergi-primary-deep);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.planning-strip {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.planning-chip,
+.planning-summary-card,
+.planning-note-card {
+  border: 1px solid rgba(0, 71, 171, 0.08);
+  border-radius: 14px;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+  padding: 14px;
+}
+
+.planning-chip {
+  display: grid;
+  gap: 4px;
+}
+
+.planning-chip__label {
+  color: var(--genergi-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.planning-chip strong,
+.planning-summary-card strong,
+.planning-note-card strong {
+  color: var(--genergi-primary-deep);
+  font-size: 15px;
+}
+
+.planning-chip span,
+.planning-summary-card span,
+.planning-note-card span {
+  color: var(--genergi-muted);
+  line-height: 1.55;
+  font-size: 13px;
+}
+
+.planning-summary-card {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.planning-summary-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.planning-inline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.planning-notes {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.planning-note-card {
+  display: grid;
+  gap: 6px;
 }
 
 .task-item {
@@ -936,4 +1077,12 @@ select.input {
 .pill--sm {
   padding: 4px 8px;
   font-size: 12px;
+}
+
+@media (max-width: 1200px) {
+  .generation-grid,
+  .planning-strip,
+  .planning-notes {
+    grid-template-columns: 1fr;
+  }
 }

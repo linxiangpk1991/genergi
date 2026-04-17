@@ -1,4 +1,10 @@
 import { z } from "zod"
+import {
+  enhancementModeSchema,
+  generationModeSchema,
+  generationRouteSchema,
+  planningVersionSchema,
+} from "./generation-route.js"
 
 export type AppId = "web" | "api" | "worker"
 
@@ -41,6 +47,11 @@ export const taskRunConfigSchema = z.object({
   modeId: productionModeSchema,
   channelId: channelProfileSchema,
   targetDurationSec: videoDurationSecSchema,
+  generationMode: generationModeSchema,
+  enhancementMode: enhancementModeSchema,
+  generationRoute: generationRouteSchema,
+  routeReason: z.string(),
+  planningVersion: planningVersionSchema,
   textModel: modelRefSchema,
   imageDraftModel: modelRefSchema,
   imageFinalModel: modelRefSchema,
@@ -71,6 +82,11 @@ export const taskSummarySchema = z.object({
   modeId: productionModeSchema,
   channelId: channelProfileSchema,
   targetDurationSec: videoDurationSecSchema,
+  generationMode: generationModeSchema,
+  generationRoute: generationRouteSchema,
+  routeReason: z.string(),
+  planningVersion: planningVersionSchema,
+  actualDurationSec: z.number().positive().nullable(),
   status: taskStatusSchema,
   progressPct: z.number().min(0).max(100),
   retryCount: z.number().int().nonnegative(),
@@ -100,6 +116,9 @@ export const taskDetailSchema = z.object({
   title: z.string(),
   script: z.string(),
   taskRunConfig: taskRunConfigSchema,
+  visualStyleGuide: z.string().optional(),
+  ctaLine: z.string().optional(),
+  actualDurationSec: z.number().positive().nullable().optional(),
   scenes: z.array(storyboardSceneSchema),
   updatedAt: z.string(),
 })
@@ -123,6 +142,7 @@ export const createTaskInputSchema = z.object({
   channelId: channelProfileSchema,
   aspectRatio: z.string().default("9:16"),
   targetDurationSec: videoDurationSecSchema.default(30),
+  generationMode: generationModeSchema.default("user_locked"),
 })
 export type CreateTaskInput = z.infer<typeof createTaskInputSchema>
 
@@ -188,3 +208,5 @@ export const TASK_QUEUE_NAME = "genergi-tasks"
 
 export * from "./task-persistence.js"
 export * from "./storyboard-planner.js"
+export * from "./generation-route.js"
+export * from "./planning-contract.js"

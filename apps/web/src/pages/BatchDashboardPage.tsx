@@ -5,6 +5,8 @@ export function BatchDashboardPage() {
   const [tasks, setTasks] = useState<TaskSummary[]>([])
   const [runtime, setRuntime] = useState<RuntimeStatusResponse["runtime"] | null>(null)
 
+  const planningSignal = tasks[0]?.planning
+
   useEffect(() => {
     async function load() {
       const [taskResult, runtimeResult] = await Promise.all([api.listTasks(), api.runtimeStatus()])
@@ -32,11 +34,11 @@ export function BatchDashboardPage() {
         <div>
           <div className="eyebrow">Batch Command Center</div>
           <h1>批量任务看板</h1>
-          <p>监控队列、预算池、worker 运行状态和失败恢复情况。</p>
+          <p>监控队列、预算池、worker 运行状态和任务规划摘要，先看内容推进是否顺畅。</p>
         </div>
         <div className="topbar-actions">
-          <span className="pill">今日预算池</span>
-          <span className="pill pill--accent">高风险任务 1</span>
+          <span className="pill">{planningSignal?.generationRouteLabel ?? "待预判"}</span>
+          <span className="pill pill--accent">{planningSignal?.generationPreferenceLabel ?? "待接入"}</span>
         </div>
       </header>
 
@@ -44,9 +46,9 @@ export function BatchDashboardPage() {
         <section className="card">
           <h3>批次筛选</h3>
           <div className="scene-list">
-            <button className="scene-chip scene-chip--active"><strong>Today</strong><span>8 批次</span></button>
-            <button className="scene-chip"><strong>Pending Review</strong><span>3 批次</span></button>
-            <button className="scene-chip"><strong>Critical</strong><span>1 批次</span></button>
+            <button className="scene-chip scene-chip--active"><strong>今日任务</strong><span>{planningSignal?.targetDurationSec ?? "?"}s 预判</span></button>
+            <button className="scene-chip"><strong>待审阅</strong><span>{planningSignal?.generationRouteLabel ?? "待预判"}</span></button>
+            <button className="scene-chip"><strong>增强模式</strong><span>{planningSignal?.generationPreferenceLabel ?? "待接入"}</span></button>
           </div>
         </section>
 
@@ -60,7 +62,9 @@ export function BatchDashboardPage() {
               <div key={task.id} className="task-item task-item--wide">
                 <div>
                   <strong>{task.title}</strong>
-                  <span>{task.modeId} · {task.channelId}</span>
+                  <span>
+                    {task.targetDurationSec}s · {task.planning?.generationRouteLabel ?? "待预判"} · {task.planning?.generationPreferenceLabel ?? "待接入"}
+                  </span>
                 </div>
                 <div>
                   <strong>{task.progressPct}%</strong>
@@ -68,7 +72,7 @@ export function BatchDashboardPage() {
                 </div>
                 <div>
                   <strong>¥{task.estimatedCostCny.toFixed(2)}</strong>
-                  <span>{task.status}</span>
+                  <span>{task.status} · {task.channelId}</span>
                 </div>
               </div>
             ))}
@@ -81,6 +85,7 @@ export function BatchDashboardPage() {
             <div className="metric-row"><span>预算上限</span><strong>¥300</strong></div>
             <div className="progress-track"><div className="progress-fill" style={{ width: '58%' }} /></div>
             <div className="muted">今日已用 58%</div>
+            <div className="muted" style={{ marginTop: 8 }}>{planningSignal?.planningSummary ?? "当前看板将展示任务规划摘要。"}</div>
           </section>
           <section className="card card--compact">
             <h3>Worker 状态</h3>
