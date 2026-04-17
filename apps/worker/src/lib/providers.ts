@@ -28,6 +28,14 @@ function buildGatewayHeaders() {
   }
 }
 
+function isRetryableGatewayStatus(status?: number | null) {
+  return status === 429 || status === 500 || status === 502 || status === 503 || status === 504
+}
+
+async function sleep(ms: number) {
+  await new Promise((resolve) => setTimeout(resolve, ms))
+}
+
 function normalizeImageModel(model: string) {
   const normalized = (model ?? "").trim()
   if (!normalized) {
@@ -204,19 +212,25 @@ async function requestGatewayImageGeneration(input: {
 
   let lastError: unknown = null
   for (const endpoint of gatewayImageGenerationPaths) {
-    try {
-      const response = await axios.post(`${gatewayBaseUrl}${endpoint}`, payload, {
-        headers: buildGatewayHeaders(),
-        timeout: 120000,
-      })
-      return { endpoint, data: response.data }
-    } catch (error) {
-      lastError = error
-      const status = axios.isAxiosError(error) ? error.response?.status : null
-      if (status === 404 || status === 405) {
-        continue
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        const response = await axios.post(`${gatewayBaseUrl}${endpoint}`, payload, {
+          headers: buildGatewayHeaders(),
+          timeout: 120000,
+        })
+        return { endpoint, data: response.data }
+      } catch (error) {
+        lastError = error
+        const status = axios.isAxiosError(error) ? error.response?.status : null
+        if (status === 404 || status === 405) {
+          break
+        }
+        if (isRetryableGatewayStatus(status) && attempt < 3) {
+          await sleep(1500 * attempt)
+          continue
+        }
+        throw error
       }
-      throw error
     }
   }
 
@@ -417,21 +431,40 @@ export async function createVideoFromPrompt(input: { taskId: string; scene: Stor
     throw new Error("GENERGI_MEDIA_GATEWAY_API_KEY is missing")
   }
 
-  const createResponse = await axios.post(
-    `${gatewayBaseUrl}/v1/video/generations`,
-    {
-      model: input.model,
-      prompt: input.scene.videoPrompt || input.scene.script || input.scene.title,
-      duration: Math.max(Math.round(input.scene.durationSec), 4),
-    },
-    {
-      headers: {
-        Authorization: `Bearer ${gatewayApiKey}`,
-        "Content-Type": "application/json",
-      },
-      timeout: 120000,
-    },
-  )
+  let createResponse
+  let lastCreateError: unknown = null
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      createResponse = await axios.post(
+        `${gatewayBaseUrl}/v1/video/generations`,
+        {
+          model: input.model,
+          prompt: input.scene.videoPrompt || input.scene.script || input.scene.title,
+          duration: Math.max(Math.round(input.scene.durationSec), 4),
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${gatewayApiKey}`,
+            "Content-Type": "application/json",
+          },
+          timeout: 120000,
+        },
+      )
+      break
+    } catch (error) {
+      lastCreateError = error
+      const status = axios.isAxiosError(error) ? error.response?.status : null
+      if (isRetryableGatewayStatus(status) && attempt < 3) {
+        await sleep(2000 * attempt)
+        continue
+      }
+      throw error
+    }
+  }
+
+  if (!createResponse) {
+    throw lastCreateError instanceof Error ? lastCreateError : new Error(`Video generation create failed: ${String(lastCreateError)}`)
+  }
 
   const taskId = createResponse.data?.task_id || createResponse.data?.id
   if (!taskId) {
@@ -589,10 +622,15 @@ export async function buildFinalVideoWithNarration(input: {
 }) {
   const dir = ensureTaskDir(input.taskId)
   const outputPath = path.join(dir, "video", "final-with-audio.mp4")
-  await muxNarrationIntoVideo({
-    videoPath: input.sourceVideoPath,
-    audioPath: input.narrationPath,
-    outputPath,
-  })
+  try {
+    await muxNarrationIntoVideo({
+      videoPath: input.sourceVideoPath,
+      audioPath: input.narrationPath,
+      outputPath,
+    })
+  } catch (error) {
+    console.warn("[worker] ffmpeg mux failed, falling back to source scene video:", error instanceof Error ? error.message : String(error))
+    await fs.copyFile(input.sourceVideoPath, outputPath)
+  }
   return outputPath
 }

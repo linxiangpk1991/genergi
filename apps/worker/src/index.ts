@@ -49,9 +49,12 @@ async function writeTaskArtifacts(taskId: string) {
   }
 
   const preparedDetail = await rewriteTaskWithTextProvider(detail)
+  await writeWorkerHeartbeat(`Preparing source files for ${taskId}`)
   const taskDir = await writeTaskSourceFiles(preparedDetail)
+  await writeWorkerHeartbeat(`Synthesizing narration for ${taskId}`)
   const narration = await synthesizeNarration(preparedDetail)
   const firstScene = preparedDetail.scenes[0]
+  await writeWorkerHeartbeat(`Creating scene video for ${taskId}`)
   const video = await createVideoFromPrompt({
     taskId,
     scene: firstScene,
@@ -59,6 +62,7 @@ async function writeTaskArtifacts(taskId: string) {
   })
   let keyframes
   try {
+    await writeWorkerHeartbeat(`Generating keyframes for ${taskId}`)
     keyframes = await createKeyframeBundle({
       taskId,
       detail: preparedDetail,
@@ -66,12 +70,14 @@ async function writeTaskArtifacts(taskId: string) {
     })
   } catch (error) {
     console.warn(`[worker] ${taskId} image keyframe generation failed, fallback to video frame:`, error instanceof Error ? error.message : String(error))
+    await writeWorkerHeartbeat(`Falling back to video-derived keyframe for ${taskId}`, "degraded")
     keyframes = await createFallbackKeyframeBundleFromVideo({
       taskId,
       scene: firstScene,
       videoPath: video.videoPath,
     })
   }
+  await writeWorkerHeartbeat(`Muxing final video for ${taskId}`)
   const finalVideoPath = await buildFinalVideoWithNarration({
     taskId,
     sourceVideoPath: video.videoPath,
