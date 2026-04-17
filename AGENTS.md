@@ -74,3 +74,8 @@
 ## Current Branch Guidance
 - Active branch for bootstrap work: `codex/bootstrap-foundation`
 - The old repo `E:\short-video-factory` is reference-only now. Do not treat it as the mother repository.
+
+## Thread Migration Note
+- If a future Codex desktop thread still visually appears under `E:\short-video-factory`, treat that as stale UI binding only.
+- The real working project, source of truth, and all new implementation work must continue under `E:\genergi`.
+- Before resuming work in any new thread, read `docs/architecture/线程迁移记忆.md`.

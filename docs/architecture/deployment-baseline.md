@@ -11,3 +11,8 @@
 - `/opt/genergi/releases/<timestamp>`
 - `/opt/genergi/current`
 - `/opt/genergi/shared/`
+
+## Packaged ABI
+- 当前仓库的交付基线是 `apps/web` 静态构建产物与 `apps/api` / `apps/worker` 的 Node.js 构建产物。
+- 任何影响部署产物结构、Node 运行时版本、systemd 启动入口、或前端静态资源输出路径的变更，都应视为 Packaged ABI 变更。
+- 发生 Packaged ABI 变更时，必须同步更新部署文档、脚本与回滚说明。

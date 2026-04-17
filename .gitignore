@@ -3,6 +3,8 @@ node_modules/
 dist/
 .next/
 coverage/
+.claude/
+.playwright-mcp/
 .env
 .env.local
 .env.*.local
