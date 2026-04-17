@@ -6,7 +6,7 @@ import axios from "axios"
 
 import { buildStoryboardScenes, type StoryboardScene, type TaskDetail } from "@genergi/shared"
 import { EdgeTTS } from "./edge-tts.js"
-import { concatVideos, extractKeyframeFromVideo, muxNarrationIntoVideo } from "./ffmpeg.js"
+import { concatVideos, extractKeyframeFromVideo, muxNarrationIntoVideo, trimVideoDuration } from "./ffmpeg.js"
 
 const gatewayBaseUrl = process.env.GENERGI_MEDIA_GATEWAY_BASE_URL ?? "https://open.xiaojingai.com"
 const gatewayApiKey = process.env.GENERGI_MEDIA_GATEWAY_API_KEY ?? ""
@@ -320,6 +320,27 @@ function extractOpenAIText(payload: any) {
   return ""
 }
 
+function calculateWordBudget(targetDurationSec: number) {
+  return Math.max(12, Math.floor(targetDurationSec * 2.2))
+}
+
+export function normalizeRewriteToVoiceoverScript(text: string, targetDurationSec: number) {
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line) => !/^here('|’)s a tighter/i.test(line))
+    .filter((line) => !/^a few notes/i.test(line))
+    .filter((line) => !/^want me to/i.test(line))
+    .filter((line) => !/^[-*]\s/.test(line))
+    .map((line) => line.replace(/\*\*/g, ""))
+    .map((line) => line.replace(/^[A-Za-z ]+\(\d+\s*-\s*\d+s\):\s*/i, ""))
+
+  const normalized = lines.join(" ").replace(/\s+/g, " ").trim()
+  const words = normalized.split(/\s+/).filter(Boolean)
+  return words.slice(0, calculateWordBudget(targetDurationSec)).join(" ").trim()
+}
+
 function alignDetailScenes(detail: TaskDetail, script: string): TaskDetail {
   return {
     ...detail,
@@ -404,7 +425,12 @@ export async function rewriteTaskWithTextProvider(detail: TaskDetail): Promise<T
       return alignDetailScenes(detail, detail.script)
     }
 
-    return alignDetailScenes(detail, rewritten)
+    const normalizedRewrite = normalizeRewriteToVoiceoverScript(
+      rewritten,
+      detail.taskRunConfig.targetDurationSec ?? 30,
+    )
+
+    return alignDetailScenes(detail, normalizedRewrite || detail.script)
   } catch (error) {
     console.warn(`[worker] ${provider} rewrite skipped:`, error instanceof Error ? error.message : String(error))
     return alignDetailScenes(detail, detail.script)
@@ -652,9 +678,11 @@ export async function buildFinalVideoWithNarration(input: {
   taskId: string
   sourceVideoPaths: string[]
   narrationPath: string
+  targetDurationSec: number
 }) {
   const dir = ensureTaskDir(input.taskId)
   const stitchedVideoPath = path.join(dir, "video", "stitched-scenes.mp4")
+  const trimmedVideoPath = path.join(dir, "video", "trimmed-scenes.mp4")
   const outputPath = path.join(dir, "video", "final-with-audio.mp4")
   try {
     await concatVideos({
@@ -662,8 +690,13 @@ export async function buildFinalVideoWithNarration(input: {
       outputPath: stitchedVideoPath,
       workingDirectory: path.join(dir, "video"),
     })
-    await muxNarrationIntoVideo({
+    await trimVideoDuration({
       videoPath: stitchedVideoPath,
+      outputPath: trimmedVideoPath,
+      durationSec: input.targetDurationSec,
+    })
+    await muxNarrationIntoVideo({
+      videoPath: trimmedVideoPath,
       audioPath: input.narrationPath,
       outputPath,
     })

@@ -61,6 +61,46 @@ export async function concatVideos(input: {
   }
 }
 
+export async function trimVideoDuration(input: {
+  videoPath: string
+  outputPath: string
+  durationSec: number
+}) {
+  const ffmpegPath = process.env.GENERGI_FFMPEG_PATH || "ffmpeg"
+
+  await new Promise<void>((resolve, reject) => {
+    const process = spawn(
+      ffmpegPath,
+      [
+        "-y",
+        "-i",
+        input.videoPath,
+        "-t",
+        `${input.durationSec}`,
+        "-an",
+        "-c:v",
+        "libx264",
+        input.outputPath,
+      ],
+      { stdio: ["ignore", "pipe", "pipe"] },
+    )
+
+    let stderr = ""
+    process.stderr.on("data", (chunk) => {
+      stderr += chunk.toString()
+    })
+
+    process.on("error", reject)
+    process.on("close", (code) => {
+      if (code === 0) {
+        resolve()
+        return
+      }
+      reject(new Error(`ffmpeg trim exited with code ${code}: ${stderr}`))
+    })
+  })
+}
+
 export async function muxNarrationIntoVideo(input: {
   videoPath: string
   audioPath: string

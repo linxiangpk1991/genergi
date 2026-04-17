@@ -1,6 +1,6 @@
 import { Queue, Worker } from "bullmq"
 import { Redis } from "ioredis"
-import { TASK_QUEUE_NAME, readTaskDetail, updateRuntimeStatus, updateTaskSummary, upsertTaskAssets } from "@genergi/shared"
+import { TASK_QUEUE_NAME, readTaskDetail, updateRuntimeStatus, updateTaskSummary, upsertTaskAssets, upsertTaskDetail } from "@genergi/shared"
 import type { AssetRecord, TaskSummary } from "@genergi/shared"
 import {
   buildFinalVideoWithNarration,
@@ -49,6 +49,7 @@ async function writeTaskArtifacts(taskId: string) {
   }
 
   const preparedDetail = await rewriteTaskWithTextProvider(detail)
+  await upsertTaskDetail(preparedDetail)
   await writeWorkerHeartbeat(`Preparing source files for ${taskId}`)
   const taskDir = await writeTaskSourceFiles(preparedDetail)
   await writeWorkerHeartbeat(`Synthesizing narration for ${taskId}`)
@@ -87,6 +88,7 @@ async function writeTaskArtifacts(taskId: string) {
     taskId,
     sourceVideoPaths: sceneVideos.map((sceneVideo) => sceneVideo.videoPath),
     narrationPath: narration.audioPath,
+    targetDurationSec: preparedDetail.taskRunConfig.targetDurationSec,
   })
 
   const assets: AssetRecord[] = [
