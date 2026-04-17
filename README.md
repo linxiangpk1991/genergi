@@ -101,10 +101,11 @@ pnpm build
 首次接手仓库时建议按这个顺序阅读：
 
 1. [仓库交接说明](/E:/genergi/docs/handover/仓库交接说明.md)
-2. [CONTRIBUTING](/E:/genergi/CONTRIBUTING.md)
-3. [AGENTS.md](/E:/genergi/AGENTS.md)
-4. [线程迁移记忆](/E:/genergi/docs/architecture/线程迁移记忆.md)
-5. [DESIGN.md](/E:/genergi/DESIGN.md)
+2. [项目完整说明](/E:/genergi/docs/handover/项目完整说明.md)
+3. [CONTRIBUTING](/E:/genergi/CONTRIBUTING.md)
+4. [AGENTS.md](/E:/genergi/AGENTS.md)
+5. [线程迁移记忆](/E:/genergi/docs/architecture/线程迁移记忆.md)
+6. [DESIGN.md](/E:/genergi/DESIGN.md)
 
 ## 公开仓库纪律
 
