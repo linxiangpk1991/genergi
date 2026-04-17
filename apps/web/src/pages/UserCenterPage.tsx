@@ -217,7 +217,7 @@ export function UserCenterPage() {
               <tbody>
                 {users.map((user) => (
                   <tr key={user.id}>
-                    <td className="mono">{user.id}</td>
+                    <td className="mono-truncate" title={user.id}>{user.id}</td>
                     <td>{user.username}</td>
                     <td>{user.displayName}</td>
                     <td>

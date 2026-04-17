@@ -30,8 +30,8 @@ export function AppLayout({ children, operator }: AppLayoutProps) {
           <div className="brand-panel">
             <div className="brand-mark">G</div>
             <div>
-              <div className="brand-name">Production</div>
-              <div className="brand-subtitle">v2.0</div>
+              <div className="brand-name">GENERGI</div>
+              <div className="brand-subtitle">自动化视频平台</div>
             </div>
           </div>
         </div>

@@ -106,7 +106,8 @@ export function StoryboardReviewPage() {
         <aside className="card review-actions">
           <h3>审阅操作</h3>
           <button className="primary-button">通过并进入下一 Scene</button>
-          <button className="ghost-button">退回修改</button>
+          <button className="secondary-button">退回修改</button>
+          <div style={{ borderTop: "1px solid var(--genergi-border)", margin: "4px 0" }} />
           <button className="ghost-button">合并 Scene</button>
           <button className="ghost-button">拆分 Scene</button>
           <button className="ghost-button">重新生成建议</button>

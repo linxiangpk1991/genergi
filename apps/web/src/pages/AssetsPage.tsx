@@ -77,110 +77,70 @@ export function AssetsPage() {
               </option>
             ))}
           </select>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
-              gap: 12,
-              margin: "18px 0 20px",
-            }}
-          >
+          <div className="asset-metrics">
             {[
               { label: "资产总数", value: assets.length },
               { label: "可下载", value: assetStats.readyCount },
               { label: "可预览", value: assetStats.previewableCount },
               { label: "目录资产", value: assetStats.directoryCount },
             ].map((metric) => (
-              <div
-                key={metric.label}
-                style={{
-                  borderRadius: 16,
-                  border: "1px solid rgba(0, 71, 171, 0.08)",
-                  background: "#f8fbff",
-                  padding: "14px 16px",
-                }}
-              >
-                <div style={{ fontSize: 12, color: "var(--genergi-muted)", marginBottom: 6 }}>{metric.label}</div>
-                <strong style={{ fontSize: 22, color: "var(--genergi-primary-deep)" }}>{metric.value}</strong>
+              <div key={metric.label} className="asset-metric-card">
+                <div className="metric-label">{metric.label}</div>
+                <strong className="metric-value">{metric.value}</strong>
               </div>
             ))}
           </div>
           {assetStats.missingCount ? (
-            <div style={{ marginBottom: 16, color: "#b42318", fontSize: 14 }}>
+            <div className="asset-missing-notice">
               {assetStats.missingCount} 个记录指向的文件当前不可访问，列表仍保留元数据以兼容历史资产。
             </div>
           ) : null}
           <div className="task-list">
             {assets.map((asset) => (
-              <div
-                key={asset.id}
-                className="task-item"
-                style={{
-                  display: "grid",
-                  gap: 14,
-                  border: "1px solid rgba(0, 71, 171, 0.08)",
-                  background: "linear-gradient(180deg, #ffffff 0%, #f8fbff 100%)",
-                }}
-              >
-                <div style={{ display: "flex", justifyContent: "space-between", gap: 16, alignItems: "flex-start" }}>
-                  <div style={{ display: "grid", gap: 6 }}>
-                    <strong style={{ fontSize: 18, color: "var(--genergi-primary-deep)" }}>{asset.label}</strong>
-                    <span style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
-                      <span className="pill" style={{ padding: "6px 10px" }}>
-                        {asset.assetType}
-                      </span>
-                      <span className="pill" style={{ padding: "6px 10px", background: "rgba(0, 71, 171, 0.06)" }}>
+              <div key={asset.id} className="asset-item">
+                <div className="asset-item-header">
+                  <div>
+                    <div className="asset-item-title">{asset.label}</div>
+                    <div className="asset-item-tags">
+                      <span className="pill pill--sm">{asset.assetType}</span>
+                      <span className="pill pill--sm">
                         {asset.previewKind === "directory" ? "目录" : asset.previewKind === "json" ? "结构化预览" : asset.previewKind === "media" ? "媒体预览" : asset.previewKind === "text" ? "文本预览" : "二进制"}
                       </span>
-                      <span style={{ color: asset.status === "ready" ? "#067647" : "#b54708", fontWeight: 700 }}>
+                      <span className={asset.status === "ready" ? "status-text--success" : "status-text--warning"}>
                         {asset.status === "ready" ? "就绪" : "生成中"}
                       </span>
-                    </span>
+                    </div>
                   </div>
-                  <div style={{ textAlign: "right", display: "grid", gap: 4 }}>
-                    <strong style={{ color: "var(--genergi-primary-deep)" }}>{asset.sizeLabel}</strong>
-                    <span>{asset.modifiedAt ? new Date(asset.modifiedAt).toLocaleString("zh-CN") : new Date(asset.createdAt).toLocaleString("zh-CN")}</span>
+                  <div style={{ textAlign: "right" }}>
+                    <strong>{asset.sizeLabel}</strong>
+                    <div className="muted">{asset.modifiedAt ? new Date(asset.modifiedAt).toLocaleString("zh-CN") : new Date(asset.createdAt).toLocaleString("zh-CN")}</div>
                   </div>
                 </div>
-                <div
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
-                    gap: 12,
-                  }}
-                >
+                <div className="asset-item-meta">
                   <div>
-                    <div className="field-label" style={{ marginTop: 0 }}>
-                      文件名
-                    </div>
-                    <div style={{ wordBreak: "break-word" }}>{asset.fileName}</div>
+                    <div className="field-label" style={{ marginTop: 0 }}>文件名</div>
+                    <div className="text-break">{asset.fileName}</div>
                   </div>
                   <div>
-                    <div className="field-label" style={{ marginTop: 0 }}>
-                      存储位置
-                    </div>
-                    <div style={{ wordBreak: "break-word", color: "var(--genergi-muted)" }}>{asset.displayPath}</div>
+                    <div className="field-label" style={{ marginTop: 0 }}>存储位置</div>
+                    <div className="text-break muted">{asset.displayPath}</div>
                   </div>
                   <div>
-                    <div className="field-label" style={{ marginTop: 0 }}>
-                      预览信息
-                    </div>
-                    <div style={{ color: "var(--genergi-muted)" }}>
+                    <div className="field-label" style={{ marginTop: 0 }}>预览信息</div>
+                    <div className="muted">
                       {asset.previewable ? `浏览器内可直接打开 · ${asset.mimeType}` : `${asset.mimeType} · 仅支持下载`}
                     </div>
                   </div>
                   <div>
-                    <div className="field-label" style={{ marginTop: 0 }}>
-                      目录
-                    </div>
-                    <div style={{ color: "var(--genergi-muted)" }}>{asset.directoryName ?? "根目录"}</div>
+                    <div className="field-label" style={{ marginTop: 0 }}>目录</div>
+                    <div className="muted">{asset.directoryName ?? "根目录"}</div>
                   </div>
                 </div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center", justifyContent: "space-between" }}>
-                  <div style={{ color: "var(--genergi-muted)", fontSize: 14 }}>
+                <div className="asset-item-footer">
+                  <div className="muted" style={{ fontSize: 13 }}>
                     {asset.exists ? "记录已绑定真实文件" : "该记录当前没有可访问的文件"}
                   </div>
-                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                  <div className="asset-item-actions">
                     {asset.previewable ? (
                       <a
                         className="ghost-button"
@@ -191,7 +151,7 @@ export function AssetsPage() {
                         预览
                       </a>
                     ) : (
-                      <span className="ghost-button" aria-disabled="true" style={{ opacity: 0.55, cursor: "not-allowed" }}>
+                      <span className="ghost-button" aria-disabled="true">
                         预览不可用
                       </span>
                     )}
@@ -203,10 +163,9 @@ export function AssetsPage() {
               </div>
             ))}
             {!assets.length ? (
-              <div className="task-item" style={{ gap: 8 }}>
-                <div><strong>暂无资产</strong><span>先创建并执行任务</span></div>
-                <div><strong>pending</strong><span>等待 worker 输出脚本、字幕、音频或视频 bundle</span></div>
-                <div><strong>说明</strong><span>资产中心会在生成后展示文件名、大小、预览状态和下载入口</span></div>
+              <div className="task-item">
+                <div><strong>暂无资产</strong><span> · 先创建并执行任务</span></div>
+                <div className="muted">资产中心会在生成后展示文件名、大小、预览状态和下载入口</div>
               </div>
             ) : null}
           </div>

@@ -40,8 +40,8 @@ export function BatchDashboardPage() {
         </div>
       </header>
 
-      <div className="workspace-grid">
-        <section className="card review-sidebar">
+      <div className="review-grid">
+        <section className="card">
           <h3>批次筛选</h3>
           <div className="scene-list">
             <button className="scene-chip scene-chip--active"><strong>Today</strong><span>8 批次</span></button>
@@ -50,7 +50,7 @@ export function BatchDashboardPage() {
           </div>
         </section>
 
-        <section className="card review-main">
+        <section className="card">
           <div className="section-header">
             <h3>任务队列</h3>
             <button className="ghost-button">批量导入</button>

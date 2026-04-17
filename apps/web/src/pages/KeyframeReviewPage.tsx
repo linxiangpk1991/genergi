@@ -102,7 +102,8 @@ export function KeyframeReviewPage() {
         <aside className="card review-actions">
           <h3>关键帧决策</h3>
           <button className="primary-button">通过关键帧</button>
-          <button className="ghost-button">重新生成图片</button>
+          <button className="secondary-button">重新生成图片</button>
+          <div style={{ borderTop: "1px solid var(--genergi-border)", margin: "4px 0" }} />
           <button className="ghost-button">升级模型重试</button>
           <button className="ghost-button">返回分镜修改</button>
           <label className="field-label">审阅意见</label>
