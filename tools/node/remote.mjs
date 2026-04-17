@@ -31,6 +31,25 @@ export function resolveRemoteConfig(overrides = {}) {
   };
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRetryableRemoteError(message) {
+  const normalized = `${message ?? ""}`.toLowerCase();
+  return [
+    "connection reset",
+    "connection closed",
+    "connection timed out",
+    "could not resolve hostname",
+    "broken pipe",
+    "no route to host",
+    "kex_exchange_identification",
+    "scp: connection closed",
+    "client_loop: send disconnect",
+  ].some((token) => normalized.includes(token));
+}
+
 function runProcess(command, args, options = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
@@ -79,6 +98,31 @@ function runProcess(command, args, options = {}) {
   });
 }
 
+async function runWithRetry(action, options = {}) {
+  const attempts = options.attempts ?? 3;
+  const label = options.label ?? "remote operation";
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await action();
+    } catch (error) {
+      lastError = error;
+      const message = error instanceof Error ? error.message : String(error);
+      if (!isRetryableRemoteError(message) || attempt >= attempts) {
+        throw error;
+      }
+
+      if (options.echo !== false) {
+        console.warn(`[remote retry ${attempt}/${attempts}] ${label} failed: ${message}`);
+      }
+      await sleep((options.baseDelayMs ?? 1500) * attempt);
+    }
+  }
+
+  throw lastError ?? new Error(`${label} failed`);
+}
+
 export async function runRemoteCommand(remoteCommand, options = {}) {
   const config = resolveRemoteConfig(options);
   const args = [
@@ -93,14 +137,23 @@ export async function runRemoteCommand(remoteCommand, options = {}) {
     remoteCommand,
   ];
 
-  return runProcess(config.sshPath, args, {
-    cwd: options.cwd,
-    env: getRemoteSpawnEnv(options.env),
-    stdio: options.stdio,
-    input: options.input,
-    allowedExitCodes: options.allowedExitCodes,
-    echoOutput: options.echoOutput,
-  });
+  return runWithRetry(
+    () =>
+      runProcess(config.sshPath, args, {
+        cwd: options.cwd,
+        env: getRemoteSpawnEnv(options.env),
+        stdio: options.stdio,
+        input: options.input,
+        allowedExitCodes: options.allowedExitCodes,
+        echoOutput: options.echoOutput,
+      }),
+    {
+      attempts: options.attempts ?? 3,
+      label: options.label ?? remoteCommand,
+      baseDelayMs: options.baseDelayMs,
+      echo: options.echoOutput,
+    },
+  );
 }
 
 export async function runRemoteScript(script, options = {}) {
@@ -117,14 +170,23 @@ export async function runRemoteScript(script, options = {}) {
     "bash -s",
   ];
 
-  return runProcess(config.sshPath, args, {
-    cwd: options.cwd,
-    env: getRemoteSpawnEnv(options.env),
-    stdio: options.stdio,
-    input: script,
-    allowedExitCodes: options.allowedExitCodes,
-    echoOutput: options.echoOutput,
-  });
+  return runWithRetry(
+    () =>
+      runProcess(config.sshPath, args, {
+        cwd: options.cwd,
+        env: getRemoteSpawnEnv(options.env),
+        stdio: options.stdio,
+        input: script,
+        allowedExitCodes: options.allowedExitCodes,
+        echoOutput: options.echoOutput,
+      }),
+    {
+      attempts: options.attempts ?? 3,
+      label: options.label ?? "remote script",
+      baseDelayMs: options.baseDelayMs,
+      echo: options.echoOutput,
+    },
+  );
 }
 
 export async function copyFileToRemote(localPath, remotePath, options = {}) {
@@ -141,11 +203,27 @@ export async function copyFileToRemote(localPath, remotePath, options = {}) {
     `${config.host}:${remotePath}`,
   ];
 
-  return runProcess(config.scpPath, args, {
-    cwd: options.cwd,
-    env: getRemoteSpawnEnv(options.env),
-    stdio: options.stdio,
-    allowedExitCodes: options.allowedExitCodes,
-    echoOutput: options.echoOutput,
+  return runWithRetry(
+    () =>
+      runProcess(config.scpPath, args, {
+        cwd: options.cwd,
+        env: getRemoteSpawnEnv(options.env),
+        stdio: options.stdio,
+        allowedExitCodes: options.allowedExitCodes,
+        echoOutput: options.echoOutput,
+      }),
+    {
+      attempts: options.attempts ?? 3,
+      label: options.label ?? `scp ${localPath}`,
+      baseDelayMs: options.baseDelayMs,
+      echo: options.echoOutput,
+    },
+  );
+}
+
+export async function probeRemote(options = {}) {
+  return runRemoteCommand("hostname", {
+    ...options,
+    label: options.label ?? "remote probe",
   });
 }

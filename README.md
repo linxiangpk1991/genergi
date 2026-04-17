@@ -22,3 +22,15 @@ GENERGI 是一个面向自动化批量社媒视频生产的云端工作平台。
 - 真实密钥不得进入仓库
 - 生产配置通过环境变量或私有配置注入
 - 示例配置放在 `.env.example` 等模板文件中
+
+## 部署方式
+- 正式发布：`pnpm deploy:production`
+- 热补丁发布：`pnpm deploy:hotfix`
+
+### 热补丁发布适用场景
+- SSH / SCP 大包上传不稳定
+- 只改了少量文件
+- 需要快速止血，不想重新传完整 release archive
+
+更多说明见：
+- [稳定部署能力说明](/E:/genergi/docs/architecture/稳定部署能力说明.md)

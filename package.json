@@ -21,7 +21,8 @@
     "test": "vitest run",
     "typecheck": "turbo typecheck",
     "format": "prettier --write .",
-    "deploy:production": "node scripts/deploy/deploy-production.mjs"
+    "deploy:production": "node scripts/deploy/deploy-production.mjs",
+    "deploy:hotfix": "node scripts/deploy/deploy-hotfix-sync.mjs"
   },
   "devDependencies": {
     "@types/node": "^24.9.1",
