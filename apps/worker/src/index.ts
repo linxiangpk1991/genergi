@@ -60,6 +60,9 @@ async function writeTaskArtifacts(taskId: string) {
     taskId,
     detail: preparedDetail,
     model: process.env.GENERGI_VIDEO_MODEL ?? preparedDetail.taskRunConfig.videoDraftModel.id,
+    onSceneStart: async (scene, totalScenes) => {
+      await writeWorkerHeartbeat(`Generating scene ${scene.index + 1}/${totalScenes} for ${taskId}`)
+    },
   })
   let keyframes
   try {

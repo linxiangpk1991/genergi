@@ -10,20 +10,8 @@ function formatCurrency(value: number) {
   return `¥${value.toFixed(2)}`
 }
 
-function getSceneCountHint(durationSec: number) {
-  if (durationSec <= 15) {
-    return 3
-  }
-
-  if (durationSec <= 30) {
-    return 5
-  }
-
-  if (durationSec <= 45) {
-    return 7
-  }
-
-  return 8
+function getSceneCountHint(durationSec: number, maxSingleShotSec: number) {
+  return Math.max(1, Math.ceil(durationSec / Math.max(maxSingleShotSec, 1)))
 }
 
 function getPreferenceLabel(preference: GenerationPreferenceId) {
@@ -85,10 +73,10 @@ export function HomePage() {
   )
 
   const selectedDuration = useMemo(() => targetDurationSec, [targetDurationSec])
-  const sceneCountHint = getSceneCountHint(selectedDuration)
   const planningKeywords = getPreferenceKeywords(generationPreference)
   const planningSummary = getPreferenceSummary(generationPreference)
   const currentModeCapability = selectedMode?.maxSingleShotSec ?? 8
+  const sceneCountHint = getSceneCountHint(selectedDuration, currentModeCapability)
   const routePreview = selectedDuration <= currentModeCapability ? "单段直出" : "多分镜编排"
   const routePreviewDetail =
     selectedDuration <= currentModeCapability
@@ -277,11 +265,11 @@ export function HomePage() {
             <strong>系统自动补全</strong>
             <span>系统会把时长、生成方式和内容策略一起转成文本模型可用的规划约束。</span>
           </div>
-          <div className="planning-note-card">
-            <strong>主线程待接入</strong>
-            <span>当前页面先做兼容展示，真实模型能力表与完整生成路由后续由主线程接入。</span>
-          </div>
+        <div className="planning-note-card">
+          <strong>系统先规划</strong>
+          <span>渲染前会先根据时长、生成方式和模型能力决定单段或多分镜，再把约束交给文本模型规划。</span>
         </div>
+      </div>
         <div className="action-row">
           <button className="ghost-button" type="button">
             保存草稿

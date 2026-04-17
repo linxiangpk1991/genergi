@@ -1,6 +1,6 @@
 import fs from "node:fs/promises"
 import path from "node:path"
-import { buildDefaultTaskRunConfig, estimateCost } from "@genergi/config"
+import { buildDefaultTaskRunConfig, estimateCost, resolveVideoModelCapability } from "@genergi/config"
 import { buildStoryboardScenes, readTaskAssets, readTaskDetail, readTaskSummaries, upsertTaskDetail, writeTaskSummaries } from "@genergi/shared"
 import type { CreateTaskInput, StoryboardScene, TaskDetail, TaskSummary, TaskStatus } from "@genergi/shared"
 
@@ -248,6 +248,7 @@ export async function getTaskDetail(taskId: string) {
       scenes: buildStoryboardScenes({
         script: existing.script,
         targetDurationSec: task.targetDurationSec,
+        maxSceneDurationSec: resolveVideoModelCapability(taskRunConfig.videoDraftModel.id).maxSingleShotSec,
         aspectRatio: taskRunConfig.aspectRatio,
       }),
       updatedAt: now(),
@@ -266,6 +267,7 @@ export async function getTaskDetail(taskId: string) {
     scenes: buildStoryboardScenes({
       script,
       targetDurationSec: task.targetDurationSec,
+      maxSceneDurationSec: resolveVideoModelCapability(taskRunConfig.videoDraftModel.id).maxSingleShotSec,
       aspectRatio: taskRunConfig.aspectRatio,
     }),
     updatedAt: task.updatedAt,
@@ -326,6 +328,7 @@ export async function createTask(input: CreateTaskInput): Promise<{ task: TaskSu
     scenes: buildStoryboardScenes({
       script: input.script,
       targetDurationSec: input.targetDurationSec,
+      maxSceneDurationSec: resolveVideoModelCapability(taskRunConfig.videoDraftModel.id).maxSingleShotSec,
       aspectRatio: taskRunConfig.aspectRatio,
     }),
     updatedAt: timestamp,

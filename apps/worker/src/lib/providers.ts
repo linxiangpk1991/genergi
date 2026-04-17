@@ -393,7 +393,70 @@ export function validatePlanningOutput(
     return { ok: false, reason: "commentary field is not allowed in planning output" }
   }
 
-  const parsed = textPlanningOutputSchema.safeParse(raw)
+  const normalizedRaw =
+    raw &&
+    typeof raw === "object" &&
+    Array.isArray((raw as { scenePlan?: unknown[] }).scenePlan) &&
+    (raw as { scenePlan: unknown[] }).scenePlan.some(
+      (scene) => scene && typeof scene === "object" && "sceneNumber" in scene,
+    )
+      ? {
+          generationRoute:
+            (raw as { generationRoute?: unknown }).generationRoute === "single_shot"
+              ? "single_shot"
+              : "multi_scene",
+          targetDurationSec:
+            (raw as { targetDurationSec?: number; targetDuration?: number }).targetDurationSec ??
+            (raw as { targetDuration?: number }).targetDuration ??
+            expected.targetDurationSec,
+          finalVoiceoverScript:
+            (raw as { finalVoiceoverScript?: string }).finalVoiceoverScript ??
+            ((raw as { scenePlan: Array<{ voiceoverSegment?: string }> }).scenePlan
+              .map((scene) => scene.voiceoverSegment ?? "")
+              .join(" ")
+              .trim()),
+          visualStyleGuide:
+            (raw as { visualStyleGuide?: string }).visualStyleGuide ??
+            "Use the returned visual, mood, and camera notes as the canonical style guide.",
+          ctaLine:
+            (raw as { ctaLine?: string }).ctaLine ??
+            ((raw as { scenePlan: Array<{ voiceoverSegment?: string }> }).scenePlan.at(-1)?.voiceoverSegment ?? ""),
+          scenePlan: (raw as {
+            scenePlan: Array<{
+              sceneNumber?: number
+              durationSeconds?: number
+              durationSec?: number
+              visual?: string
+              voiceoverSegment?: string
+              mood?: string
+              camera?: string
+              scenePurpose?: string
+              script?: string
+              imagePrompt?: string
+              videoPrompt?: string
+              transitionHint?: string
+            }>
+          }).scenePlan.map((scene, index, allScenes) => {
+            const script = scene.script ?? scene.voiceoverSegment ?? ""
+            const visual = scene.visual ?? script
+            const mood = scene.mood ? ` Mood: ${scene.mood}.` : ""
+            const camera = scene.camera ? ` Camera: ${scene.camera}.` : ""
+            return {
+              sceneIndex: scene.sceneNumber != null ? Math.max(scene.sceneNumber - 1, 0) : index,
+              scenePurpose: scene.scenePurpose ?? `Scene ${index + 1}`,
+              durationSec: scene.durationSec ?? scene.durationSeconds ?? Math.floor(expected.targetDurationSec / allScenes.length),
+              script,
+              imagePrompt: scene.imagePrompt ?? `${visual}${mood}${camera}`.trim(),
+              videoPrompt:
+                scene.videoPrompt ??
+                `${visual}${mood}${camera} Generate a short-form social video shot that matches this exact beat.`.trim(),
+              transitionHint: scene.transitionHint ?? (index === allScenes.length - 1 ? "close" : "cut"),
+            }
+          }),
+        }
+      : raw
+
+  const parsed = textPlanningOutputSchema.safeParse(normalizedRaw)
   if (!parsed.success) {
     return { ok: false, reason: `planning output schema invalid: ${parsed.error.issues[0]?.message ?? "unknown error"}` }
   }
@@ -509,6 +572,7 @@ function alignDetailScenes(detail: TaskDetail, script: string): TaskDetail {
     scenes: buildStoryboardScenes({
       script,
       targetDurationSec: detail.taskRunConfig.targetDurationSec ?? 30,
+      maxSceneDurationSec: resolveVideoModelCapability(detail.taskRunConfig.videoDraftModel.id).maxSingleShotSec,
       aspectRatio: detail.taskRunConfig.aspectRatio,
     }),
     updatedAt: new Date().toISOString(),
@@ -519,6 +583,7 @@ function buildPlanningFallback(detail: TaskDetail): TextPlanningOutput {
   const scenes = buildStoryboardScenes({
     script: detail.script,
     targetDurationSec: detail.taskRunConfig.targetDurationSec ?? 30,
+    maxSceneDurationSec: resolveVideoModelCapability(detail.taskRunConfig.videoDraftModel.id).maxSingleShotSec,
     aspectRatio: detail.taskRunConfig.aspectRatio,
   })
 
@@ -790,14 +855,25 @@ export async function createSceneVideoBundle(input: {
   taskId: string
   detail: TaskDetail
   model: string
+  onSceneStart?: (scene: StoryboardScene, totalScenes: number) => Promise<void> | void
 }) {
   const videos = []
   for (const scene of input.detail.scenes) {
-    const video = await createVideoFromPrompt({
-      taskId: input.taskId,
-      scene,
-      model: input.model,
-    })
+    await input.onSceneStart?.(scene, input.detail.scenes.length)
+
+    const video = await Promise.race([
+      createVideoFromPrompt({
+        taskId: input.taskId,
+        scene,
+        model: input.model,
+      }),
+      new Promise<never>((_, reject) =>
+        setTimeout(
+          () => reject(new Error(`Scene ${scene.index + 1} video generation timeout`)),
+          8 * 60 * 1000,
+        ),
+      ),
+    ])
     videos.push({
       ...video,
       sceneId: scene.id,

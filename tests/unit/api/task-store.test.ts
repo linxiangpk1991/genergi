@@ -42,7 +42,7 @@ describe("API task store", () => {
     const detail = await store.getTaskDetail(created.task.id)
     expect(detail?.taskRunConfig.targetDurationSec).toBe(30)
     expect(detail?.taskRunConfig.generationRoute).toBe("multi_scene")
-    expect(detail?.scenes).toHaveLength(5)
+    expect(detail?.scenes).toHaveLength(4)
     expect(detail?.scenes.reduce((total, scene) => total + scene.durationSec, 0)).toBe(30)
     expect(detail?.scenes.some((scene) => scene.script.includes("Show the product in action"))).toBe(false)
   })

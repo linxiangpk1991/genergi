@@ -16,16 +16,11 @@ export type PlannedStoryboardScene = {
 }
 
 export function resolveSceneCountForDuration(targetDurationSec: number) {
-  if (targetDurationSec <= 15) {
-    return 3
-  }
-  if (targetDurationSec <= 30) {
-    return 5
-  }
-  if (targetDurationSec <= 45) {
-    return 7
-  }
-  return 8
+  return resolveSceneCountForDurationWithLimit(targetDurationSec, 8)
+}
+
+export function resolveSceneCountForDurationWithLimit(targetDurationSec: number, maxSceneDurationSec: number) {
+  return Math.max(1, Math.ceil(targetDurationSec / Math.max(maxSceneDurationSec, 1)))
 }
 
 export function planSceneDurations(targetDurationSec: number, sceneCount: number) {
@@ -123,9 +118,10 @@ function buildVideoPrompt(sceneScript: string, aspectRatio: string, durationSec:
 export function buildStoryboardScenes(input: {
   script: string
   targetDurationSec: VideoDurationPreset
+  maxSceneDurationSec?: number
   aspectRatio: string
 }): PlannedStoryboardScene[] {
-  const sceneCount = resolveSceneCountForDuration(input.targetDurationSec)
+  const sceneCount = resolveSceneCountForDurationWithLimit(input.targetDurationSec, input.maxSceneDurationSec ?? 8)
   const durations = planSceneDurations(input.targetDurationSec, sceneCount)
   const units = splitScriptIntoUnits(input.script)
   const buckets = distributeUnits(units, sceneCount)
