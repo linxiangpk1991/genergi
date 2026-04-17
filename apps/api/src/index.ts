@@ -1,13 +1,14 @@
+import fs from "node:fs/promises"
 import { serve } from "@hono/node-server"
 import { zValidator } from "@hono/zod-validator"
-import { Hono } from "hono"
+import { Hono, type Context } from "hono"
 import { cors } from "hono/cors"
 import { z } from "zod"
 import { BRAND, CHANNELS, MODE_MODELS } from "@genergi/config"
 import { createTaskInputSchema, readRuntimeStatus, updateRuntimeStatus } from "@genergi/shared"
 import { clearSession, getAuthStatus, getSessionUser, loginWithPassword, requireAuth } from "./lib/auth.js"
 import { enqueueTask } from "./lib/queue/enqueue.js"
-import { createTask, getTaskAssets, getTaskDetail, listTasks } from "./lib/task-store.js"
+import { createTask, getTaskAsset, getTaskAssets, getTaskDetail, listTasks } from "./lib/task-store.js"
 
 const app = new Hono()
 app.use("*", cors())
@@ -101,6 +102,50 @@ app.get("/api/tasks/:taskId", async (c) => {
 app.get("/api/tasks/:taskId/assets", async (c) => {
   const assets = await getTaskAssets(c.req.param("taskId"))
   return c.json({ assets })
+})
+
+async function sendAssetFile(
+  c: Context,
+  asset: Awaited<ReturnType<typeof getTaskAsset>>,
+  disposition: "attachment" | "inline",
+) {
+  if (!asset) {
+    return c.json({ message: "ASSET_NOT_FOUND" }, 404)
+  }
+
+  if (!asset.exists) {
+    return c.json({ message: "ASSET_FILE_NOT_FOUND" }, 404)
+  }
+
+  if (asset.isDirectory) {
+    return c.json({ message: "ASSET_IS_DIRECTORY", path: asset.displayPath }, 409)
+  }
+
+  try {
+    const file = await fs.readFile(asset.path)
+    c.header("Content-Type", asset.mimeType)
+    c.header("Content-Disposition", `${disposition}; filename="${asset.downloadFileName.replace(/"/g, '\\"')}"`)
+    if (asset.sizeBytes != null) {
+      c.header("Content-Length", String(asset.sizeBytes))
+    }
+    return c.body(file)
+  } catch {
+    return c.json({ message: "ASSET_FILE_NOT_FOUND" }, 404)
+  }
+}
+
+app.get("/api/tasks/:taskId/assets/:assetId/download", async (c) => {
+  const asset = await getTaskAsset(c.req.param("taskId"), c.req.param("assetId"))
+  return sendAssetFile(c, asset, "attachment")
+})
+
+app.get("/api/tasks/:taskId/assets/:assetId/preview", async (c) => {
+  const asset = await getTaskAsset(c.req.param("taskId"), c.req.param("assetId"))
+  if (asset && !asset.previewable) {
+    return c.json({ message: "ASSET_PREVIEW_UNAVAILABLE", previewKind: asset.previewKind }, 409)
+  }
+
+  return sendAssetFile(c, asset, "inline")
 })
 
 app.post("/api/tasks", zValidator("json", createTaskInputSchema), async (c) => {

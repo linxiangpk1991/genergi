@@ -103,6 +103,27 @@ export type AssetRecord = {
   status: "ready" | "pending"
   path: string
   createdAt: string
+  fileName: string
+  directoryName: string | null
+  displayPath: string
+  extension: string | null
+  mimeType: string
+  sizeBytes: number | null
+  sizeLabel: string
+  exists: boolean
+  isDirectory: boolean
+  previewable: boolean
+  previewKind: "text" | "json" | "media" | "directory" | "binary"
+  modifiedAt: string | null
+  downloadFileName: string
+}
+
+export function buildAssetDownloadUrl(taskId: string, assetId: string) {
+  return `${API_BASE_URL}/api/tasks/${taskId}/assets/${assetId}/download`
+}
+
+export function buildAssetPreviewUrl(taskId: string, assetId: string) {
+  return `${API_BASE_URL}/api/tasks/${taskId}/assets/${assetId}/preview`
 }
 
 export type CreateTaskPayload = {

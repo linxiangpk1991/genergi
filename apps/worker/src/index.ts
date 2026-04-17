@@ -2,7 +2,15 @@ import { Queue, Worker } from "bullmq"
 import { Redis } from "ioredis"
 import { TASK_QUEUE_NAME, readTaskDetail, updateRuntimeStatus, updateTaskSummary, upsertTaskAssets } from "@genergi/shared"
 import type { AssetRecord, TaskSummary } from "@genergi/shared"
-import { buildFinalVideoWithNarration, createVideoFromPrompt, synthesizeNarration, writeTaskSourceFiles } from "./lib/providers.js"
+import {
+  buildFinalVideoWithNarration,
+  createFallbackKeyframeBundleFromVideo,
+  createKeyframeBundle,
+  createVideoFromPrompt,
+  rewriteTaskWithTextProvider,
+  synthesizeNarration,
+  writeTaskSourceFiles,
+} from "./lib/providers.js"
 
 const redisUrl = process.env.REDIS_URL
 
@@ -40,14 +48,30 @@ async function writeTaskArtifacts(taskId: string) {
     throw new Error(`Task detail not found for ${taskId}`)
   }
 
-  const taskDir = await writeTaskSourceFiles(detail)
-  const narration = await synthesizeNarration(detail)
-  const firstScene = detail.scenes[0]
+  const preparedDetail = await rewriteTaskWithTextProvider(detail)
+  const taskDir = await writeTaskSourceFiles(preparedDetail)
+  const narration = await synthesizeNarration(preparedDetail)
+  const firstScene = preparedDetail.scenes[0]
   const video = await createVideoFromPrompt({
     taskId,
     scene: firstScene,
-    model: process.env.GENERGI_VIDEO_MODEL ?? detail.taskRunConfig.videoDraftModel.label,
+    model: process.env.GENERGI_VIDEO_MODEL ?? preparedDetail.taskRunConfig.videoDraftModel.id,
   })
+  let keyframes
+  try {
+    keyframes = await createKeyframeBundle({
+      taskId,
+      detail: preparedDetail,
+      model: process.env.GENERGI_IMAGE_MODEL ?? preparedDetail.taskRunConfig.imageDraftModel.id,
+    })
+  } catch (error) {
+    console.warn(`[worker] ${taskId} image keyframe generation failed, fallback to video frame:`, error instanceof Error ? error.message : String(error))
+    keyframes = await createFallbackKeyframeBundleFromVideo({
+      taskId,
+      scene: firstScene,
+      videoPath: video.videoPath,
+    })
+  }
   const finalVideoPath = await buildFinalVideoWithNarration({
     taskId,
     sourceVideoPath: video.videoPath,
@@ -86,7 +110,7 @@ async function writeTaskArtifacts(taskId: string) {
       id: `${taskId}_audio`,
       taskId,
       assetType: "audio",
-      label: `Edge TTS (${detail?.taskRunConfig.ttsProvider ?? "edge-tts"})`,
+      label: `Edge TTS (${preparedDetail.taskRunConfig.ttsProvider ?? "edge-tts"})`,
       status: "ready",
       path: narration.audioPath,
       createdAt: now,
@@ -95,9 +119,9 @@ async function writeTaskArtifacts(taskId: string) {
       id: `${taskId}_keyframes`,
       taskId,
       assetType: "keyframe_bundle",
-      label: "首个视频 scene 的关键帧待补全",
-      status: "pending",
-      path: `${taskDir}/keyframes/`,
+      label: `关键帧包 (${keyframes.frameCount} 张)`,
+      status: "ready",
+      path: keyframes.manifestPath,
       createdAt: now,
     },
     {
