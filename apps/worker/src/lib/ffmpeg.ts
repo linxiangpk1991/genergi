@@ -1,4 +1,65 @@
+import { copyFile, rm, writeFile } from "node:fs/promises"
+import path from "node:path"
 import { spawn } from "node:child_process"
+
+export async function concatVideos(input: {
+  videoPaths: string[]
+  outputPath: string
+  workingDirectory?: string
+}) {
+  if (input.videoPaths.length === 0) {
+    throw new Error("At least one scene video is required for concatenation")
+  }
+
+  if (input.videoPaths.length === 1) {
+    await copyFile(input.videoPaths[0], input.outputPath)
+    return
+  }
+
+  const ffmpegPath = process.env.GENERGI_FFMPEG_PATH || "ffmpeg"
+  const workingDirectory = input.workingDirectory ?? path.dirname(input.outputPath)
+  const concatListPath = path.join(workingDirectory, "scene-concat.txt")
+  const concatList = input.videoPaths.map((videoPath) => `file '${videoPath.replace(/'/g, "'\\''")}'`).join("\n")
+
+  await writeFile(concatListPath, concatList, "utf8")
+
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const process = spawn(
+        ffmpegPath,
+        [
+          "-y",
+          "-f",
+          "concat",
+          "-safe",
+          "0",
+          "-i",
+          concatListPath,
+          "-c",
+          "copy",
+          input.outputPath,
+        ],
+        { stdio: ["ignore", "pipe", "pipe"] },
+      )
+
+      let stderr = ""
+      process.stderr.on("data", (chunk) => {
+        stderr += chunk.toString()
+      })
+
+      process.on("error", reject)
+      process.on("close", (code) => {
+        if (code === 0) {
+          resolve()
+          return
+        }
+        reject(new Error(`ffmpeg concat exited with code ${code}: ${stderr}`))
+      })
+    })
+  } finally {
+    await rm(concatListPath, { force: true })
+  }
+}
 
 export async function muxNarrationIntoVideo(input: {
   videoPath: string

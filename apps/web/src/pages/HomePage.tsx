@@ -12,6 +12,7 @@ export function HomePage() {
   const [script, setScript] = useState("")
   const [modeId, setModeId] = useState("mass_production")
   const [channelId, setChannelId] = useState("tiktok")
+  const [targetDurationSec, setTargetDurationSec] = useState(30)
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState("")
@@ -20,8 +21,9 @@ export function HomePage() {
     async function load() {
       try {
         const [bootstrapRes, taskRes] = await Promise.all([api.bootstrap(), api.listTasks()])
-        setBootstrap(bootstrapRes)
-        setTasks(taskRes.tasks)
+      setBootstrap(bootstrapRes)
+      setTasks(taskRes.tasks)
+      setTargetDurationSec(bootstrapRes.durationOptions[1] ?? bootstrapRes.durationOptions[0] ?? 30)
       } catch (err) {
         setError(err instanceof Error ? err.message : "加载失败")
       } finally {
@@ -51,7 +53,14 @@ export function HomePage() {
     setSubmitting(true)
     setError("")
     try {
-      const result = await api.createTask({ title, script, modeId, channelId, aspectRatio: "9:16" })
+      const result = await api.createTask({
+        title,
+        script,
+        modeId,
+        channelId,
+        aspectRatio: "9:16",
+        targetDurationSec,
+      })
       setTasks((current) => [result.task, ...current])
       setTitle("")
       setScript("")
@@ -94,13 +103,27 @@ export function HomePage() {
             <button className="ghost-button">导入文件</button>
             <button className="ghost-button">加载草稿</button>
           </div>
+          <label className="field-label">正片总时长</label>
+          <div className="mode-grid">
+            {bootstrap?.durationOptions.map((duration) => (
+              <button
+                key={duration}
+                className={duration === targetDurationSec ? "mode-card mode-card--active" : "mode-card"}
+                onClick={() => setTargetDurationSec(duration)}
+                type="button"
+              >
+                <div className="mode-title">{duration}s</div>
+                <div className="mode-description">系统将自动规划 scene 数、每段时长与最终拼接长度</div>
+              </button>
+            ))}
+          </div>
         </section>
 
         <aside className="side-panel">
           <section className="card card--compact">
             <h3>执行摘要预估</h3>
-            <div className="metric-row"><span>预计总耗时</span><strong>45m</strong></div>
-            <div className="metric-row"><span>单次渲染量</span><strong>12 / 20</strong></div>
+            <div className="metric-row"><span>目标正片长度</span><strong>{targetDurationSec}s</strong></div>
+            <div className="metric-row"><span>单次渲染量</span><strong>{targetDurationSec <= 15 ? "3 scenes" : targetDurationSec <= 30 ? "5 scenes" : targetDurationSec <= 45 ? "7 scenes" : "8 scenes"}</strong></div>
             <div className="metric-row"><span>总生成本</span><strong>1.2 CR</strong></div>
             <div className="progress-track"><div className="progress-fill" style={{ width: `${selectedMode?.budgetLimitCny ? 85 : 55}%` }} /></div>
             <div className="muted">今日预算消耗警告 85%</div>
@@ -124,7 +147,7 @@ export function HomePage() {
               {tasks.slice(0, 3).map((task) => (
                 <div key={task.id} className="task-item">
                   <strong>{task.title}</strong>
-                  <span>{task.status} · {new Date(task.updatedAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}</span>
+                  <span>{task.status} · {task.targetDurationSec}s · {new Date(task.updatedAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}</span>
                 </div>
               ))}
             </div>

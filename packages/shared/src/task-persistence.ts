@@ -36,6 +36,7 @@ export function seedTaskSummaries(): TaskSummary[] {
       title: "Summer Product Hook Series",
       modeId: "mass_production",
       channelId: "tiktok",
+      targetDurationSec: 30,
       status: "running",
       progressPct: 40,
       retryCount: 0,
@@ -48,6 +49,7 @@ export function seedTaskSummaries(): TaskSummary[] {
       title: "Feature Review Promo V3",
       modeId: "high_quality",
       channelId: "reels",
+      targetDurationSec: 45,
       status: "failed",
       progressPct: 62,
       retryCount: 2,
@@ -89,7 +91,15 @@ export async function readTaskSummaries(): Promise<TaskSummary[]> {
   }
 
   try {
-    return JSON.parse(content) as TaskSummary[]
+    const tasks = JSON.parse(content) as Array<TaskSummary & { targetDurationSec?: number }>
+    const normalized = tasks.map((task) => ({
+      ...task,
+      targetDurationSec: task.targetDurationSec ?? 30,
+    })) as TaskSummary[]
+    if (normalized.some((task, index) => tasks[index].targetDurationSec == null)) {
+      await writeTaskSummaries(normalized)
+    }
+    return normalized
   } catch {
     const tasks = seedTaskSummaries()
     await writeTaskSummaries(tasks)

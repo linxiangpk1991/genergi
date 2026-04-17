@@ -25,6 +25,7 @@ export type HealthResponse = {
 
 export type BootstrapResponse = {
   brand: { productName: string; companyName: string; domain: string }
+  durationOptions: number[]
   channels: Array<{ id: string; label: string; description: string }>
   modes: Array<{ id: string; label: string; description: string; budgetLimitCny: number }>
 }
@@ -83,6 +84,7 @@ export type TaskSummary = {
   title: string
   modeId: string
   channelId: string
+  targetDurationSec: number
   status: string
   progressPct: number
   retryCount: number
@@ -112,6 +114,7 @@ export type TaskDetail = {
   taskRunConfig: {
     modeId: string
     channelId: string
+    targetDurationSec: number
     imageFinalModel: {
       label: string
     }
@@ -157,6 +160,7 @@ export type CreateTaskPayload = {
   modeId: string
   channelId: string
   aspectRatio: string
+  targetDurationSec: number
 }
 
 export const api = {

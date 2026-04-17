@@ -5,6 +5,9 @@ export type AppId = "web" | "api" | "worker"
 export const productionModeSchema = z.enum(["mass_production", "high_quality"])
 export type ProductionModeId = z.infer<typeof productionModeSchema>
 
+export const videoDurationSecSchema = z.union([z.literal(15), z.literal(30), z.literal(45), z.literal(60)])
+export type VideoDurationSec = z.infer<typeof videoDurationSecSchema>
+
 export const channelProfileSchema = z.enum(["tiktok", "reels", "shorts"])
 export type ChannelProfileId = z.infer<typeof channelProfileSchema>
 
@@ -37,6 +40,7 @@ export type ModelRef = z.infer<typeof modelRefSchema>
 export const taskRunConfigSchema = z.object({
   modeId: productionModeSchema,
   channelId: channelProfileSchema,
+  targetDurationSec: videoDurationSecSchema,
   textModel: modelRefSchema,
   imageDraftModel: modelRefSchema,
   imageFinalModel: modelRefSchema,
@@ -66,6 +70,7 @@ export const taskSummarySchema = z.object({
   title: z.string(),
   modeId: productionModeSchema,
   channelId: channelProfileSchema,
+  targetDurationSec: videoDurationSecSchema,
   status: taskStatusSchema,
   progressPct: z.number().min(0).max(100),
   retryCount: z.number().int().nonnegative(),
@@ -117,6 +122,7 @@ export const createTaskInputSchema = z.object({
   modeId: productionModeSchema,
   channelId: channelProfileSchema,
   aspectRatio: z.string().default("9:16"),
+  targetDurationSec: videoDurationSecSchema.default(30),
 })
 export type CreateTaskInput = z.infer<typeof createTaskInputSchema>
 
@@ -181,3 +187,4 @@ export interface HealthSnapshot {
 export const TASK_QUEUE_NAME = "genergi-tasks"
 
 export * from "./task-persistence.js"
+export * from "./storyboard-planner.js"

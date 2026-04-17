@@ -1,10 +1,12 @@
-import type { ChannelProfileId, CostEstimate, ModelRef, ProductionModeId, TaskRunConfig } from "@genergi/shared"
+import type { ChannelProfileId, CostEstimate, ModelRef, ProductionModeId, TaskRunConfig, VideoDurationSec } from "@genergi/shared"
 
 export const BRAND = {
   productName: "GENERGI 自动化视频平台",
   companyName: "Genergius",
   domain: "ai.genergius.com",
 } as const
+
+export const VIDEO_DURATION_PRESETS = [15, 30, 45, 60] as const
 
 export const CHANNELS: Record<ChannelProfileId, { label: string; description: string }> = {
   tiktok: { label: "TikTok", description: "短节奏、强钩子、英语优先" },
@@ -47,11 +49,16 @@ export const MODE_MODELS: Record<ProductionModeId, {
   },
 }
 
-export function buildDefaultTaskRunConfig(modeId: ProductionModeId, channelId: ChannelProfileId): TaskRunConfig {
+export function buildDefaultTaskRunConfig(
+  modeId: ProductionModeId,
+  channelId: ChannelProfileId,
+  targetDurationSec: VideoDurationSec = 30,
+): TaskRunConfig {
   const mode = MODE_MODELS[modeId]
   return {
     modeId,
     channelId,
+    targetDurationSec,
     textModel: mode.textModel,
     imageDraftModel: mode.imageDraftModel,
     imageFinalModel: mode.imageFinalModel,

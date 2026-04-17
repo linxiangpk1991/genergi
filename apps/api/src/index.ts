@@ -4,7 +4,7 @@ import { zValidator } from "@hono/zod-validator"
 import { Hono, type Context } from "hono"
 import { cors } from "hono/cors"
 import { z } from "zod"
-import { BRAND, CHANNELS, MODE_MODELS } from "@genergi/config"
+import { BRAND, CHANNELS, MODE_MODELS, VIDEO_DURATION_PRESETS } from "@genergi/config"
 import {
   createTaskInputSchema,
   createUserInputSchema,
@@ -156,6 +156,7 @@ app.post("/api/users/:userId/reset-password", zValidator("json", resetUserPasswo
 app.get("/api/bootstrap", (c) => {
   return c.json({
     brand: BRAND,
+    durationOptions: VIDEO_DURATION_PRESETS,
     channels: Object.entries(CHANNELS).map(([id, value]) => ({ id, ...value })),
     modes: Object.entries(MODE_MODELS).map(([id, mode]) => ({
       id,

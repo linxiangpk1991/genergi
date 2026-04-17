@@ -4,9 +4,9 @@ import path from "node:path"
 
 import axios from "axios"
 
-import type { StoryboardScene, TaskDetail } from "@genergi/shared"
+import { buildStoryboardScenes, type StoryboardScene, type TaskDetail } from "@genergi/shared"
 import { EdgeTTS } from "./edge-tts.js"
-import { extractKeyframeFromVideo, muxNarrationIntoVideo } from "./ffmpeg.js"
+import { concatVideos, extractKeyframeFromVideo, muxNarrationIntoVideo } from "./ffmpeg.js"
 
 const gatewayBaseUrl = process.env.GENERGI_MEDIA_GATEWAY_BASE_URL ?? "https://open.xiaojingai.com"
 const gatewayApiKey = process.env.GENERGI_MEDIA_GATEWAY_API_KEY ?? ""
@@ -320,6 +320,19 @@ function extractOpenAIText(payload: any) {
   return ""
 }
 
+function alignDetailScenes(detail: TaskDetail, script: string): TaskDetail {
+  return {
+    ...detail,
+    script,
+    scenes: buildStoryboardScenes({
+      script,
+      targetDurationSec: detail.taskRunConfig.targetDurationSec ?? 30,
+      aspectRatio: detail.taskRunConfig.aspectRatio,
+    }),
+    updatedAt: new Date().toISOString(),
+  }
+}
+
 export async function rewriteTaskWithTextProvider(detail: TaskDetail): Promise<TaskDetail> {
   const provider = process.env.GENERGI_TEXT_PROVIDER ?? ""
   const apiKey = process.env.GENERGI_TEXT_API_KEY ?? ""
@@ -327,7 +340,7 @@ export async function rewriteTaskWithTextProvider(detail: TaskDetail): Promise<T
   const model = process.env.GENERGI_TEXT_MODEL ?? "claude-opus-4.6"
 
   if (!provider || !apiKey || !baseUrl) {
-    return detail
+    return alignDetailScenes(detail, detail.script)
   }
 
   try {
@@ -388,24 +401,13 @@ export async function rewriteTaskWithTextProvider(detail: TaskDetail): Promise<T
     }
 
     if (!rewritten) {
-      return detail
+      return alignDetailScenes(detail, detail.script)
     }
 
-    return {
-      ...detail,
-      script: rewritten,
-      scenes: detail.scenes.map((scene, index) => ({
-        ...scene,
-        script:
-          index === 0
-            ? `${rewritten} Start with the strongest visible pain point immediately.`
-            : scene.script,
-      })),
-      updatedAt: new Date().toISOString(),
-    }
+    return alignDetailScenes(detail, rewritten)
   } catch (error) {
     console.warn(`[worker] ${provider} rewrite skipped:`, error instanceof Error ? error.message : String(error))
-    return detail
+    return alignDetailScenes(detail, detail.script)
   }
 }
 
@@ -520,6 +522,28 @@ export async function createVideoFromPrompt(input: { taskId: string; scene: Stor
   throw new Error(`Video generation polling timed out for task ${taskId}`)
 }
 
+export async function createSceneVideoBundle(input: {
+  taskId: string
+  detail: TaskDetail
+  model: string
+}) {
+  const videos = []
+  for (const scene of input.detail.scenes) {
+    const video = await createVideoFromPrompt({
+      taskId: input.taskId,
+      scene,
+      model: input.model,
+    })
+    videos.push({
+      ...video,
+      sceneId: scene.id,
+      sceneIndex: scene.index,
+      durationSec: scene.durationSec,
+    })
+  }
+  return videos
+}
+
 export async function createKeyframeBundle(input: {
   taskId: string
   detail: TaskDetail
@@ -626,20 +650,26 @@ export async function createFallbackKeyframeBundleFromVideo(input: {
 
 export async function buildFinalVideoWithNarration(input: {
   taskId: string
-  sourceVideoPath: string
+  sourceVideoPaths: string[]
   narrationPath: string
 }) {
   const dir = ensureTaskDir(input.taskId)
+  const stitchedVideoPath = path.join(dir, "video", "stitched-scenes.mp4")
   const outputPath = path.join(dir, "video", "final-with-audio.mp4")
   try {
+    await concatVideos({
+      videoPaths: input.sourceVideoPaths,
+      outputPath: stitchedVideoPath,
+      workingDirectory: path.join(dir, "video"),
+    })
     await muxNarrationIntoVideo({
-      videoPath: input.sourceVideoPath,
+      videoPath: stitchedVideoPath,
       audioPath: input.narrationPath,
       outputPath,
     })
   } catch (error) {
-    console.warn("[worker] ffmpeg mux failed, falling back to source scene video:", error instanceof Error ? error.message : String(error))
-    await fs.copyFile(input.sourceVideoPath, outputPath)
+    console.warn("[worker] ffmpeg concat/mux failed, falling back to stitched source video:", error instanceof Error ? error.message : String(error))
+    await fs.copyFile(input.sourceVideoPaths[0], outputPath)
   }
   return outputPath
 }

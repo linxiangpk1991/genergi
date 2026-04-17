@@ -6,7 +6,7 @@ import {
   buildFinalVideoWithNarration,
   createFallbackKeyframeBundleFromVideo,
   createKeyframeBundle,
-  createVideoFromPrompt,
+  createSceneVideoBundle,
   rewriteTaskWithTextProvider,
   synthesizeNarration,
   writeTaskSourceFiles,
@@ -54,10 +54,10 @@ async function writeTaskArtifacts(taskId: string) {
   await writeWorkerHeartbeat(`Synthesizing narration for ${taskId}`)
   const narration = await synthesizeNarration(preparedDetail)
   const firstScene = preparedDetail.scenes[0]
-  await writeWorkerHeartbeat(`Creating scene video for ${taskId}`)
-  const video = await createVideoFromPrompt({
+  await writeWorkerHeartbeat(`Creating scene videos for ${taskId}`)
+  const sceneVideos = await createSceneVideoBundle({
     taskId,
-    scene: firstScene,
+    detail: preparedDetail,
     model: process.env.GENERGI_VIDEO_MODEL ?? preparedDetail.taskRunConfig.videoDraftModel.id,
   })
   let keyframes
@@ -79,13 +79,13 @@ async function writeTaskArtifacts(taskId: string) {
     keyframes = await createFallbackKeyframeBundleFromVideo({
       taskId,
       scene: firstScene,
-      videoPath: video.videoPath,
+      videoPath: sceneVideos[0].videoPath,
     })
   }
   await writeWorkerHeartbeat(`Muxing final video for ${taskId}`)
   const finalVideoPath = await buildFinalVideoWithNarration({
     taskId,
-    sourceVideoPath: video.videoPath,
+    sourceVideoPaths: sceneVideos.map((sceneVideo) => sceneVideo.videoPath),
     narrationPath: narration.audioPath,
   })
 
@@ -139,7 +139,7 @@ async function writeTaskArtifacts(taskId: string) {
       id: `${taskId}_video`,
       taskId,
       assetType: "video_bundle",
-      label: `真实视频输出 (${video.remoteTaskId})`,
+      label: `真实视频输出 (${sceneVideos.length} scenes / ${preparedDetail.taskRunConfig.targetDurationSec}s)`,
       status: "ready",
       path: finalVideoPath,
       createdAt: now,
