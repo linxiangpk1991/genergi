@@ -7,7 +7,7 @@ import { BRAND, CHANNELS, MODE_MODELS } from "@genergi/config"
 import { createTaskInputSchema, readRuntimeStatus, updateRuntimeStatus } from "@genergi/shared"
 import { clearSession, getAuthStatus, getSessionUser, loginWithPassword, requireAuth } from "./lib/auth.js"
 import { enqueueTask } from "./lib/queue/enqueue.js"
-import { createTask, getTaskDetail, listTasks } from "./lib/task-store.js"
+import { createTask, getTaskAssets, getTaskDetail, listTasks } from "./lib/task-store.js"
 
 const app = new Hono()
 app.use("*", cors())
@@ -96,6 +96,11 @@ app.get("/api/tasks/:taskId", async (c) => {
   }
 
   return c.json({ detail })
+})
+
+app.get("/api/tasks/:taskId/assets", async (c) => {
+  const assets = await getTaskAssets(c.req.param("taskId"))
+  return c.json({ assets })
 })
 
 app.post("/api/tasks", zValidator("json", createTaskInputSchema), async (c) => {

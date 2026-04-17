@@ -1,5 +1,5 @@
 import { buildDefaultTaskRunConfig, estimateCost } from "@genergi/config"
-import { readTaskDetail, readTaskSummaries, upsertTaskDetail, writeTaskSummaries } from "@genergi/shared"
+import { readTaskAssets, readTaskDetail, readTaskSummaries, upsertTaskDetail, writeTaskSummaries } from "@genergi/shared"
 import type { CreateTaskInput, StoryboardScene, TaskDetail, TaskSummary, TaskStatus } from "@genergi/shared"
 
 function now() {
@@ -60,6 +60,10 @@ export async function getTaskDetail(taskId: string) {
 
   await upsertTaskDetail(synthesized)
   return synthesized
+}
+
+export async function getTaskAssets(taskId: string) {
+  return readTaskAssets(taskId)
 }
 
 export async function createTask(input: CreateTaskInput): Promise<{ task: TaskSummary; taskRunConfig: unknown }> {

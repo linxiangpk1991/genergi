@@ -1,6 +1,6 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises"
 import path from "node:path"
-import type { TaskDetail, TaskSummary } from "./index.js"
+import type { AssetRecord, TaskDetail, TaskSummary } from "./index.js"
 
 function resolveDataDir() {
   return process.env.GENERGI_DATA_DIR
@@ -18,6 +18,8 @@ function resolveFiles() {
     tempDetailsFile: path.join(dataDir, "task-details.tmp.json"),
     runtimeFile: path.join(dataDir, "runtime-status.json"),
     tempRuntimeFile: path.join(dataDir, "runtime-status.tmp.json"),
+    assetsFile: path.join(dataDir, "assets.json"),
+    tempAssetsFile: path.join(dataDir, "assets.tmp.json"),
   }
 }
 
@@ -201,4 +203,36 @@ export async function updateRuntimeStatus(
   const next = updater(current)
   await writeRuntimeStatus(next)
   return next
+}
+
+async function writeAssetRecords(records: Record<string, AssetRecord[]>) {
+  const { dataDir, assetsFile, tempAssetsFile } = resolveFiles()
+  await mkdir(dataDir, { recursive: true })
+  await writeFile(tempAssetsFile, JSON.stringify(records, null, 2), "utf8")
+  await rename(tempAssetsFile, assetsFile)
+}
+
+export async function readAssetRecords(): Promise<Record<string, AssetRecord[]>> {
+  const { assetsFile } = resolveFiles()
+  await ensureTaskDataFile()
+  try {
+    const content = await readFile(assetsFile, "utf8")
+    if (!content.trim()) {
+      return {}
+    }
+    return JSON.parse(content) as Record<string, AssetRecord[]>
+  } catch {
+    return {}
+  }
+}
+
+export async function upsertTaskAssets(taskId: string, assets: AssetRecord[]) {
+  const records = await readAssetRecords()
+  records[taskId] = assets
+  await writeAssetRecords(records)
+}
+
+export async function readTaskAssets(taskId: string) {
+  const records = await readAssetRecords()
+  return records[taskId] ?? []
 }

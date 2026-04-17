@@ -1,19 +1,48 @@
 import { useEffect, useState } from "react"
-import { api, type RuntimeStatusResponse, type TaskSummary } from "../api"
+import { api, type AssetRecord, type RuntimeStatusResponse, type TaskSummary } from "../api"
 
 export function AssetsPage() {
   const [tasks, setTasks] = useState<TaskSummary[]>([])
   const [runtime, setRuntime] = useState<RuntimeStatusResponse["runtime"] | null>(null)
+  const [selectedTaskId, setSelectedTaskId] = useState("")
+  const [assets, setAssets] = useState<AssetRecord[]>([])
 
   useEffect(() => {
     async function load() {
       const [taskResult, runtimeResult] = await Promise.all([api.listTasks(), api.runtimeStatus()])
       setTasks(taskResult.tasks)
       setRuntime(runtimeResult.runtime)
+      setSelectedTaskId((current) => current || taskResult.tasks[0]?.id || "")
     }
 
     void load().catch(() => {})
+
+    const timer = window.setInterval(() => {
+      void Promise.all([api.listTasks(), api.runtimeStatus()])
+        .then(([taskResult, runtimeResult]) => {
+          setTasks(taskResult.tasks)
+          setRuntime(runtimeResult.runtime)
+          setSelectedTaskId((current) => current || taskResult.tasks[0]?.id || "")
+        })
+        .catch(() => {})
+    }, 5000)
+
+    return () => window.clearInterval(timer)
   }, [])
+
+  useEffect(() => {
+    async function loadAssets() {
+      if (!selectedTaskId) {
+        setAssets([])
+        return
+      }
+
+      const result = await api.getTaskAssets(selectedTaskId)
+      setAssets(result.assets)
+    }
+
+    void loadAssets().catch(() => setAssets([]))
+  }, [selectedTaskId])
 
   return (
     <>
@@ -31,24 +60,39 @@ export function AssetsPage() {
 
       <div className="workspace-grid">
         <section className="card card--main">
+          <label className="field-label">任务选择</label>
+          <select className="input" value={selectedTaskId} onChange={(event) => setSelectedTaskId(event.target.value)}>
+            {tasks.map((task) => (
+              <option key={task.id} value={task.id}>
+                {task.title}
+              </option>
+            ))}
+          </select>
           <h2>最近任务资产概览</h2>
           <div className="task-list">
-            {tasks.map((task) => (
-              <div key={task.id} className="task-item task-item--wide">
+            {assets.map((asset) => (
+              <div key={asset.id} className="task-item task-item--wide">
                 <div>
-                  <strong>{task.title}</strong>
-                  <span>{task.modeId} · {task.channelId}</span>
+                  <strong>{asset.label}</strong>
+                  <span>{asset.assetType}</span>
                 </div>
                 <div>
-                  <strong>{task.status}</strong>
-                  <span>进度 {task.progressPct}%</span>
+                  <strong>{asset.status}</strong>
+                  <span>{new Date(asset.createdAt).toLocaleString("zh-CN")}</span>
                 </div>
                 <div>
-                  <strong>脚本 / Scene / 关键帧</strong>
-                  <span>后续会在这里接真实资产明细</span>
+                  <strong>记录路径</strong>
+                  <span>{asset.path}</span>
                 </div>
               </div>
             ))}
+            {!assets.length ? (
+              <div className="task-item task-item--wide">
+                <div><strong>暂无资产</strong><span>先创建并执行任务</span></div>
+                <div><strong>pending</strong><span>等待 worker 输出</span></div>
+                <div><strong>记录路径</strong><span>暂未生成</span></div>
+              </div>
+            ) : null}
           </div>
         </section>
 

@@ -1,7 +1,7 @@
 import { Queue, Worker } from "bullmq"
 import { Redis } from "ioredis"
-import { TASK_QUEUE_NAME, updateRuntimeStatus, updateTaskSummary } from "@genergi/shared"
-import type { TaskSummary } from "@genergi/shared"
+import { TASK_QUEUE_NAME, readTaskDetail, updateRuntimeStatus, updateTaskSummary, upsertTaskAssets } from "@genergi/shared"
+import type { AssetRecord, TaskSummary } from "@genergi/shared"
 
 const redisUrl = process.env.REDIS_URL
 
@@ -29,6 +29,69 @@ async function writeWorkerHeartbeat(message: string, status: "healthy" | "degrad
       message: "Redis queue connected",
     },
   }))
+}
+
+async function writeTaskArtifacts(taskId: string) {
+  const detail = await readTaskDetail(taskId)
+  const now = new Date().toISOString()
+  const assets: AssetRecord[] = [
+    {
+      id: `${taskId}_script`,
+      taskId,
+      assetType: "script",
+      label: "英文脚本",
+      status: "ready",
+      path: `${process.env.GENERGI_DATA_DIR ?? ".data"}/exports/${taskId}/script.txt`,
+      createdAt: now,
+    },
+    {
+      id: `${taskId}_storyboard`,
+      taskId,
+      assetType: "storyboard",
+      label: "分镜 JSON",
+      status: "ready",
+      path: `${process.env.GENERGI_DATA_DIR ?? ".data"}/exports/${taskId}/storyboard.json`,
+      createdAt: now,
+    },
+    {
+      id: `${taskId}_subtitles`,
+      taskId,
+      assetType: "subtitles",
+      label: "英文字幕",
+      status: "ready",
+      path: `${process.env.GENERGI_DATA_DIR ?? ".data"}/exports/${taskId}/subtitles.srt`,
+      createdAt: now,
+    },
+    {
+      id: `${taskId}_audio`,
+      taskId,
+      assetType: "audio",
+      label: `Edge TTS (${detail?.taskRunConfig.ttsProvider ?? "edge-tts"})`,
+      status: "ready",
+      path: `${process.env.GENERGI_DATA_DIR ?? ".data"}/exports/${taskId}/narration.mp3`,
+      createdAt: now,
+    },
+    {
+      id: `${taskId}_keyframes`,
+      taskId,
+      assetType: "keyframe_bundle",
+      label: `${detail?.scenes.length ?? 0} 个关键帧记录`,
+      status: "ready",
+      path: `${process.env.GENERGI_DATA_DIR ?? ".data"}/exports/${taskId}/keyframes/`,
+      createdAt: now,
+    },
+    {
+      id: `${taskId}_video`,
+      taskId,
+      assetType: "video_bundle",
+      label: "视频片段与成片记录",
+      status: "ready",
+      path: `${process.env.GENERGI_DATA_DIR ?? ".data"}/exports/${taskId}/video/`,
+      createdAt: now,
+    },
+  ]
+
+  await upsertTaskAssets(taskId, assets)
 }
 
 const worker = new Worker(
@@ -64,6 +127,7 @@ const worker = new Worker(
       updatedAt: new Date().toISOString(),
     }))
 
+    await writeTaskArtifacts(taskId)
     await writeWorkerHeartbeat(`Last completed ${taskId}`)
     console.log(`Processing task ${taskId}`)
     return { ok: true, taskId: job.data.taskId }

@@ -100,6 +100,17 @@ export const taskDetailSchema = z.object({
 })
 export type TaskDetail = z.infer<typeof taskDetailSchema>
 
+export const assetRecordSchema = z.object({
+  id: z.string(),
+  taskId: z.string(),
+  assetType: z.enum(["script", "storyboard", "subtitles", "audio", "keyframe_bundle", "video_bundle"]),
+  label: z.string(),
+  status: z.enum(["ready", "pending"]),
+  path: z.string(),
+  createdAt: z.string(),
+})
+export type AssetRecord = z.infer<typeof assetRecordSchema>
+
 export const createTaskInputSchema = z.object({
   title: z.string().min(1),
   script: z.string().min(1),

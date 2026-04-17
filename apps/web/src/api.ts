@@ -95,6 +95,16 @@ export type TaskDetail = {
   updatedAt: string
 }
 
+export type AssetRecord = {
+  id: string
+  taskId: string
+  assetType: "script" | "storyboard" | "subtitles" | "audio" | "keyframe_bundle" | "video_bundle"
+  label: string
+  status: "ready" | "pending"
+  path: string
+  createdAt: string
+}
+
 export type CreateTaskPayload = {
   title: string
   script: string
@@ -119,6 +129,7 @@ export const api = {
   bootstrap: () => request<BootstrapResponse>("/api/bootstrap"),
   listTasks: () => request<{ tasks: TaskSummary[] }>("/api/tasks"),
   getTaskDetail: (taskId: string) => request<{ detail: TaskDetail }>(`/api/tasks/${taskId}`),
+  getTaskAssets: (taskId: string) => request<{ assets: AssetRecord[] }>(`/api/tasks/${taskId}/assets`),
   createTask: (payload: CreateTaskPayload) =>
     request<{ task: TaskSummary }>("/api/tasks", {
       method: "POST",

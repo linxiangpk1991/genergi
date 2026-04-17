@@ -34,9 +34,9 @@ export function LoginPage({ onLoggedIn }: LoginPageProps) {
         <p>登录中文工作台，继续管理面向海外英语市场的视频生产任务。</p>
         <form className="login-form" onSubmit={handleSubmit}>
           <label className="field-label">账号</label>
-          <input className="input" value={username} onChange={(e) => setUsername(e.target.value)} placeholder="请输入管理员账号" />
+          <input className="input" autoComplete="username" value={username} onChange={(e) => setUsername(e.target.value)} placeholder="请输入管理员账号" />
           <label className="field-label">密码</label>
-          <input className="input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="请输入管理员密码" />
+          <input className="input" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="请输入管理员密码" />
           {error ? <div className="alert">{error}</div> : null}
           <button className="primary-button login-button" disabled={submitting} type="submit">
             {submitting ? "登录中..." : "进入平台"}
