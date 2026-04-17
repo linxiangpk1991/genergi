@@ -88,7 +88,13 @@ sudo systemctl restart genergi-api
 sudo systemctl restart genergi-worker
 sudo nginx -t
 sudo systemctl reload nginx
-curl -fsS http://127.0.0.1:8787/api/health
+for attempt in 1 2 3 4 5 6 7 8 9 10; do
+  if curl -fsS http://127.0.0.1:8787/api/health >/tmp/genergi-hotfix-health.json; then
+    break
+  fi
+  sleep 2
+done
+cat /tmp/genergi-hotfix-health.json
 `;
 
   await runRemoteScript(script, {
