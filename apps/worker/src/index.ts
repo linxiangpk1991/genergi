@@ -2,6 +2,7 @@ import { Queue, Worker } from "bullmq"
 import { Redis } from "ioredis"
 import { TASK_QUEUE_NAME, readTaskDetail, updateRuntimeStatus, updateTaskSummary, upsertTaskAssets } from "@genergi/shared"
 import type { AssetRecord, TaskSummary } from "@genergi/shared"
+import { buildFinalVideoWithNarration, createVideoFromPrompt, synthesizeNarration, writeTaskSourceFiles } from "./lib/providers.js"
 
 const redisUrl = process.env.REDIS_URL
 
@@ -34,6 +35,25 @@ async function writeWorkerHeartbeat(message: string, status: "healthy" | "degrad
 async function writeTaskArtifacts(taskId: string) {
   const detail = await readTaskDetail(taskId)
   const now = new Date().toISOString()
+
+  if (!detail) {
+    throw new Error(`Task detail not found for ${taskId}`)
+  }
+
+  const taskDir = await writeTaskSourceFiles(detail)
+  const narration = await synthesizeNarration(detail)
+  const firstScene = detail.scenes[0]
+  const video = await createVideoFromPrompt({
+    taskId,
+    scene: firstScene,
+    model: process.env.GENERGI_VIDEO_MODEL ?? detail.taskRunConfig.videoDraftModel.label,
+  })
+  const finalVideoPath = await buildFinalVideoWithNarration({
+    taskId,
+    sourceVideoPath: video.videoPath,
+    narrationPath: narration.audioPath,
+  })
+
   const assets: AssetRecord[] = [
     {
       id: `${taskId}_script`,
@@ -41,7 +61,7 @@ async function writeTaskArtifacts(taskId: string) {
       assetType: "script",
       label: "英文脚本",
       status: "ready",
-      path: `${process.env.GENERGI_DATA_DIR ?? ".data"}/exports/${taskId}/script.txt`,
+      path: `${taskDir}/script.txt`,
       createdAt: now,
     },
     {
@@ -50,7 +70,7 @@ async function writeTaskArtifacts(taskId: string) {
       assetType: "storyboard",
       label: "分镜 JSON",
       status: "ready",
-      path: `${process.env.GENERGI_DATA_DIR ?? ".data"}/exports/${taskId}/storyboard.json`,
+      path: `${taskDir}/storyboard.json`,
       createdAt: now,
     },
     {
@@ -59,7 +79,7 @@ async function writeTaskArtifacts(taskId: string) {
       assetType: "subtitles",
       label: "英文字幕",
       status: "ready",
-      path: `${process.env.GENERGI_DATA_DIR ?? ".data"}/exports/${taskId}/subtitles.srt`,
+      path: narration.srtPath,
       createdAt: now,
     },
     {
@@ -68,25 +88,25 @@ async function writeTaskArtifacts(taskId: string) {
       assetType: "audio",
       label: `Edge TTS (${detail?.taskRunConfig.ttsProvider ?? "edge-tts"})`,
       status: "ready",
-      path: `${process.env.GENERGI_DATA_DIR ?? ".data"}/exports/${taskId}/narration.mp3`,
+      path: narration.audioPath,
       createdAt: now,
     },
     {
       id: `${taskId}_keyframes`,
       taskId,
       assetType: "keyframe_bundle",
-      label: `${detail?.scenes.length ?? 0} 个关键帧记录`,
-      status: "ready",
-      path: `${process.env.GENERGI_DATA_DIR ?? ".data"}/exports/${taskId}/keyframes/`,
+      label: "首个视频 scene 的关键帧待补全",
+      status: "pending",
+      path: `${taskDir}/keyframes/`,
       createdAt: now,
     },
     {
       id: `${taskId}_video`,
       taskId,
       assetType: "video_bundle",
-      label: "视频片段与成片记录",
+      label: `真实视频输出 (${video.remoteTaskId})`,
       status: "ready",
-      path: `${process.env.GENERGI_DATA_DIR ?? ".data"}/exports/${taskId}/video/`,
+      path: finalVideoPath,
       createdAt: now,
     },
   ]
@@ -99,38 +119,53 @@ const worker = new Worker(
   async (job: { id?: string; data: { taskId: string } }) => {
     const taskId = job.data.taskId
 
-    await writeWorkerHeartbeat(`Processing ${taskId}`)
+    try {
+      await writeWorkerHeartbeat(`Processing ${taskId}`)
 
-    // 先把任务推进到运行态，避免前台一直停留在 queued。
-    await updateTaskSummary(taskId, (task: TaskSummary) => ({
-      ...task,
-      status: "running",
-      progressPct: 20,
-      updatedAt: new Date().toISOString(),
-    }))
+      // 先把任务推进到运行态，避免前台一直停留在 queued。
+      await updateTaskSummary(taskId, (task: TaskSummary) => ({
+        ...task,
+        status: "running",
+        progressPct: 20,
+        updatedAt: new Date().toISOString(),
+      }))
 
-    await new Promise((resolve) => setTimeout(resolve, 800))
+      console.log(`[worker] ${taskId} => prepare source files + TTS`)
+      await new Promise((resolve) => setTimeout(resolve, 800))
 
-    await updateTaskSummary(taskId, (task: TaskSummary) => ({
-      ...task,
-      status: "running",
-      progressPct: 65,
-      updatedAt: new Date().toISOString(),
-    }))
+      await updateTaskSummary(taskId, (task: TaskSummary) => ({
+        ...task,
+        status: "running",
+        progressPct: 65,
+        updatedAt: new Date().toISOString(),
+      }))
 
-    await new Promise((resolve) => setTimeout(resolve, 800))
+      console.log(`[worker] ${taskId} => generate media assets`)
+      await writeTaskArtifacts(taskId)
 
-    await updateTaskSummary(taskId, (task: TaskSummary) => ({
-      ...task,
-      status: "completed",
-      progressPct: 100,
-      updatedAt: new Date().toISOString(),
-    }))
+      await updateTaskSummary(taskId, (task: TaskSummary) => ({
+        ...task,
+        status: "completed",
+        progressPct: 100,
+        updatedAt: new Date().toISOString(),
+      }))
 
-    await writeTaskArtifacts(taskId)
-    await writeWorkerHeartbeat(`Last completed ${taskId}`)
-    console.log(`Processing task ${taskId}`)
-    return { ok: true, taskId: job.data.taskId }
+      await writeWorkerHeartbeat(`Last completed ${taskId}`)
+      console.log(`[worker] ${taskId} => completed`)
+      return { ok: true, taskId: job.data.taskId }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      await updateTaskSummary(taskId, (task: TaskSummary) => ({
+        ...task,
+        status: "failed",
+        progressPct: Math.min(task.progressPct, 65),
+        retryCount: task.retryCount + 1,
+        updatedAt: new Date().toISOString(),
+      }))
+      await writeWorkerHeartbeat(`Last failed ${taskId}: ${message}`, "degraded")
+      console.error(`[worker] ${taskId} => failed`, error)
+      throw error
+    }
   },
   { connection },
 )
