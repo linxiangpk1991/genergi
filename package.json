@@ -14,10 +14,14 @@
     "dev:api": "pnpm --filter @genergi/api dev",
     "dev:worker": "pnpm --filter @genergi/worker dev",
     "build": "turbo build",
+    "build:web": "pnpm --filter @genergi/web build",
+    "build:api": "pnpm --filter @genergi/api build",
+    "build:worker": "pnpm --filter @genergi/worker build",
     "lint": "turbo lint",
     "test": "vitest run",
     "typecheck": "turbo typecheck",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "deploy:production": "node scripts/deploy/deploy-production.mjs"
   },
   "devDependencies": {
     "@types/node": "^24.9.1",

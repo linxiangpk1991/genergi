@@ -1,5 +1,5 @@
 import { Queue } from "bullmq"
-import Redis from "ioredis"
+import { Redis } from "ioredis"
 import { TASK_QUEUE_NAME } from "@genergi/shared"
 
 export async function enqueueTask(taskId: string) {

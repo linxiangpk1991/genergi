@@ -75,6 +75,31 @@ export const taskSummarySchema = z.object({
 })
 export type TaskSummary = z.infer<typeof taskSummarySchema>
 
+export const storyboardSceneSchema = z.object({
+  id: z.string(),
+  index: z.number().int().nonnegative(),
+  title: z.string(),
+  script: z.string(),
+  imagePrompt: z.string(),
+  videoPrompt: z.string(),
+  durationSec: z.number().positive(),
+  startLabel: z.string(),
+  endLabel: z.string(),
+  reviewStatus: z.enum(["pending", "approved", "rejected"]),
+  keyframeStatus: z.enum(["pending", "approved", "rejected"]),
+})
+export type StoryboardScene = z.infer<typeof storyboardSceneSchema>
+
+export const taskDetailSchema = z.object({
+  taskId: z.string(),
+  title: z.string(),
+  script: z.string(),
+  taskRunConfig: taskRunConfigSchema,
+  scenes: z.array(storyboardSceneSchema),
+  updatedAt: z.string(),
+})
+export type TaskDetail = z.infer<typeof taskDetailSchema>
+
 export const createTaskInputSchema = z.object({
   title: z.string().min(1),
   script: z.string().min(1),
@@ -91,3 +116,5 @@ export interface HealthSnapshot {
 }
 
 export const TASK_QUEUE_NAME = "genergi-tasks"
+
+export * from "./task-persistence.js"

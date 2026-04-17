@@ -48,11 +48,22 @@
 
 ## Deployment Direction
 - Reuse the same production host family as `E:\anhe_automation`, but keep full directory isolation.
+- Production deployment should follow the stable `anhe_automation` model:
+  - timestamped releases under `/opt/genergi/releases/<timestamp>`
+  - `/opt/genergi/current` and `/opt/genergi/current.prev` symlink switching
+  - `systemd` for long-running `api` / `worker`
+  - `nginx` serving static `apps/web/dist` and proxying `/api` to `127.0.0.1:8787`
 - Recommended server layout:
   - `/opt/genergi/releases/<timestamp>`
   - `/opt/genergi/current`
+  - `/opt/genergi/current.prev`
   - `/opt/genergi/shared/`
 - Do not mix files into `/opt/anhe_automation/current`.
+- Runtime state such as task data must live in stable shared paths, not inside a release directory.
+
+## Hard-Won Deployment Rule
+- Do not treat root-domain DNS as proof that the product subdomain is ready. `genergius.com` and `www.genergius.com` can resolve correctly while `ai.genergius.com` is still `NXDOMAIN` on public resolvers.
+- Public acceptance for `ai.genergius.com` requires checking the subdomain itself against public DNS, not just the DNS provider console screenshot.
 
 ## Reference Documents
 - Spec source copied from prior repo context into:

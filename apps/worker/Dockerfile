@@ -15,5 +15,8 @@ FROM node:24-bookworm
 WORKDIR /app
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/apps/worker/package.json ./apps/worker/package.json
+COPY --from=builder /app/apps/worker/node_modules ./apps/worker/node_modules
 COPY --from=builder /app/apps/worker/dist ./apps/worker/dist
+COPY --from=builder /app/packages/shared ./packages/shared
+COPY --from=builder /app/packages/config ./packages/config
 CMD ["node", "apps/worker/dist/apps/worker/src/index.js"]

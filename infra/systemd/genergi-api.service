@@ -1,0 +1,15 @@
+[Unit]
+Description=GENERGI API
+After=network.target redis.service redis-server.service
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/genergi/current
+EnvironmentFile=/opt/genergi/shared.env
+ExecStart=/usr/bin/env bash -lc 'cd /opt/genergi/current && corepack pnpm --filter @genergi/api start'
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
