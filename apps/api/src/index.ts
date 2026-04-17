@@ -21,6 +21,7 @@ import {
   getEnvFallbackUser,
   findStoredUserById,
   listUsers,
+  toPublicUser,
   updateStoredUser,
   updateStoredUserPassword,
 } from "./lib/user-store.js"
@@ -95,7 +96,7 @@ app.post("/api/users", zValidator("json", createUserInputSchema), async (c) => {
   const payload = c.req.valid("json")
   try {
     const user = await createStoredUser(payload)
-    return c.json({ user }, 201)
+    return c.json({ user: toPublicUser(user, "file") }, 201)
   } catch (error) {
     const message = error instanceof Error ? error.message : "UNKNOWN_ERROR"
     if (message === "USERNAME_TAKEN") {
@@ -125,7 +126,7 @@ app.patch("/api/users/:userId", zValidator("json", updateUserInputSchema), async
       return c.json({ message: "USER_NOT_FOUND" }, 404)
     }
 
-    return c.json({ user })
+    return c.json({ user: toPublicUser(user, "file") })
   } catch (error) {
     const message = error instanceof Error ? error.message : "UNKNOWN_ERROR"
     if (message === "USERNAME_TAKEN") {
@@ -149,7 +150,7 @@ app.post("/api/users/:userId/reset-password", zValidator("json", resetUserPasswo
     return c.json({ message: "USER_NOT_FOUND" }, 404)
   }
 
-  return c.json({ user })
+  return c.json({ user: toPublicUser(user, "file") })
 })
 
 app.get("/api/bootstrap", (c) => {

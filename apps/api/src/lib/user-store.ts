@@ -94,7 +94,7 @@ function verifyPasswordHash(password: string, passwordHash: string) {
   return actual.length === expected.length && timingSafeEqual(actual, expected)
 }
 
-function toPublicUser(user: StoredUser, source: "file" | "env"): PublicUser {
+export function toPublicUser(user: StoredUser, source: "file" | "env"): PublicUser {
   return {
     id: user.id,
     username: user.username,
