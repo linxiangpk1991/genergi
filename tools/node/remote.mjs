@@ -1,11 +1,34 @@
+import { existsSync } from "node:fs";
 import { spawn } from "node:child_process";
 import process from "node:process";
 
+const windowsOpenSshPath = "C:/Windows/System32/OpenSSH";
+const gitOpenSshPath = "C:/Program Files/Git/usr/bin";
+
+function resolveDefaultBinary(binaryName, fallbackPath) {
+  if (process.platform !== "win32") {
+    return fallbackPath;
+  }
+
+  const windowsBinary = `${windowsOpenSshPath}/${binaryName}`;
+  if (existsSync(windowsBinary)) {
+    return windowsBinary;
+  }
+
+  const gitBinary = `${gitOpenSshPath}/${binaryName}`;
+  if (existsSync(gitBinary)) {
+    return gitBinary;
+  }
+
+  return fallbackPath;
+}
+
 const defaultRemoteConfig = {
-  sshPath: "C:/Program Files/Git/usr/bin/ssh.exe",
-  scpPath: "C:/Program Files/Git/usr/bin/scp.exe",
+  sshPath: resolveDefaultBinary("ssh.exe", "ssh"),
+  scpPath: resolveDefaultBinary("scp.exe", "scp"),
   host: "ubuntu@165.154.4.149",
   sshKeyPath: "C:/Users/linxi/.ssh/ssh-key-2026-03-05 (1).key",
+  kexAlgorithms: "curve25519-sha256",
 };
 
 export function getRemoteSpawnEnv(extraEnv = {}) {
@@ -28,7 +51,30 @@ export function resolveRemoteConfig(overrides = {}) {
     host: process.env.GENERGI_REMOTE_HOST ?? overrides.host ?? defaultRemoteConfig.host,
     sshKeyPath:
       process.env.GENERGI_REMOTE_SSH_KEY ?? overrides.sshKeyPath ?? defaultRemoteConfig.sshKeyPath,
+    kexAlgorithms:
+      process.env.GENERGI_REMOTE_KEX_ALGORITHMS ??
+      overrides.kexAlgorithms ??
+      defaultRemoteConfig.kexAlgorithms,
   };
+}
+
+function buildSshBaseArgs(config, extraArgs = []) {
+  const args = [
+    "-i",
+    config.sshKeyPath,
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "StrictHostKeyChecking=no",
+    "-o",
+    "IdentitiesOnly=yes",
+  ];
+
+  if (config.kexAlgorithms) {
+    args.push("-o", `KexAlgorithms=${config.kexAlgorithms}`);
+  }
+
+  return args.concat(extraArgs);
 }
 
 function sleep(ms) {
@@ -125,17 +171,7 @@ async function runWithRetry(action, options = {}) {
 
 export async function runRemoteCommand(remoteCommand, options = {}) {
   const config = resolveRemoteConfig(options);
-  const args = [
-    "-i",
-    config.sshKeyPath,
-    "-o",
-    "BatchMode=yes",
-    "-o",
-    "StrictHostKeyChecking=no",
-    ...(options.extraSshArgs ?? []),
-    config.host,
-    remoteCommand,
-  ];
+  const args = buildSshBaseArgs(config, options.extraSshArgs ?? []).concat([config.host, remoteCommand]);
 
   return runWithRetry(
     () =>
@@ -158,17 +194,7 @@ export async function runRemoteCommand(remoteCommand, options = {}) {
 
 export async function runRemoteScript(script, options = {}) {
   const config = resolveRemoteConfig(options);
-  const args = [
-    "-i",
-    config.sshKeyPath,
-    "-o",
-    "BatchMode=yes",
-    "-o",
-    "StrictHostKeyChecking=no",
-    ...(options.extraSshArgs ?? []),
-    config.host,
-    "bash -s",
-  ];
+  const args = buildSshBaseArgs(config, options.extraSshArgs ?? []).concat([config.host, "bash -s"]);
 
   return runWithRetry(
     () =>
@@ -191,17 +217,10 @@ export async function runRemoteScript(script, options = {}) {
 
 export async function copyFileToRemote(localPath, remotePath, options = {}) {
   const config = resolveRemoteConfig(options);
-  const args = [
-    "-i",
-    config.sshKeyPath,
-    "-o",
-    "BatchMode=yes",
-    "-o",
-    "StrictHostKeyChecking=no",
-    ...(options.extraScpArgs ?? []),
+  const args = buildSshBaseArgs(config, options.extraScpArgs ?? []).concat([
     localPath,
     `${config.host}:${remotePath}`,
-  ];
+  ]);
 
   return runWithRetry(
     () =>
