@@ -73,8 +73,15 @@ function distributeUnits<T>(units: T[], bucketCount: number) {
   }
 
   const buckets: T[][] = Array.from({ length: bucketCount }, () => [])
-  for (let index = 0; index < units.length; index += 1) {
-    buckets[index % bucketCount].push(units[index])
+  let startIndex = 0
+  let remainingUnits = units.length
+
+  for (let bucketIndex = 0; bucketIndex < bucketCount; bucketIndex += 1) {
+    const remainingBuckets = bucketCount - bucketIndex
+    const takeCount = Math.ceil(remainingUnits / remainingBuckets)
+    buckets[bucketIndex] = units.slice(startIndex, startIndex + takeCount)
+    startIndex += takeCount
+    remainingUnits -= takeCount
   }
 
   return buckets

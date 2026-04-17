@@ -37,4 +37,19 @@ describe("storyboard planner", () => {
       ),
     ).toBe(true)
   })
+
+  it("keeps script beats in source order instead of wrapping later beats back into the first scene", async () => {
+    const planner = await import("../../../packages/shared/src/storyboard-planner")
+
+    const scenes = planner.buildStoryboardScenes({
+      script:
+        "Beat one introduces the problem. Beat two introduces the product. Beat three shows the transformation. Beat four closes with the CTA.",
+      targetDurationSec: 15,
+      aspectRatio: "9:16",
+    })
+
+    expect(scenes[0].script).toContain("Beat one")
+    expect(scenes[0].script).not.toContain("Beat four")
+    expect(scenes.at(-1)?.script).toContain("Beat four")
+  })
 })
