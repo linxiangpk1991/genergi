@@ -88,6 +88,9 @@ export function AssetsPage() {
             <div className="planning-summary-tags">
               <span className="pill pill--sm">{selectedTask?.planning?.generationPreferenceLabel ?? "待接入"}</span>
               <span className="pill pill--sm">{selectedTask?.targetDurationSec ?? 0}s</span>
+              {selectedTask?.actualDurationSec ? (
+                <span className="pill pill--sm">实际 {selectedTask.actualDurationSec.toFixed(1)}s</span>
+              ) : null}
             </div>
           </div>
           <div className="asset-metrics">

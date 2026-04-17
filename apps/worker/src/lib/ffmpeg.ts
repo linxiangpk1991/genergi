@@ -2,6 +2,53 @@ import { copyFile, rm, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { spawn } from "node:child_process"
 
+export async function getMediaDurationSeconds(input: {
+  mediaPath: string
+}) {
+  const ffprobePath = process.env.GENERGI_FFPROBE_PATH || "ffprobe"
+
+  return new Promise<number>((resolve, reject) => {
+    const process = spawn(
+      ffprobePath,
+      [
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        input.mediaPath,
+      ],
+      { stdio: ["ignore", "pipe", "pipe"] },
+    )
+
+    let stdout = ""
+    let stderr = ""
+    process.stdout.on("data", (chunk) => {
+      stdout += chunk.toString()
+    })
+    process.stderr.on("data", (chunk) => {
+      stderr += chunk.toString()
+    })
+
+    process.on("error", reject)
+    process.on("close", (code) => {
+      if (code !== 0) {
+        reject(new Error(`ffprobe exited with code ${code}: ${stderr}`))
+        return
+      }
+
+      const duration = Number.parseFloat(stdout.trim())
+      if (!Number.isFinite(duration)) {
+        reject(new Error(`ffprobe returned invalid duration: ${stdout}`))
+        return
+      }
+
+      resolve(duration)
+    })
+  })
+}
+
 export async function concatVideos(input: {
   videoPaths: string[]
   outputPath: string

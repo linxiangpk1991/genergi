@@ -84,12 +84,20 @@ async function writeTaskArtifacts(taskId: string) {
     })
   }
   await writeWorkerHeartbeat(`Muxing final video for ${taskId}`)
-  const finalVideoPath = await buildFinalVideoWithNarration({
+  const finalVideo = await buildFinalVideoWithNarration({
     taskId,
     sourceVideoPaths: sceneVideos.map((sceneVideo) => sceneVideo.videoPath),
     narrationPath: narration.audioPath,
     targetDurationSec: preparedDetail.taskRunConfig.targetDurationSec,
   })
+  await upsertTaskDetail({
+    ...preparedDetail,
+    actualDurationSec: finalVideo.actualDurationSec,
+  })
+  await updateTaskSummary(taskId, (task: TaskSummary) => ({
+    ...task,
+    actualDurationSec: finalVideo.actualDurationSec,
+  }))
 
   const assets: AssetRecord[] = [
     {
@@ -143,7 +151,7 @@ async function writeTaskArtifacts(taskId: string) {
       assetType: "video_bundle",
       label: `真实视频输出 (${sceneVideos.length} scenes / ${preparedDetail.taskRunConfig.targetDurationSec}s)`,
       status: "ready",
-      path: finalVideoPath,
+      path: finalVideo.outputPath,
       createdAt: now,
     },
   ]

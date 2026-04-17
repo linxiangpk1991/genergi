@@ -68,7 +68,7 @@ export function BatchDashboardPage() {
                 </div>
                 <div>
                   <strong>{task.progressPct}%</strong>
-                  <span>重试 {task.retryCount}</span>
+                  <span>重试 {task.retryCount} {task.actualDurationSec ? `· 实际 ${task.actualDurationSec.toFixed(1)}s` : ""}</span>
                 </div>
                 <div>
                   <strong>¥{task.estimatedCostCny.toFixed(2)}</strong>

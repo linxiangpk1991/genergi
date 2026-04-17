@@ -106,6 +106,11 @@ export type TaskSummary = {
   modeId: string
   channelId: string
   targetDurationSec: number
+  generationMode: GenerationPreferenceId
+  generationRoute: GenerationRouteId
+  routeReason: string
+  planningVersion: string
+  actualDurationSec: number | null
   status: string
   progressPct: number
   retryCount: number
@@ -137,10 +142,17 @@ export type TaskDetail = {
     modeId: string
     channelId: string
     targetDurationSec: number
+    generationMode: GenerationPreferenceId
+    generationRoute: GenerationRouteId
+    routeReason: string
+    planningVersion: string
     imageFinalModel: {
       label: string
     }
   }
+  visualStyleGuide?: string
+  ctaLine?: string
+  actualDurationSec?: number | null
   scenes: StoryboardScene[]
   updatedAt: string
   planning?: TaskPlanningSnapshot

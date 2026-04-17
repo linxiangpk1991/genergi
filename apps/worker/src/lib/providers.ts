@@ -14,7 +14,7 @@ import {
 } from "@genergi/shared"
 import { GENERATION_PREFERENCES, resolveVideoModelCapability } from "@genergi/config"
 import { EdgeTTS } from "./edge-tts.js"
-import { concatVideos, extractKeyframeFromVideo, muxNarrationIntoVideo, trimVideoDuration } from "./ffmpeg.js"
+import { concatVideos, extractKeyframeFromVideo, getMediaDurationSeconds, muxNarrationIntoVideo, trimVideoDuration } from "./ffmpeg.js"
 
 const gatewayBaseUrl = process.env.GENERGI_MEDIA_GATEWAY_BASE_URL ?? "https://open.xiaojingai.com"
 const gatewayApiKey = process.env.GENERGI_MEDIA_GATEWAY_API_KEY ?? ""
@@ -942,5 +942,8 @@ export async function buildFinalVideoWithNarration(input: {
     console.warn("[worker] ffmpeg concat/mux failed, falling back to stitched source video:", error instanceof Error ? error.message : String(error))
     await fs.copyFile(input.sourceVideoPaths[0], outputPath)
   }
-  return outputPath
+  return {
+    outputPath,
+    actualDurationSec: await getMediaDurationSeconds({ mediaPath: outputPath }),
+  }
 }
