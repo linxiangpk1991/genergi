@@ -43,6 +43,15 @@ function normalizeImageModel(model: string) {
   }
 
   const lower = normalized.toLowerCase()
+  if (lower === "image.draft") {
+    return "gemini-3.1-flash-image-preview"
+  }
+  if (lower === "image.final") {
+    return "gemini-3-pro-image-preview"
+  }
+  if (lower === "image.premium") {
+    return "gemini-3-pro-image-preview-2k"
+  }
   if (lower.includes("2k") || lower.includes("4k") || lower.includes("portrait") || lower.includes("landscape")) {
     return "gemini-3.1-flash-image-preview"
   }

@@ -63,11 +63,16 @@ async function writeTaskArtifacts(taskId: string) {
   let keyframes
   try {
     await writeWorkerHeartbeat(`Generating keyframes for ${taskId}`)
-    keyframes = await createKeyframeBundle({
-      taskId,
-      detail: preparedDetail,
-      model: process.env.GENERGI_IMAGE_MODEL ?? preparedDetail.taskRunConfig.imageDraftModel.id,
-    })
+    keyframes = await Promise.race([
+      createKeyframeBundle({
+        taskId,
+        detail: preparedDetail,
+        model: process.env.GENERGI_IMAGE_MODEL ?? preparedDetail.taskRunConfig.imageDraftModel.id,
+      }),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("Image generation timeout, switching to video-derived keyframe")), 30000),
+      ),
+    ])
   } catch (error) {
     console.warn(`[worker] ${taskId} image keyframe generation failed, fallback to video frame:`, error instanceof Error ? error.message : String(error))
     await writeWorkerHeartbeat(`Falling back to video-derived keyframe for ${taskId}`, "degraded")
@@ -197,7 +202,12 @@ const worker = new Worker(
       throw error
     }
   },
-  { connection },
+  {
+    connection,
+    lockDuration: 30 * 60 * 1000,
+    stalledInterval: 60 * 1000,
+    maxStalledCount: 1,
+  },
 )
 
 worker.on("completed", (job) => {
