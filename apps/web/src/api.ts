@@ -27,6 +27,15 @@ export type GenerationPreferenceId = "user_locked" | "system_enhanced"
 
 export type GenerationRouteId = "single_shot" | "multi_scene"
 
+export type ReviewStageId = "storyboard_review" | "keyframe_review" | "auto_qa"
+
+export type ReviewDecision = "approved" | "rejected"
+
+export type ReviewDecisionPayload = {
+  decision: ReviewDecision
+  note?: string
+}
+
 export type TaskPlanningSnapshot = {
   generationMode: GenerationPreferenceId | null
   generationPreferenceLabel: string
@@ -117,6 +126,9 @@ export type TaskSummary = {
   estimatedCostCny: number
   createdAt: string
   updatedAt: string
+  reviewStage?: ReviewStageId | null
+  pendingReviewCount?: number
+  reviewUpdatedAt?: string | null
   planning?: TaskPlanningSnapshot
 }
 
@@ -132,6 +144,10 @@ export type StoryboardScene = {
   endLabel: string
   reviewStatus: "pending" | "approved" | "rejected"
   keyframeStatus: "pending" | "approved" | "rejected"
+  reviewNote?: string
+  reviewedAt?: string
+  keyframeReviewNote?: string
+  keyframeReviewedAt?: string
 }
 
 export type TaskDetail = {
@@ -155,7 +171,15 @@ export type TaskDetail = {
   actualDurationSec?: number | null
   scenes: StoryboardScene[]
   updatedAt: string
+  reviewStage?: ReviewStageId | null
+  pendingReviewCount?: number
+  reviewUpdatedAt?: string | null
   planning?: TaskPlanningSnapshot
+}
+
+export type ReviewMutationResponse = {
+  task: TaskSummary
+  detail: TaskDetail
 }
 
 export type AssetRecord = {
@@ -187,6 +211,10 @@ export function buildAssetDownloadUrl(taskId: string, assetId: string) {
 
 export function buildAssetPreviewUrl(taskId: string, assetId: string) {
   return `${API_BASE_URL}/api/tasks/${taskId}/assets/${assetId}/preview`
+}
+
+export function buildKeyframePreviewUrl(taskId: string, sceneId: string) {
+  return `${API_BASE_URL}/api/tasks/${taskId}/keyframes/${sceneId}/preview`
 }
 
 export type CreateTaskPayload = {
@@ -232,6 +260,16 @@ export const api = {
   listTasks: () => request<{ tasks: TaskSummary[] }>("/api/tasks"),
   getTaskDetail: (taskId: string) => request<{ detail: TaskDetail }>(`/api/tasks/${taskId}`),
   getTaskAssets: (taskId: string) => request<{ assets: AssetRecord[] }>(`/api/tasks/${taskId}/assets`),
+  submitStoryboardReview: (taskId: string, sceneId: string, payload: ReviewDecisionPayload) =>
+    request<ReviewMutationResponse>(`/api/tasks/${taskId}/reviews/storyboard_review/${sceneId}`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  submitKeyframeReview: (taskId: string, sceneId: string, payload: ReviewDecisionPayload) =>
+    request<ReviewMutationResponse>(`/api/tasks/${taskId}/reviews/keyframe_review/${sceneId}`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
   createTask: (payload: CreateTaskPayload) =>
     request<{ task: TaskSummary }>("/api/tasks", {
       method: "POST",

@@ -1,8 +1,27 @@
 import fs from "node:fs/promises"
 import path from "node:path"
 import { buildDefaultTaskRunConfig, estimateCost, resolveVideoModelCapability } from "@genergi/config"
-import { buildStoryboardScenes, readTaskAssets, readTaskDetail, readTaskSummaries, upsertTaskDetail, writeTaskSummaries } from "@genergi/shared"
-import type { CreateTaskInput, StoryboardScene, TaskDetail, TaskSummary, TaskStatus } from "@genergi/shared"
+import {
+  buildStoryboardScenes,
+  createDefaultReviewSummary,
+  normalizeStoryboardScene,
+  normalizeTaskDetailRecord,
+  readTaskAssets,
+  readTaskDetail,
+  readTaskSummaries,
+  upsertTaskDetail,
+  writeTaskSummaries,
+} from "@genergi/shared"
+import type {
+  CreateTaskInput,
+  ReviewDecisionInput,
+  ReviewStageId,
+  ReviewSummary,
+  StoryboardScene,
+  TaskDetail,
+  TaskSummary,
+  TaskStatus,
+} from "@genergi/shared"
 
 function now() {
   return new Date().toISOString()
@@ -25,6 +44,8 @@ export type ResolvedAssetRecord = {
   modifiedAt: string | null
   downloadFileName: string
 }
+
+const terminalTaskStatuses = new Set<TaskStatus>(["failed", "completed", "canceled"])
 
 function formatBytes(sizeBytes: number | null) {
   if (sizeBytes == null) {
@@ -215,6 +236,166 @@ async function resolveAssetRecord(asset: any): Promise<ResolvedAssetRecord & typ
   }
 }
 
+export function normalizeSceneReviewMetadata(scene: StoryboardScene) {
+  return normalizeStoryboardScene(scene)
+}
+
+function mergeSceneReviewMetadata(
+  existingScenes: StoryboardScene[],
+  nextScenes: StoryboardScene[],
+): StoryboardScene[] {
+  const normalizedExisting = existingScenes.map((scene) => normalizeSceneReviewMetadata(scene))
+  const byId = new Map(normalizedExisting.map((scene) => [scene.id, scene]))
+
+  return nextScenes.map((scene, index) => {
+    const preserved = byId.get(scene.id) ?? normalizedExisting[index]
+    if (!preserved) {
+      return normalizeSceneReviewMetadata(scene)
+    }
+
+    return normalizeSceneReviewMetadata({
+      ...scene,
+      reviewStatus: preserved.reviewStatus,
+      reviewNote: preserved.reviewNote,
+      reviewedAt: preserved.reviewedAt,
+      keyframeStatus: preserved.keyframeStatus,
+      keyframeReviewNote: preserved.keyframeReviewNote,
+      keyframeReviewedAt: preserved.keyframeReviewedAt,
+    })
+  })
+}
+
+function findLatestReviewTimestamp(scenes: StoryboardScene[]) {
+  const timestamps = scenes.flatMap((scene) =>
+    [scene.reviewedAt, scene.keyframeReviewedAt].filter((value): value is string => Boolean(value)),
+  )
+
+  if (timestamps.length === 0) {
+    return null
+  }
+
+  return timestamps.reduce((latest, value) => (value > latest ? value : latest))
+}
+
+export function deriveReviewSummary(detail: Pick<TaskDetail, "scenes">): ReviewSummary {
+  const scenes = detail.scenes.map((scene) => normalizeSceneReviewMetadata(scene))
+  if (scenes.length === 0) {
+    return {
+      reviewStage: null,
+      pendingReviewCount: 0,
+      reviewUpdatedAt: null,
+    }
+  }
+
+  const latestReviewUpdatedAt = findLatestReviewTimestamp(scenes)
+  const storyboardPendingCount = scenes.filter((scene) => scene.reviewStatus === "pending").length
+  const storyboardApproved = scenes.every((scene) => scene.reviewStatus === "approved")
+  if (!storyboardApproved) {
+    return {
+      reviewStage: "storyboard_review",
+      pendingReviewCount: storyboardPendingCount,
+      reviewUpdatedAt: latestReviewUpdatedAt,
+    }
+  }
+
+  const keyframePendingCount = scenes.filter((scene) => scene.keyframeStatus === "pending").length
+  const keyframeApproved = scenes.every((scene) => scene.keyframeStatus === "approved")
+  if (!keyframeApproved) {
+    return {
+      reviewStage: "keyframe_review",
+      pendingReviewCount: keyframePendingCount,
+      reviewUpdatedAt: latestReviewUpdatedAt,
+    }
+  }
+
+  return {
+    reviewStage: "auto_qa",
+    pendingReviewCount: 0,
+    reviewUpdatedAt: latestReviewUpdatedAt,
+  }
+}
+
+function resolveReviewStageForTaskStatus(
+  currentStatus: TaskStatus,
+  reviewSummary: ReviewSummary,
+): ReviewStageId | null {
+  if (reviewSummary.reviewStage !== "auto_qa") {
+    return reviewSummary.reviewStage ?? null
+  }
+
+  return terminalTaskStatuses.has(currentStatus) ? null : reviewSummary.reviewStage
+}
+
+function resolveTaskStatusForReview(
+  currentStatus: TaskStatus,
+  reviewStage: ReviewStageId | null,
+): TaskStatus {
+  if (reviewStage === "storyboard_review" || reviewStage === "keyframe_review") {
+    return terminalTaskStatuses.has(currentStatus) ? currentStatus : "waiting_review"
+  }
+
+  if (reviewStage === "auto_qa") {
+    if (currentStatus === "waiting_review" || currentStatus === "queued" || currentStatus === "draft" || currentStatus === "paused") {
+      return "running"
+    }
+
+    return currentStatus
+  }
+
+  return currentStatus
+}
+
+function applyDerivedReviewState(detail: TaskDetail, currentStatus: TaskStatus) {
+  const reviewSummary = deriveReviewSummary(detail)
+  const resolvedReviewStage = resolveReviewStageForTaskStatus(currentStatus, reviewSummary)
+  return {
+    detail: normalizeTaskDetailRecord({
+      ...detail,
+      reviewStage: resolvedReviewStage,
+      pendingReviewCount: reviewSummary.pendingReviewCount,
+      reviewUpdatedAt: reviewSummary.reviewUpdatedAt,
+    }),
+    reviewSummary: {
+      reviewStage: resolvedReviewStage,
+      pendingReviewCount: reviewSummary.pendingReviewCount,
+      reviewUpdatedAt: reviewSummary.reviewUpdatedAt,
+    } satisfies ReviewSummary,
+    status: resolveTaskStatusForReview(currentStatus, resolvedReviewStage),
+  }
+}
+
+async function syncTaskSummaryFromDetail(
+  task: TaskSummary,
+  detail: TaskDetail,
+  updatedAt: string,
+) {
+  const tasks = await readTaskSummaries()
+  let nextSummary: TaskSummary | null = null
+
+  const nextTasks = tasks.map((entry) => {
+    if (entry.id !== task.id) {
+      return entry
+    }
+
+    const derived = applyDerivedReviewState(detail, entry.status)
+    nextSummary = {
+      ...entry,
+      status: derived.status,
+      reviewStage: derived.reviewSummary.reviewStage,
+      pendingReviewCount: derived.reviewSummary.pendingReviewCount,
+      reviewUpdatedAt: derived.reviewSummary.reviewUpdatedAt,
+      updatedAt,
+    }
+    return nextSummary
+  })
+
+  if (nextSummary) {
+    await writeTaskSummaries(nextTasks)
+  }
+
+  return nextSummary
+}
+
 export async function listTasks(): Promise<TaskSummary[]> {
   return readTaskSummaries()
 }
@@ -234,46 +415,83 @@ export async function getTaskDetail(taskId: string) {
     task.generationMode,
   )
   if (existing) {
-    const totalSceneDuration = existing.scenes.reduce((total, scene) => total + scene.durationSec, 0)
+    const normalizedExisting = normalizeTaskDetailRecord(existing)
+    const totalSceneDuration = normalizedExisting.scenes.reduce((total, scene) => total + scene.durationSec, 0)
     const hasExpectedDuration = existing.taskRunConfig.targetDurationSec === task.targetDurationSec
     const hasExpectedRoute = existing.taskRunConfig.generationRoute === task.generationRoute
     if (hasExpectedDuration && hasExpectedRoute && totalSceneDuration === task.targetDurationSec) {
-      return existing
+      const derived = applyDerivedReviewState(
+        {
+          ...normalizedExisting,
+          actualDurationSec: normalizedExisting.actualDurationSec ?? task.actualDurationSec,
+        },
+        task.status,
+      )
+      const summaryChanged =
+        task.reviewStage !== derived.reviewSummary.reviewStage ||
+        task.pendingReviewCount !== derived.reviewSummary.pendingReviewCount ||
+        task.reviewUpdatedAt !== derived.reviewSummary.reviewUpdatedAt ||
+        task.status !== derived.status
+      const detailChanged =
+        normalizedExisting.reviewStage !== derived.detail.reviewStage ||
+        normalizedExisting.pendingReviewCount !== derived.detail.pendingReviewCount ||
+        normalizedExisting.reviewUpdatedAt !== derived.detail.reviewUpdatedAt
+
+      if (detailChanged) {
+        await upsertTaskDetail(derived.detail)
+      }
+      if (summaryChanged) {
+        await syncTaskSummaryFromDetail(task, derived.detail, normalizedExisting.updatedAt)
+      }
+
+      return derived.detail
     }
 
-    const normalized: TaskDetail = {
-      ...existing,
-      taskRunConfig,
-      actualDurationSec: existing.actualDurationSec ?? task.actualDurationSec,
-      scenes: buildStoryboardScenes({
-        script: existing.script,
+    const rebuiltScenes = mergeSceneReviewMetadata(
+      normalizedExisting.scenes,
+      buildStoryboardScenes({
+        script: normalizedExisting.script,
         targetDurationSec: task.targetDurationSec,
         maxSceneDurationSec: resolveVideoModelCapability(taskRunConfig.videoDraftModel.id).maxSingleShotSec,
         aspectRatio: taskRunConfig.aspectRatio,
       }),
-      updatedAt: now(),
-    }
+    )
+    const normalized = applyDerivedReviewState(
+      {
+        ...normalizedExisting,
+        taskRunConfig,
+        actualDurationSec: normalizedExisting.actualDurationSec ?? task.actualDurationSec,
+        scenes: rebuiltScenes,
+        updatedAt: now(),
+      },
+      task.status,
+    ).detail
     await upsertTaskDetail(normalized)
+    await syncTaskSummaryFromDetail(task, normalized, normalized.updatedAt)
     return normalized
   }
 
   const script = `${task.title}. Keep the tone native-English, product-forward, and optimized for short-form social video.`
-  const synthesized: TaskDetail = {
-    taskId: task.id,
-    title: task.title,
-    script,
-    taskRunConfig,
-    actualDurationSec: task.actualDurationSec,
-    scenes: buildStoryboardScenes({
+  const synthesized = applyDerivedReviewState(
+    {
+      taskId: task.id,
+      title: task.title,
       script,
-      targetDurationSec: task.targetDurationSec,
-      maxSceneDurationSec: resolveVideoModelCapability(taskRunConfig.videoDraftModel.id).maxSingleShotSec,
-      aspectRatio: taskRunConfig.aspectRatio,
-    }),
-    updatedAt: task.updatedAt,
-  }
+      taskRunConfig,
+      actualDurationSec: task.actualDurationSec,
+      scenes: buildStoryboardScenes({
+        script,
+        targetDurationSec: task.targetDurationSec,
+        maxSceneDurationSec: resolveVideoModelCapability(taskRunConfig.videoDraftModel.id).maxSingleShotSec,
+        aspectRatio: taskRunConfig.aspectRatio,
+      }),
+      updatedAt: task.updatedAt,
+    },
+    task.status,
+  ).detail
 
   await upsertTaskDetail(synthesized)
+  await syncTaskSummaryFromDetail(task, synthesized, synthesized.updatedAt)
   return synthesized
 }
 
@@ -298,8 +516,27 @@ export async function createTask(input: CreateTaskInput): Promise<{ task: TaskSu
     input.targetDurationSec,
     input.generationMode,
   )
+  const taskId = `task_${Date.now()}`
+  const detail = applyDerivedReviewState(
+    {
+      taskId,
+      title: input.title,
+      script: input.script,
+      taskRunConfig,
+      actualDurationSec: null,
+      scenes: buildStoryboardScenes({
+        script: input.script,
+        targetDurationSec: input.targetDurationSec,
+        maxSceneDurationSec: resolveVideoModelCapability(taskRunConfig.videoDraftModel.id).maxSingleShotSec,
+        aspectRatio: taskRunConfig.aspectRatio,
+      }),
+      updatedAt: timestamp,
+      ...createDefaultReviewSummary(),
+    },
+    "queued",
+  ).detail
   const task: TaskSummary = {
-    id: `task_${Date.now()}`,
+    id: taskId,
     title: input.title,
     modeId: input.modeId,
     channelId: input.channelId,
@@ -309,34 +546,88 @@ export async function createTask(input: CreateTaskInput): Promise<{ task: TaskSu
     routeReason: taskRunConfig.routeReason,
     planningVersion: taskRunConfig.planningVersion,
     actualDurationSec: null,
-    status: "queued" satisfies TaskStatus,
+    status: resolveTaskStatusForReview("queued", detail.reviewStage ?? null),
     progressPct: 0,
     retryCount: 0,
     estimatedCostCny: estimate.budgetUsagePct / 100 * taskRunConfig.budgetLimitCny,
     createdAt: timestamp,
     updatedAt: timestamp,
+    reviewStage: detail.reviewStage,
+    pendingReviewCount: detail.pendingReviewCount,
+    reviewUpdatedAt: detail.reviewUpdatedAt,
   }
 
   tasks.unshift(task)
   await writeTaskSummaries(tasks)
-  const detail: TaskDetail = {
-    taskId: task.id,
-    title: task.title,
-    script: input.script,
-    taskRunConfig,
-    actualDurationSec: null,
-    scenes: buildStoryboardScenes({
-      script: input.script,
-      targetDurationSec: input.targetDurationSec,
-      maxSceneDurationSec: resolveVideoModelCapability(taskRunConfig.videoDraftModel.id).maxSingleShotSec,
-      aspectRatio: taskRunConfig.aspectRatio,
-    }),
-    updatedAt: timestamp,
-  }
   await upsertTaskDetail(detail)
 
   return {
     task,
     taskRunConfig,
+  }
+}
+
+export async function applySceneReviewDecision(
+  taskId: string,
+  input: ReviewDecisionInput,
+): Promise<{ summary: TaskSummary; detail: TaskDetail } | null> {
+  const tasks = await listTasks()
+  const task = tasks.find((entry) => entry.id === taskId)
+  if (!task) {
+    return null
+  }
+
+  const existingDetail = await getTaskDetail(taskId)
+  if (!existingDetail) {
+    return null
+  }
+
+  const sceneIndex = existingDetail.scenes.findIndex((scene) => scene.id === input.sceneId)
+  if (sceneIndex < 0) {
+    return null
+  }
+
+  const decisionAt = now()
+  const nextScenes = existingDetail.scenes.map((scene, index) => {
+    const normalizedScene = normalizeSceneReviewMetadata(scene)
+    if (index !== sceneIndex) {
+      return normalizedScene
+    }
+
+    if (input.stage === "storyboard_review") {
+      return normalizeSceneReviewMetadata({
+        ...normalizedScene,
+        reviewStatus: input.decision,
+        reviewNote: input.note ?? null,
+        reviewedAt: decisionAt,
+      })
+    }
+
+    return normalizeSceneReviewMetadata({
+      ...normalizedScene,
+      keyframeStatus: input.decision,
+      keyframeReviewNote: input.note ?? null,
+      keyframeReviewedAt: decisionAt,
+    })
+  })
+
+  const nextDetail = applyDerivedReviewState(
+    {
+      ...existingDetail,
+      scenes: nextScenes,
+      updatedAt: decisionAt,
+    },
+    task.status,
+  ).detail
+  await upsertTaskDetail(nextDetail)
+
+  const summary = await syncTaskSummaryFromDetail(task, nextDetail, decisionAt)
+  if (!summary) {
+    return null
+  }
+
+  return {
+    summary,
+    detail: nextDetail,
   }
 }

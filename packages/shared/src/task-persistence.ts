@@ -1,6 +1,14 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises"
 import path from "node:path"
-import type { AssetRecord, StoredUser, TaskDetail, TaskSummary } from "./index.js"
+import type {
+  AssetRecord,
+  ReviewStageId,
+  ReviewSummary,
+  StoryboardScene,
+  StoredUser,
+  TaskDetail,
+  TaskSummary,
+} from "./index.js"
 
 function resolveDataDir() {
   return process.env.GENERGI_DATA_DIR
@@ -29,6 +37,117 @@ function now() {
   return new Date().toISOString()
 }
 
+const reviewStageValues = new Set<ReviewStageId>([
+  "storyboard_review",
+  "keyframe_review",
+  "auto_qa",
+])
+
+const sceneReviewStatusValues = new Set<StoryboardScene["reviewStatus"]>([
+  "pending",
+  "approved",
+  "rejected",
+])
+
+export function createDefaultReviewSummary(): ReviewSummary {
+  return {
+    reviewStage: null,
+    pendingReviewCount: 0,
+    reviewUpdatedAt: null,
+  }
+}
+
+function normalizeNullableString(value: unknown) {
+  return typeof value === "string" && value.trim().length > 0 ? value : null
+}
+
+function normalizeNonNegativeInteger(value: unknown) {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : 0
+}
+
+function normalizeReviewStage(value: unknown): ReviewStageId | null {
+  return typeof value === "string" && reviewStageValues.has(value as ReviewStageId)
+    ? (value as ReviewStageId)
+    : null
+}
+
+function normalizeSceneReviewStatus(
+  value: unknown,
+  fallback: StoryboardScene["reviewStatus"],
+): StoryboardScene["reviewStatus"] {
+  return typeof value === "string" && sceneReviewStatusValues.has(value as StoryboardScene["reviewStatus"])
+    ? (value as StoryboardScene["reviewStatus"])
+    : fallback
+}
+
+function normalizeReviewSummaryRecord<T extends Partial<ReviewSummary>>(record: T): ReviewSummary {
+  return {
+    reviewStage: normalizeReviewStage(record.reviewStage),
+    pendingReviewCount: normalizeNonNegativeInteger(record.pendingReviewCount),
+    reviewUpdatedAt: normalizeNullableString(record.reviewUpdatedAt),
+  }
+}
+
+export function normalizeStoryboardScene(
+  scene: StoryboardScene & Partial<Record<"reviewNote" | "reviewedAt" | "keyframeReviewNote" | "keyframeReviewedAt", string | null>>,
+): StoryboardScene {
+  return {
+    ...scene,
+    reviewStatus: normalizeSceneReviewStatus(scene.reviewStatus, "pending"),
+    keyframeStatus: normalizeSceneReviewStatus(scene.keyframeStatus, "pending"),
+    reviewNote: normalizeNullableString(scene.reviewNote),
+    reviewedAt: normalizeNullableString(scene.reviewedAt),
+    keyframeReviewNote: normalizeNullableString(scene.keyframeReviewNote),
+    keyframeReviewedAt: normalizeNullableString(scene.keyframeReviewedAt),
+  }
+}
+
+export function normalizeTaskSummaryRecord(
+  task: TaskSummary & {
+    targetDurationSec?: number
+    generationMode?: TaskSummary["generationMode"]
+    generationRoute?: TaskSummary["generationRoute"]
+    routeReason?: string
+    planningVersion?: TaskSummary["planningVersion"]
+    actualDurationSec?: number | null
+    reviewStage?: ReviewStageId | null
+    pendingReviewCount?: number
+    reviewUpdatedAt?: string | null
+  },
+): TaskSummary {
+  return {
+    ...task,
+    targetDurationSec: task.targetDurationSec ?? 30,
+    generationMode: task.generationMode ?? "user_locked",
+    generationRoute: task.generationRoute ?? "multi_scene",
+    routeReason: task.routeReason ?? "legacy task normalized to multi-scene",
+    planningVersion: task.planningVersion ?? "v1",
+    actualDurationSec: task.actualDurationSec ?? null,
+    ...normalizeReviewSummaryRecord(task),
+  }
+}
+
+export function normalizeTaskDetailRecord(
+  detail: TaskDetail & {
+    actualDurationSec?: number | null
+    reviewStage?: ReviewStageId | null
+    pendingReviewCount?: number
+    reviewUpdatedAt?: string | null
+  },
+): TaskDetail {
+  return {
+    ...detail,
+    actualDurationSec: detail.actualDurationSec ?? null,
+    scenes: Array.isArray(detail.scenes)
+      ? detail.scenes.map((scene) => normalizeStoryboardScene(scene))
+      : [],
+    updatedAt: typeof detail.updatedAt === "string" && detail.updatedAt.trim().length > 0
+      ? detail.updatedAt
+      : now(),
+    ...normalizeReviewSummaryRecord(detail),
+  }
+}
+
 export function seedTaskSummaries(): TaskSummary[] {
   return [
     {
@@ -48,6 +167,7 @@ export function seedTaskSummaries(): TaskSummary[] {
       estimatedCostCny: 2.4,
       createdAt: now(),
       updatedAt: now(),
+      ...createDefaultReviewSummary(),
     },
     {
       id: "task_seed_002",
@@ -66,6 +186,7 @@ export function seedTaskSummaries(): TaskSummary[] {
       estimatedCostCny: 4.5,
       createdAt: now(),
       updatedAt: now(),
+      ...createDefaultReviewSummary(),
     },
   ]
 }
@@ -109,28 +230,13 @@ export async function readTaskSummaries(): Promise<TaskSummary[]> {
         routeReason?: string
         planningVersion?: TaskSummary["planningVersion"]
         actualDurationSec?: number | null
+        reviewStage?: ReviewStageId | null
+        pendingReviewCount?: number
+        reviewUpdatedAt?: string | null
       }
     >
-    const normalized = tasks.map((task) => ({
-      ...task,
-      targetDurationSec: task.targetDurationSec ?? 30,
-      generationMode: task.generationMode ?? "user_locked",
-      generationRoute: task.generationRoute ?? "multi_scene",
-      routeReason: task.routeReason ?? "legacy task normalized to multi-scene",
-      planningVersion: task.planningVersion ?? "v1",
-      actualDurationSec: task.actualDurationSec ?? null,
-    })) as TaskSummary[]
-    if (
-      normalized.some(
-        (task, index) =>
-          tasks[index].targetDurationSec == null ||
-          tasks[index].generationMode == null ||
-          tasks[index].generationRoute == null ||
-          tasks[index].routeReason == null ||
-          tasks[index].planningVersion == null ||
-          tasks[index].actualDurationSec === undefined,
-      )
-    ) {
+    const normalized = tasks.map((task) => normalizeTaskSummaryRecord(task))
+    if (JSON.stringify(tasks) !== JSON.stringify(normalized)) {
       await writeTaskSummaries(normalized)
     }
     return normalized
@@ -167,7 +273,15 @@ export async function readTaskDetails(): Promise<Record<string, TaskDetail>> {
       return {}
     }
 
-    return JSON.parse(content) as Record<string, TaskDetail>
+    const parsed = JSON.parse(content) as Record<string, TaskDetail>
+    const normalized = Object.fromEntries(
+      Object.entries(parsed).map(([taskId, detail]) => [taskId, normalizeTaskDetailRecord(detail)]),
+    ) as Record<string, TaskDetail>
+    if (JSON.stringify(parsed) !== JSON.stringify(normalized)) {
+      await writeTaskDetails(normalized)
+    }
+
+    return normalized
   } catch {
     return {}
   }

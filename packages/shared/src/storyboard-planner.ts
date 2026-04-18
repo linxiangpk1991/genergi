@@ -15,6 +15,20 @@ export type PlannedStoryboardScene = {
   keyframeStatus: "pending" | "approved" | "rejected"
 }
 
+export type SceneReviewMetadata = {
+  reviewStatus?: "pending" | "approved" | "rejected"
+  keyframeStatus?: "pending" | "approved" | "rejected"
+  reviewNote?: string | null
+  reviewedAt?: string | null
+  keyframeReviewNote?: string | null
+  keyframeReviewedAt?: string | null
+}
+
+export type SceneReviewMetadataCarrier = {
+  id?: string | null
+  index?: number | null
+} & SceneReviewMetadata
+
 export function resolveSceneCountForDuration(targetDurationSec: number) {
   return resolveSceneCountForDurationWithLimit(targetDurationSec, 8)
 }
@@ -115,12 +129,58 @@ function buildVideoPrompt(sceneScript: string, aspectRatio: string, durationSec:
   ].join(" ")
 }
 
+export function mergeSceneReviewMetadata<T extends PlannedStoryboardScene & SceneReviewMetadataCarrier>(
+  scenes: T[],
+  existingScenes: SceneReviewMetadataCarrier[] = [],
+): Array<T & SceneReviewMetadata> {
+  const existingById = new Map<string, SceneReviewMetadataCarrier>()
+  const existingByIndex = new Map<number, SceneReviewMetadataCarrier>()
+
+  for (const scene of existingScenes) {
+    if (typeof scene.id === "string" && scene.id.trim()) {
+      existingById.set(scene.id, scene)
+    }
+    if (typeof scene.index === "number" && Number.isInteger(scene.index) && scene.index >= 0) {
+      existingByIndex.set(scene.index, scene)
+    }
+  }
+
+  return scenes.map((scene) => {
+    const matchedScene =
+      (typeof scene.id === "string" && scene.id.trim() ? existingById.get(scene.id) : undefined) ??
+      (typeof scene.index === "number" && Number.isInteger(scene.index) && scene.index >= 0
+        ? existingByIndex.get(scene.index)
+        : undefined)
+
+    if (!matchedScene) {
+      return {
+        ...scene,
+        reviewNote: scene.reviewNote ?? null,
+        reviewedAt: scene.reviewedAt ?? null,
+        keyframeReviewNote: scene.keyframeReviewNote ?? null,
+        keyframeReviewedAt: scene.keyframeReviewedAt ?? null,
+      }
+    }
+
+    return {
+      ...scene,
+      reviewStatus: matchedScene.reviewStatus ?? scene.reviewStatus,
+      keyframeStatus: matchedScene.keyframeStatus ?? scene.keyframeStatus,
+      reviewNote: matchedScene.reviewNote ?? scene.reviewNote ?? null,
+      reviewedAt: matchedScene.reviewedAt ?? scene.reviewedAt ?? null,
+      keyframeReviewNote: matchedScene.keyframeReviewNote ?? scene.keyframeReviewNote ?? null,
+      keyframeReviewedAt: matchedScene.keyframeReviewedAt ?? scene.keyframeReviewedAt ?? null,
+    }
+  })
+}
+
 export function buildStoryboardScenes(input: {
   script: string
   targetDurationSec: VideoDurationPreset
   maxSceneDurationSec?: number
   aspectRatio: string
-}): PlannedStoryboardScene[] {
+  existingScenes?: SceneReviewMetadataCarrier[]
+}): Array<PlannedStoryboardScene & SceneReviewMetadata> {
   const sceneCount = resolveSceneCountForDurationWithLimit(input.targetDurationSec, input.maxSceneDurationSec ?? 8)
   const durations = planSceneDurations(input.targetDurationSec, sceneCount)
   const units = splitScriptIntoUnits(input.script)
@@ -128,7 +188,7 @@ export function buildStoryboardScenes(input: {
 
   let cursorSec = 0
 
-  return buckets.map((bucket, index) => {
+  const scenes: Array<PlannedStoryboardScene & SceneReviewMetadata> = buckets.map((bucket, index) => {
     const sceneScript = normalizeScript(bucket.join(" ")) || normalizeScript(input.script)
     const durationSec = durations[index]
     const startLabel = formatTimestamp(cursorSec)
@@ -147,6 +207,12 @@ export function buildStoryboardScenes(input: {
       endLabel,
       reviewStatus: index === 0 ? "approved" : "pending",
       keyframeStatus: "pending",
+      reviewNote: null,
+      reviewedAt: null,
+      keyframeReviewNote: null,
+      keyframeReviewedAt: null,
     }
   })
+
+  return mergeSceneReviewMetadata(scenes, input.existingScenes)
 }

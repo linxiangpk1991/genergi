@@ -1,4 +1,5 @@
 import fs from "node:fs/promises"
+import path from "node:path"
 import { serve } from "@hono/node-server"
 import { zValidator } from "@hono/zod-validator"
 import { Hono, type Context } from "hono"
@@ -15,6 +16,8 @@ import {
 import {
   createTaskInputSchema,
   createUserInputSchema,
+  reviewDecisionBodySchema,
+  reviewDecisionInputSchema,
   readRuntimeStatus,
   resetUserPasswordInputSchema,
   updateRuntimeStatus,
@@ -22,7 +25,7 @@ import {
 } from "@genergi/shared"
 import { clearSession, getAuthStatus, getSessionUser, loginWithPassword, requireAuth } from "./lib/auth.js"
 import { enqueueTask } from "./lib/queue/enqueue.js"
-import { createTask, getTaskAsset, getTaskAssets, getTaskDetail, listTasks } from "./lib/task-store.js"
+import { applySceneReviewDecision, createTask, getTaskAsset, getTaskAssets, getTaskDetail, listTasks } from "./lib/task-store.js"
 import {
   createStoredUser,
   getEnvFallbackUser,
@@ -33,7 +36,7 @@ import {
   updateStoredUserPassword,
 } from "./lib/user-store.js"
 
-const app = new Hono()
+export const app = new Hono()
 app.use("*", cors())
 const loginSchema = z.object({
   username: z.string().min(1),
@@ -341,6 +344,17 @@ async function sendAssetFile(
   }
 }
 
+function getInlineFileMimeType(filePath: string) {
+  const extension = path.extname(filePath).toLowerCase()
+  if (extension === ".png") {
+    return "image/png"
+  }
+  if (extension === ".webp") {
+    return "image/webp"
+  }
+  return "image/jpeg"
+}
+
 app.get("/api/tasks/:taskId/assets/:assetId/download", async (c) => {
   const asset = await getTaskAsset(c.req.param("taskId"), c.req.param("assetId"))
   return sendAssetFile(c, asset, "attachment")
@@ -353,6 +367,103 @@ app.get("/api/tasks/:taskId/assets/:assetId/preview", async (c) => {
   }
 
   return sendAssetFile(c, asset, "inline")
+})
+
+app.post(
+  "/api/tasks/:taskId/reviews/storyboard_review/:sceneId",
+  requireAuth(),
+  zValidator("json", reviewDecisionBodySchema),
+  async (c) => {
+    const result = await applySceneReviewDecision(
+      c.req.param("taskId"),
+      {
+        ...c.req.valid("json"),
+        stage: "storyboard_review",
+        sceneId: c.req.param("sceneId"),
+      },
+    )
+
+    if (!result) {
+      const detail = await getTaskDetail(c.req.param("taskId"))
+      return c.json({ message: detail ? "SCENE_NOT_FOUND" : "TASK_NOT_FOUND" }, 404)
+    }
+
+    return c.json({
+      task: enrichSummary(result.summary),
+      detail: enrichDetail(result.detail),
+    })
+  },
+)
+
+app.post(
+  "/api/tasks/:taskId/reviews/keyframe_review/:sceneId",
+  requireAuth(),
+  zValidator("json", reviewDecisionBodySchema),
+  async (c) => {
+    const result = await applySceneReviewDecision(
+      c.req.param("taskId"),
+      {
+        ...c.req.valid("json"),
+        stage: "keyframe_review",
+        sceneId: c.req.param("sceneId"),
+      },
+    )
+
+    if (!result) {
+      const detail = await getTaskDetail(c.req.param("taskId"))
+      return c.json({ message: detail ? "SCENE_NOT_FOUND" : "TASK_NOT_FOUND" }, 404)
+    }
+
+    return c.json({
+      task: enrichSummary(result.summary),
+      detail: enrichDetail(result.detail),
+    })
+  },
+)
+
+app.get("/api/tasks/:taskId/keyframes/:sceneId/preview", async (c) => {
+  const taskId = c.req.param("taskId")
+  const sceneId = c.req.param("sceneId")
+  const assets = await getTaskAssets(taskId)
+  const keyframeAsset = assets.find((asset) => asset.assetType === "keyframe_bundle" && asset.exists) ?? null
+  if (!keyframeAsset) {
+    return c.json({ message: "KEYFRAME_BUNDLE_NOT_FOUND" }, 404)
+  }
+
+  if (keyframeAsset.isDirectory) {
+    return c.json({ message: "KEYFRAME_BUNDLE_INVALID", path: keyframeAsset.displayPath }, 409)
+  }
+
+  try {
+    const rawManifest = await fs.readFile(keyframeAsset.path, "utf8")
+    const manifest = JSON.parse(rawManifest) as {
+      frames?: Array<{ sceneId?: string; sceneIndex?: number; fileName?: string }>
+    }
+    const frame = manifest.frames?.find((item) => item.sceneId === sceneId) ?? null
+    if (!frame?.fileName) {
+      return c.json({ message: "KEYFRAME_FRAME_NOT_FOUND", sceneId }, 404)
+    }
+
+    const imagePath = path.join(path.dirname(keyframeAsset.path), frame.fileName)
+    const imageBytes = await fs.readFile(imagePath)
+    const extension = path.extname(frame.fileName).toLowerCase()
+    const mimeType =
+      extension === ".png"
+        ? "image/png"
+        : extension === ".webp"
+          ? "image/webp"
+          : "image/jpeg"
+    c.header("Content-Type", mimeType)
+    c.header("Cache-Control", "no-store")
+    return c.body(imageBytes)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "UNKNOWN_ERROR"
+    if (message.includes("ENOENT")) {
+      return c.json({ message: "KEYFRAME_IMAGE_FILE_NOT_FOUND", sceneId }, 404)
+    }
+
+    return c.json({ message: "KEYFRAME_PREVIEW_UNAVAILABLE", sceneId }, 409)
+  }
 })
 
 app.post("/api/tasks", async (c) => {
@@ -388,5 +499,7 @@ app.post("/api/tasks", async (c) => {
 })
 
 const port = Number(process.env.PORT || 8787)
-serve({ fetch: app.fetch, port })
-console.log(`GENERGI API listening on http://localhost:${port}`)
+if (process.env.NODE_ENV !== "test") {
+  serve({ fetch: app.fetch, port })
+  console.log(`GENERGI API listening on http://localhost:${port}`)
+}

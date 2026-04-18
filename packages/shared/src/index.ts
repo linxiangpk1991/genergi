@@ -36,6 +36,36 @@ export const reviewStageSchema = z.enum([
 ])
 export type ReviewStageId = z.infer<typeof reviewStageSchema>
 
+export const reviewDecisionStageSchema = z.enum([
+  reviewStageSchema.enum.storyboard_review,
+  reviewStageSchema.enum.keyframe_review,
+])
+export type ReviewDecisionStageId = z.infer<typeof reviewDecisionStageSchema>
+
+export const reviewDecisionStatusSchema = z.enum(["approved", "rejected"])
+export type ReviewDecisionStatus = z.infer<typeof reviewDecisionStatusSchema>
+
+export const reviewDecisionInputSchema = z.object({
+  stage: reviewDecisionStageSchema,
+  sceneId: z.string().min(1),
+  decision: reviewDecisionStatusSchema,
+  note: z.string().trim().min(1).optional(),
+})
+export type ReviewDecisionInput = z.infer<typeof reviewDecisionInputSchema>
+
+export const reviewDecisionBodySchema = z.object({
+  decision: reviewDecisionStatusSchema,
+  note: z.string().trim().min(1).optional(),
+})
+export type ReviewDecisionBody = z.infer<typeof reviewDecisionBodySchema>
+
+export const reviewSummarySchema = z.object({
+  reviewStage: reviewStageSchema.nullable().optional(),
+  pendingReviewCount: z.number().int().nonnegative().optional(),
+  reviewUpdatedAt: z.string().nullable().optional(),
+})
+export type ReviewSummary = z.infer<typeof reviewSummarySchema>
+
 export const modelRefSchema = z.object({
   id: z.string(),
   label: z.string(),
@@ -93,7 +123,7 @@ export const taskSummarySchema = z.object({
   estimatedCostCny: z.number().nonnegative(),
   createdAt: z.string(),
   updatedAt: z.string(),
-})
+}).extend(reviewSummarySchema.shape)
 export type TaskSummary = z.infer<typeof taskSummarySchema>
 
 export const storyboardSceneSchema = z.object({
@@ -108,6 +138,10 @@ export const storyboardSceneSchema = z.object({
   endLabel: z.string(),
   reviewStatus: z.enum(["pending", "approved", "rejected"]),
   keyframeStatus: z.enum(["pending", "approved", "rejected"]),
+  reviewNote: z.string().nullable().optional(),
+  reviewedAt: z.string().nullable().optional(),
+  keyframeReviewNote: z.string().nullable().optional(),
+  keyframeReviewedAt: z.string().nullable().optional(),
 })
 export type StoryboardScene = z.infer<typeof storyboardSceneSchema>
 
@@ -121,7 +155,7 @@ export const taskDetailSchema = z.object({
   actualDurationSec: z.number().positive().nullable().optional(),
   scenes: z.array(storyboardSceneSchema),
   updatedAt: z.string(),
-})
+}).extend(reviewSummarySchema.shape)
 export type TaskDetail = z.infer<typeof taskDetailSchema>
 
 export const assetRecordSchema = z.object({

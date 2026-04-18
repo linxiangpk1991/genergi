@@ -10,24 +10,14 @@ function formatCurrency(value: number) {
   return `¥${value.toFixed(2)}`
 }
 
-function getSceneCountHint(durationSec: number, maxSingleShotSec: number) {
-  return Math.max(1, Math.ceil(durationSec / Math.max(maxSingleShotSec, 1)))
-}
-
 function getPreferenceLabel(preference: GenerationPreferenceId) {
   return preference === "system_enhanced" ? "启用系统增强" : "忠于原脚本"
 }
 
 function getPreferenceSummary(preference: GenerationPreferenceId) {
   return preference === "system_enhanced"
-    ? "系统会在不偏离主题的前提下，自动补充更适合平台传播的导演式提示词。"
-    : "系统会尽量保留你的原始内容表达，只做最小必要的结构整理。"
-}
-
-function getPreferenceKeywords(preference: GenerationPreferenceId) {
-  return preference === "system_enhanced"
-    ? ["更强开头钩子", "更自然口播", "更适合平台传播", "更直接 CTA"]
-    : ["忠于原脚本", "保留内容母本", "最小必要结构化整理"]
+    ? "系统会保留主题方向，但主动把表达整理成更适合短视频传播的版本。"
+    : "系统会尽量保留你原始内容的表达方式，只做最小必要的整理。"
 }
 
 export function HomePage() {
@@ -42,6 +32,7 @@ export function HomePage() {
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState("")
+  const [tasksUpdatedAt, setTasksUpdatedAt] = useState<string>("")
 
   useEffect(() => {
     async function load() {
@@ -49,6 +40,7 @@ export function HomePage() {
         const [bootstrapRes, taskRes] = await Promise.all([api.bootstrap(), api.listTasks()])
         setBootstrap(bootstrapRes)
         setTasks(taskRes.tasks)
+        setTasksUpdatedAt(new Date().toLocaleTimeString("zh-CN"))
         setTargetDurationSec(bootstrapRes.durationOptions[1] ?? bootstrapRes.durationOptions[0] ?? 30)
         setGenerationPreference(bootstrapRes.generationPreferences[0]?.id ?? "user_locked")
       } catch (err) {
@@ -61,7 +53,12 @@ export function HomePage() {
     void load()
 
     const timer = window.setInterval(() => {
-      void api.listTasks().then((taskRes) => setTasks(taskRes.tasks)).catch(() => {})
+      void api.listTasks()
+        .then((taskRes) => {
+          setTasks(taskRes.tasks)
+          setTasksUpdatedAt(new Date().toLocaleTimeString("zh-CN"))
+        })
+        .catch(() => {})
     }, 5000)
 
     return () => window.clearInterval(timer)
@@ -72,16 +69,22 @@ export function HomePage() {
     [bootstrap, modeId],
   )
 
-  const selectedDuration = useMemo(() => targetDurationSec, [targetDurationSec])
-  const planningKeywords = getPreferenceKeywords(generationPreference)
-  const planningSummary = getPreferenceSummary(generationPreference)
-  const currentModeCapability = selectedMode?.maxSingleShotSec ?? 8
-  const sceneCountHint = getSceneCountHint(selectedDuration, currentModeCapability)
-  const routePreview = selectedDuration <= currentModeCapability ? "单段直出" : "多分镜编排"
+  const routePreview = targetDurationSec <= (selectedMode?.maxSingleShotSec ?? 8) ? "单条成片" : "多段成片"
   const routePreviewDetail =
-    selectedDuration <= currentModeCapability
-      ? `当前模型支持 ${currentModeCapability}s 单段输出，可优先尝试一条过。`
-      : `当前模型单段最长约 ${currentModeCapability}s，系统将自动按多分镜规划。`
+    routePreview === "单条成片"
+      ? "这次内容会优先保持一条完整表达，减少切换感。"
+      : "这次内容会按多段组织后再合成为完整成片，优先保证表达稳定。"
+  const planningSummary = getPreferenceSummary(generationPreference)
+  const taskStatusSummary = useMemo(() => {
+    const runningCount = tasks.filter((task) => task.status === "running").length
+    const completedCount = tasks.filter((task) => task.status === "completed").length
+    const failedCount = tasks.filter((task) => task.status === "failed").length
+    return { runningCount, completedCount, failedCount }
+  }, [tasks])
+  const recentTasks = useMemo(
+    () => [...tasks].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)).slice(0, 3),
+    [tasks],
+  )
 
   async function handleCreateTask() {
     if (!title.trim() || !script.trim()) {
@@ -121,11 +124,13 @@ export function HomePage() {
         <div>
           <div className="eyebrow">GENERGI Command Center</div>
           <h1>新建生产任务</h1>
-          <p>先写内容母本，再由系统按总时长与生成方式自动补全分镜和提示词。</p>
+          <p>先把想表达的内容写清楚，系统会负责把它整理成可执行的脚本、画面和成片链路。</p>
         </div>
         <div className="topbar-actions">
           <span className="pill">内容优先</span>
-          <span className="pill pill--accent">English Output</span>
+          <span className="pill pill--accent">
+            {channelId === "tiktok" ? "TikTok" : channelId === "instagram_reels" ? "Instagram Reels" : "YouTube Shorts"}
+          </span>
         </div>
       </header>
 
@@ -134,7 +139,7 @@ export function HomePage() {
       <div className="workspace-grid">
         <section className="card card--main">
           <h2>内容母本配置</h2>
-          <p className="section-note">用户只需要描述视频想表达什么，系统会负责把它翻译成可生成的脚本、分镜与提示词。</p>
+          <p className="section-note">你只需要描述这条视频想讲什么、想给人什么感觉、最后希望用户做什么，系统会完成后续生产规划。</p>
 
           <label className="field-label">任务名称</label>
           <input
@@ -149,9 +154,10 @@ export function HomePage() {
             className="textarea"
             value={script}
             onChange={(e) => setScript(e.target.value)}
-            placeholder="把你想表达的核心信息、产品素材、情绪节奏和转化意图直接写在这里，系统会自动补全导演式提示词。"
+            placeholder="直接写你要表达的内容、卖点、情绪和转化目标，不需要手动写技术提示词。"
           />
 
+          <label className="field-label">生成方式</label>
           <div className="generation-grid">
             {(bootstrap?.generationPreferences ?? []).map((option) => (
               <button
@@ -176,19 +182,34 @@ export function HomePage() {
                 type="button"
               >
                 <div className="mode-title">{duration}s</div>
-                <div className="mode-description">系统会据此预判分镜数量与提示词长度</div>
+                <div className="mode-description">用于控制最终成片节奏与信息密度</div>
+              </button>
+            ))}
+          </div>
+
+          <label className="field-label">目标渠道</label>
+          <div className="channel-list">
+            {bootstrap?.channels.map((channel) => (
+              <button
+                key={channel.id}
+                className={channelId === channel.id ? "channel-card channel-card--active" : "channel-card"}
+                onClick={() => setChannelId(channel.id)}
+                type="button"
+              >
+                <strong>{channel.label}</strong>
+                <span>{channel.description}</span>
               </button>
             ))}
           </div>
 
           <div className="planning-strip">
             <div className="planning-chip">
-              <span className="planning-chip__label">系统预判</span>
+              <span className="planning-chip__label">成片组织方式</span>
               <strong>{routePreview}</strong>
               <span>{routePreviewDetail}</span>
             </div>
             <div className="planning-chip">
-              <span className="planning-chip__label">内容策略</span>
+              <span className="planning-chip__label">内容处理方式</span>
               <strong>{getPreferenceLabel(generationPreference)}</strong>
               <span>{planningSummary}</span>
             </div>
@@ -197,50 +218,40 @@ export function HomePage() {
 
         <aside className="side-panel">
           <section className="card card--compact">
-            <h3>执行摘要预估</h3>
-            <div className="metric-row"><span>目标正片长度</span><strong>{selectedDuration}s</strong></div>
-            <div className="metric-row"><span>预判分镜数</span><strong>{sceneCountHint} scenes</strong></div>
-            <div className="metric-row"><span>提示词策略</span><strong>{getPreferenceLabel(generationPreference)}</strong></div>
-            <div className="metric-row metric-row--stacked">
-              <span>关键词包</span>
-              <div className="keyword-list">
-                {planningKeywords.map((keyword) => (
-                  <span key={keyword} className="keyword-pill">
-                    {keyword}
-                  </span>
-                ))}
-              </div>
-            </div>
-            <div className="progress-track"><div className="progress-fill" style={{ width: `${selectedMode?.budgetLimitCny ? 85 : 55}%` }} /></div>
-            <div className="muted">今日预算消耗警告 85%</div>
+            <h3>本次任务摘要</h3>
+            <div className="metric-row"><span>目标正片长度</span><strong>{targetDurationSec}s</strong></div>
+            <div className="metric-row"><span>生成方式</span><strong>{getPreferenceLabel(generationPreference)}</strong></div>
+            <div className="metric-row"><span>目标渠道</span><strong>{bootstrap?.channels.find((channel) => channel.id === channelId)?.label ?? channelId}</strong></div>
+            <div className="metric-row"><span>成片组织</span><strong>{routePreview}</strong></div>
+            <div className="metric-row"><span>模式预算上限</span><strong>{formatCurrency(selectedMode?.budgetLimitCny ?? 0)}</strong></div>
+            <div className="muted">{planningSummary}</div>
           </section>
 
           <section className="card card--compact">
-            <h3>目标分发渠道</h3>
-            <div className="channel-list">
-              {bootstrap?.channels.map((channel) => (
-                <button
-                  key={channel.id}
-                  className={channelId === channel.id ? "channel-card channel-card--active" : "channel-card"}
-                  onClick={() => setChannelId(channel.id)}
-                  type="button"
-                >
-                  <strong>{channel.label}</strong>
-                  <span>{channel.description}</span>
-                </button>
-              ))}
+            <h3>系统会自动完成</h3>
+            <div className="task-list compact-list">
+              <div className="task-item"><strong>脚本整理</strong><span>把内容母本整理成可直接配音的英文脚本</span></div>
+              <div className="task-item"><strong>画面规划</strong><span>生成分镜、关键帧方向和视频提示</span></div>
+              <div className="task-item"><strong>交付对齐</strong><span>尽量把字幕、语音、视频和最终成片对齐</span></div>
             </div>
           </section>
 
           <section className="card card--compact">
             <h3>最近活动</h3>
+            <div className="planning-summary-tags" style={{ marginBottom: 10 }}>
+              <span className="pill pill--sm">运行中 {taskStatusSummary.runningCount}</span>
+              <span className="pill pill--sm">已完成 {taskStatusSummary.completedCount}</span>
+              {taskStatusSummary.failedCount ? <span className="pill pill--sm">异常 {taskStatusSummary.failedCount}</span> : null}
+            </div>
+            <div className="muted" style={{ marginBottom: 10 }}>
+              最近刷新：{tasksUpdatedAt || "刚刚进入页面"}
+            </div>
             <div className="task-list compact-list">
-              {tasks.slice(0, 3).map((task) => (
+              {recentTasks.map((task) => (
                 <div key={task.id} className="task-item">
                   <strong>{task.title}</strong>
                   <span>
-                    {task.planning?.generationRouteLabel ?? "待预判"} · {task.targetDurationSec}s ·{" "}
-                    {task.planning?.generationPreferenceLabel ?? "待接入"}
+                    {task.targetDurationSec}s · {task.status} · {task.actualDurationSec ? `实际 ${task.actualDurationSec.toFixed(1)}s` : "生成中"}
                   </span>
                 </div>
               ))}
@@ -251,28 +262,32 @@ export function HomePage() {
 
       <section className="card card--advanced">
         <div className="section-header">
-          <h2>提示词说明</h2>
-          <button className="ghost-button" type="button">
-            重置默认
-          </button>
+          <h2>生成前提醒</h2>
         </div>
         <div className="planning-notes">
           <div className="planning-note-card">
-            <strong>内容优先</strong>
-            <span>用户脚本是整条视频的内容母本，后续分镜、关键帧和视频提示词都从这里展开。</span>
+            <strong>先把内容写清楚</strong>
+            <span>不要写技术提示词，直接写视频想表达的内容、情绪和转化目标就够了。</span>
           </div>
           <div className="planning-note-card">
-            <strong>系统自动补全</strong>
-            <span>系统会把时长、生成方式和内容策略一起转成文本模型可用的规划约束。</span>
+            <strong>系统会负责生产规划</strong>
+            <span>系统会在后台决定怎么组织脚本、画面和最终成片，不需要你手动拆分镜。</span>
           </div>
-        <div className="planning-note-card">
-          <strong>系统先规划</strong>
-          <span>渲染前会先根据时长、生成方式和模型能力决定单段或多分镜，再把约束交给文本模型规划。</span>
+          <div className="planning-note-card">
+            <strong>结果仍要回看</strong>
+            <span>创建后可以在分镜、关键帧和资产页继续确认内容是否连贯、时长是否达标。</span>
+          </div>
         </div>
-      </div>
         <div className="action-row">
-          <button className="ghost-button" type="button">
-            保存草稿
+          <button
+            className="ghost-button"
+            onClick={() => {
+              setTitle("")
+              setScript("")
+            }}
+            type="button"
+          >
+            清空输入
           </button>
           <button className="primary-button" disabled={submitting} onClick={handleCreateTask} type="button">
             {submitting ? "创建中..." : "启动渲染队列"}

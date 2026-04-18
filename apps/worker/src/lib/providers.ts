@@ -6,6 +6,7 @@ import axios from "axios"
 
 import {
   buildStoryboardScenes,
+  mergeSceneReviewMetadata,
   planningSceneSchema,
   resolveSceneCountForDurationWithLimit,
   textPlanningOutputSchema,
@@ -690,6 +691,7 @@ function alignDetailScenes(detail: TaskDetail, script: string): TaskDetail {
       targetDurationSec: detail.taskRunConfig.targetDurationSec ?? 30,
       maxSceneDurationSec: resolveVideoModelCapability(detail.taskRunConfig.videoDraftModel.id).maxSingleShotSec,
       aspectRatio: detail.taskRunConfig.aspectRatio,
+      existingScenes: detail.scenes,
     }),
     updatedAt: new Date().toISOString(),
   }
@@ -833,7 +835,7 @@ export async function rewriteTaskWithTextProvider(detail: TaskDetail): Promise<T
   try {
     const planned = (await requestStructuredPlanning(detail)) ?? buildPlanningFallback(detail)
     const normalizedRewrite = normalizeRewriteToVoiceoverScript(planned.finalVoiceoverScript, detail.taskRunConfig.targetDurationSec ?? 30)
-    const scenes = planned.scenePlan.map((scene, index) => ({
+    const scenes: StoryboardScene[] = planned.scenePlan.map((scene, index) => ({
       id: `scene_${index + 1}`,
       index,
       title: scene.scenePurpose,
@@ -841,19 +843,26 @@ export async function rewriteTaskWithTextProvider(detail: TaskDetail): Promise<T
       imagePrompt: scene.imagePrompt,
       videoPrompt: scene.videoPrompt,
       durationSec: scene.durationSec,
-      startLabel: detail.scenes[index]?.startLabel ?? "00:00",
-      endLabel: detail.scenes[index]?.endLabel ?? "00:00",
-      reviewStatus: detail.scenes[index]?.reviewStatus ?? (index === 0 ? "approved" : "pending"),
-      keyframeStatus: detail.scenes[index]?.keyframeStatus ?? "pending",
+      startLabel: "00:00",
+      endLabel: "00:00",
+      reviewStatus: index === 0 ? "approved" : "pending",
+      reviewNote: null,
+      reviewedAt: null,
+      keyframeStatus: "pending",
+      keyframeReviewNote: null,
+      keyframeReviewedAt: null,
     }))
 
     let cursorSec = 0
-    const normalizedScenes = scenes.map((scene) => {
-      const startLabel = `${String(Math.floor(cursorSec / 60)).padStart(2, "0")}:${String(cursorSec % 60).padStart(2, "0")}`
-      cursorSec += scene.durationSec
-      const endLabel = `${String(Math.floor(cursorSec / 60)).padStart(2, "0")}:${String(cursorSec % 60).padStart(2, "0")}`
-      return { ...scene, startLabel, endLabel }
-    })
+    const normalizedScenes = mergeSceneReviewMetadata(
+      scenes.map((scene) => {
+        const startLabel = `${String(Math.floor(cursorSec / 60)).padStart(2, "0")}:${String(cursorSec % 60).padStart(2, "0")}`
+        cursorSec += scene.durationSec
+        const endLabel = `${String(Math.floor(cursorSec / 60)).padStart(2, "0")}:${String(cursorSec % 60).padStart(2, "0")}`
+        return { ...scene, startLabel, endLabel }
+      }),
+      detail.scenes,
+    )
 
     return {
       ...detail,

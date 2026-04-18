@@ -1,6 +1,14 @@
 import { Queue, Worker } from "bullmq"
 import { Redis } from "ioredis"
-import { TASK_QUEUE_NAME, readTaskDetail, updateRuntimeStatus, updateTaskSummary, upsertTaskAssets, upsertTaskDetail } from "@genergi/shared"
+import {
+  TASK_QUEUE_NAME,
+  mergeSceneReviewMetadata,
+  readTaskDetail,
+  updateRuntimeStatus,
+  updateTaskSummary,
+  upsertTaskAssets,
+  upsertTaskDetail,
+} from "@genergi/shared"
 import type { AssetRecord, TaskSummary } from "@genergi/shared"
 import {
   buildFinalVideoWithNarration,
@@ -48,7 +56,19 @@ async function writeTaskArtifacts(taskId: string) {
     throw new Error(`Task detail not found for ${taskId}`)
   }
 
-  const preparedDetail = await rewriteTaskWithTextProvider(detail)
+  const mergeLatestReviewMetadata = async <TDetail extends typeof detail>(detailToPersist: TDetail): Promise<TDetail> => {
+    const latestDetail = await readTaskDetail(taskId)
+    if (!latestDetail) {
+      return detailToPersist
+    }
+
+    return {
+      ...detailToPersist,
+      scenes: mergeSceneReviewMetadata(detailToPersist.scenes, latestDetail.scenes),
+    }
+  }
+
+  const preparedDetail = await mergeLatestReviewMetadata(await rewriteTaskWithTextProvider(detail))
   await upsertTaskDetail(preparedDetail)
   await writeWorkerHeartbeat(`Preparing source files for ${taskId}`)
   const taskDir = await writeTaskSourceFiles(preparedDetail)
@@ -93,10 +113,12 @@ async function writeTaskArtifacts(taskId: string) {
     narrationPath: narration.audioPath,
     targetDurationSec: preparedDetail.taskRunConfig.targetDurationSec,
   })
-  await upsertTaskDetail({
-    ...preparedDetail,
-    actualDurationSec: finalVideo.actualDurationSec,
-  })
+  await upsertTaskDetail(
+    await mergeLatestReviewMetadata({
+      ...preparedDetail,
+      actualDurationSec: finalVideo.actualDurationSec,
+    }),
+  )
   await updateTaskSummary(taskId, (task: TaskSummary) => ({
     ...task,
     actualDurationSec: finalVideo.actualDurationSec,

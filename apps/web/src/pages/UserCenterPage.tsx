@@ -29,6 +29,9 @@ export function UserCenterPage() {
   const [resetSaving, setResetSaving] = useState(false)
   const [resetError, setResetError] = useState("")
   const [actionUserId, setActionUserId] = useState<string | null>(null)
+  const [searchQuery, setSearchQuery] = useState("")
+  const [statusFilter, setStatusFilter] = useState<"all" | UserStatus>("all")
+  const [copiedUserId, setCopiedUserId] = useState<string | null>(null)
 
   async function loadUsers() {
     setLoading(true)
@@ -47,7 +50,24 @@ export function UserCenterPage() {
     void loadUsers()
   }, [])
 
+  const filteredUsers = useMemo(() => {
+    return users.filter((user) => {
+      if (statusFilter !== "all" && user.status !== statusFilter) {
+        return false
+      }
+
+      if (!searchQuery.trim()) {
+        return true
+      }
+
+      const keyword = searchQuery.trim().toLowerCase()
+      return [user.id, user.username, user.displayName].some((value) => value.toLowerCase().includes(keyword))
+    })
+  }, [searchQuery, statusFilter, users])
+
   const userCount = useMemo(() => users.length, [users])
+  const activeCount = useMemo(() => users.filter((user) => user.status === "active").length, [users])
+  const disabledCount = useMemo(() => users.filter((user) => user.status === "disabled").length, [users])
 
   function openCreateForm() {
     setFormMode("create")
@@ -173,6 +193,16 @@ export function UserCenterPage() {
     }
   }
 
+  async function handleCopyUserId(userId: string) {
+    try {
+      await navigator.clipboard.writeText(userId)
+      setCopiedUserId(userId)
+      window.setTimeout(() => setCopiedUserId((current) => (current === userId ? null : current)), 1200)
+    } catch {
+      setError("复制用户 ID 失败")
+    }
+  }
+
   return (
     <div className="workspace-page user-center-page">
       <div className="topbar">
@@ -192,16 +222,53 @@ export function UserCenterPage() {
 
       <section className="card">
         <div className="section-header">
-          <h2>用户列表</h2>
+          <h2>用户概览</h2>
           <button className="ghost-button" onClick={() => void loadUsers()} type="button">
             刷新列表
           </button>
         </div>
 
+        <div className="asset-metrics">
+          <div className="asset-metric-card">
+            <div className="metric-label">总账号数</div>
+            <strong className="metric-value">{userCount}</strong>
+          </div>
+          <div className="asset-metric-card">
+            <div className="metric-label">启用中</div>
+            <strong className="metric-value">{activeCount}</strong>
+          </div>
+          <div className="asset-metric-card">
+            <div className="metric-label">已停用</div>
+            <strong className="metric-value">{disabledCount}</strong>
+          </div>
+          <div className="asset-metric-card">
+            <div className="metric-label">当前筛选结果</div>
+            <strong className="metric-value">{filteredUsers.length}</strong>
+          </div>
+        </div>
+
+        <div className="user-toolbar">
+          <input
+            className="input"
+            value={searchQuery}
+            onChange={(event) => setSearchQuery(event.target.value)}
+            placeholder="搜索 ID、账号或昵称"
+          />
+          <select
+            className="input"
+            value={statusFilter}
+            onChange={(event) => setStatusFilter(event.target.value as "all" | UserStatus)}
+          >
+            <option value="all">全部状态</option>
+            <option value="active">仅看启用中</option>
+            <option value="disabled">仅看已停用</option>
+          </select>
+        </div>
+
         {loading ? (
           <div className="empty-state">正在加载用户列表...</div>
-        ) : users.length === 0 ? (
-          <div className="empty-state">当前没有用户，先新建一个账号吧。</div>
+        ) : filteredUsers.length === 0 ? (
+          <div className="empty-state">当前筛选条件下没有用户。</div>
         ) : (
           <div className="table-wrap">
             <table className="user-table">
@@ -215,9 +282,16 @@ export function UserCenterPage() {
                 </tr>
               </thead>
               <tbody>
-                {users.map((user) => (
+                {filteredUsers.map((user) => (
                   <tr key={user.id}>
-                    <td className="mono-truncate" title={user.id}>{user.id}</td>
+                    <td>
+                      <div className="user-id-cell">
+                        <span className="mono-truncate mono-truncate--wide" title={user.id}>{user.id}</span>
+                        <button className="ghost-button ghost-button--compact" onClick={() => void handleCopyUserId(user.id)} type="button">
+                          {copiedUserId === user.id ? "已复制" : "复制"}
+                        </button>
+                      </div>
+                    </td>
                     <td>{user.username}</td>
                     <td>{user.displayName}</td>
                     <td>
@@ -227,7 +301,7 @@ export function UserCenterPage() {
                     </td>
                     <td>
                       <div className="row-actions">
-                        <button className="ghost-button" onClick={() => openEditForm(user)} type="button">
+                        <button className="secondary-button" onClick={() => openEditForm(user)} type="button">
                           编辑
                         </button>
                         <button
