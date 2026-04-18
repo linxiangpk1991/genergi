@@ -1,6 +1,18 @@
-import { describe, expect, it } from "vitest"
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import os from "node:os"
+import path from "node:path"
+import { afterEach, describe, expect, it } from "vitest"
 
 describe("worker provider helpers", () => {
+  let tempDir = ""
+
+  afterEach(async () => {
+    if (tempDir) {
+      await rm(tempDir, { recursive: true, force: true })
+      tempDir = ""
+    }
+  })
+
   it("constrains rewritten text into a plain voiceover script for a 15 second target", async () => {
     const providers = await import("../../../apps/worker/src/lib/providers")
 
@@ -77,5 +89,58 @@ Here's the thing. In Chinese destiny analysis, there's a pattern called "late bl
     expect(enhanced).not.toContain("A wooden desk is messy with cables everywhere")
     expect(enhanced.toLowerCase()).toContain("upgrade")
     expect(enhanced.split(/\s+/).length).toBeLessThanOrEqual(33)
+  })
+
+  it("creates fallback keyframes for all scenes when image generation fails", async () => {
+    const providers = await import("../../../apps/worker/src/lib/providers")
+
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "genergi-fallback-keyframes-"))
+    process.env.GENERGI_DATA_DIR = tempDir
+
+    const sceneVideos = [
+      {
+        sceneId: "scene_1",
+        sceneIndex: 0,
+        durationSec: 8,
+        videoPath: path.join(tempDir, "scene-1.mp4"),
+      },
+      {
+        sceneId: "scene_2",
+        sceneIndex: 1,
+        durationSec: 7,
+        videoPath: path.join(tempDir, "scene-2.mp4"),
+      },
+    ]
+
+    const scenes = [
+      { id: "scene_1", index: 0, title: "Scene 1" },
+      { id: "scene_2", index: 1, title: "Scene 2" },
+    ]
+
+    await writeFile(sceneVideos[0].videoPath, "video-1", "utf8")
+    await writeFile(sceneVideos[1].videoPath, "video-2", "utf8")
+
+    const result = await providers.createFallbackKeyframeBundleFromVideos(
+      {
+        taskId: "task_fallback_multi",
+        scenes,
+        sceneVideos,
+      },
+      {
+        extractor: async ({ outputPath }) => {
+          await writeFile(outputPath, "frame", "utf8")
+        },
+      },
+    )
+
+    expect(result.frameCount).toBe(2)
+    const manifest = JSON.parse(await readFile(result.manifestPath, "utf8")) as {
+      sceneCount: number
+      frames: Array<{ sceneIndex: number; derivedFrom: string }>
+    }
+    expect(manifest.sceneCount).toBe(2)
+    expect(manifest.frames).toHaveLength(2)
+    expect(manifest.frames[0].sceneIndex).toBe(0)
+    expect(manifest.frames[1].sceneIndex).toBe(1)
   })
 })

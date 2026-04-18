@@ -1130,6 +1130,68 @@ export async function createFallbackKeyframeBundleFromVideo(input: {
   }
 }
 
+export async function createFallbackKeyframeBundleFromVideos(
+  input: {
+    taskId: string
+    scenes: Array<Pick<StoryboardScene, "id" | "index" | "title">>
+    sceneVideos: Array<{
+      sceneId: string
+      sceneIndex: number
+      videoPath: string
+    }>
+  },
+  options: {
+    extractor?: typeof extractKeyframeFromVideo
+  } = {},
+) {
+  const dir = ensureTaskDir(input.taskId)
+  const keyframeDir = path.join(dir, "keyframes")
+  mkdirSync(keyframeDir, { recursive: true })
+  const extractor = options.extractor ?? extractKeyframeFromVideo
+
+  const frames = []
+
+  for (const sceneVideo of input.sceneVideos) {
+    const scene = input.scenes.find((item) => item.id === sceneVideo.sceneId || item.index === sceneVideo.sceneIndex)
+    if (!scene) {
+      continue
+    }
+
+    const fileName = `scene-${String(scene.index + 1).padStart(2, "0")}.jpg`
+    const filePath = path.join(keyframeDir, fileName)
+    await extractor({
+      videoPath: sceneVideo.videoPath,
+      outputPath: filePath,
+      timeSeconds: 0.2,
+    })
+
+    frames.push({
+      sceneId: scene.id,
+      sceneIndex: scene.index,
+      title: scene.title,
+      fileName,
+      filePath,
+      derivedFrom: sceneVideo.videoPath,
+    })
+  }
+
+  const manifestPath = path.join(keyframeDir, "manifest.json")
+  const manifest = {
+    taskId: input.taskId,
+    createdAt: new Date().toISOString(),
+    source: "video-fallback",
+    sceneCount: frames.length,
+    frames,
+  }
+  writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), "utf8")
+
+  return {
+    keyframeDir,
+    manifestPath,
+    frameCount: frames.length,
+  }
+}
+
 export async function buildFinalVideoWithNarration(input: {
   taskId: string
   sourceVideoPaths: string[]

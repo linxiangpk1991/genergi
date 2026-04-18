@@ -4,7 +4,7 @@ import { TASK_QUEUE_NAME, readTaskDetail, updateRuntimeStatus, updateTaskSummary
 import type { AssetRecord, TaskSummary } from "@genergi/shared"
 import {
   buildFinalVideoWithNarration,
-  createFallbackKeyframeBundleFromVideo,
+  createFallbackKeyframeBundleFromVideos,
   createKeyframeBundle,
   createSceneVideoBundle,
   rewriteTaskWithTextProvider,
@@ -80,10 +80,10 @@ async function writeTaskArtifacts(taskId: string) {
   } catch (error) {
     console.warn(`[worker] ${taskId} image keyframe generation failed, fallback to video frame:`, error instanceof Error ? error.message : String(error))
     await writeWorkerHeartbeat(`Falling back to video-derived keyframe for ${taskId}`, "degraded")
-    keyframes = await createFallbackKeyframeBundleFromVideo({
+    keyframes = await createFallbackKeyframeBundleFromVideos({
       taskId,
-      scene: firstScene,
-      videoPath: sceneVideos[0].videoPath,
+      scenes: preparedDetail.scenes,
+      sceneVideos,
     })
   }
   await writeWorkerHeartbeat(`Muxing final video for ${taskId}`)
