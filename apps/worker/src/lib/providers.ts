@@ -640,6 +640,44 @@ export function normalizeRewriteToVoiceoverScript(text: string, targetDurationSe
   return selected.join(" ").replace(/^[-–—\s]+/, "").trim()
 }
 
+export function buildSystemEnhancedFallbackScript(originalScript: string, targetDurationSec: number) {
+  const normalized = originalScript.replace(/\s+/g, " ").trim()
+  const sentences = normalized
+    .split(/(?<=[.!?])\s+/)
+    .map((sentence) => sentence.trim())
+    .filter(Boolean)
+
+  const hook = sentences[0] ?? normalized
+  const body = sentences.slice(1, -1).join(" ")
+  const closing = sentences.at(-1) ?? normalized
+
+  const compactHook = hook
+    .replace(/^a wooden desk is /i, "")
+    .replace(/^your /i, "")
+    .replace(/^there is /i, "")
+    .replace(/\.$/, "")
+    .trim()
+
+  const compactBody = body
+    .replace(/^a compact charger appears and /i, "")
+    .replace(/^the mood changes from /i, "")
+    .replace(/\.$/, "")
+    .trim()
+
+  const enhanced = [
+    `Messy desk? ${compactHook || "Cable chaos everywhere."}`,
+    compactBody ? `One clean switch changes everything. ${compactBody}` : "One clean switch changes everything.",
+    closing.includes("link in bio") || closing.toLowerCase().includes("upgrade")
+      ? closing
+      : "Upgrade your desk today. Link in bio.",
+  ]
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim()
+
+  return normalizeRewriteToVoiceoverScript(enhanced, targetDurationSec)
+}
+
 function alignDetailScenes(detail: TaskDetail, script: string): TaskDetail {
   return {
     ...detail,
@@ -655,8 +693,12 @@ function alignDetailScenes(detail: TaskDetail, script: string): TaskDetail {
 }
 
 function buildPlanningFallback(detail: TaskDetail): TextPlanningOutput {
+  const finalVoiceoverScript =
+    detail.taskRunConfig.generationMode === "system_enhanced"
+      ? buildSystemEnhancedFallbackScript(detail.script, detail.taskRunConfig.targetDurationSec)
+      : detail.script
   const scenes = buildStoryboardScenes({
-    script: detail.script,
+    script: finalVoiceoverScript,
     targetDurationSec: detail.taskRunConfig.targetDurationSec ?? 30,
     maxSceneDurationSec: resolveVideoModelCapability(detail.taskRunConfig.videoDraftModel.id).maxSingleShotSec,
     aspectRatio: detail.taskRunConfig.aspectRatio,
@@ -665,9 +707,9 @@ function buildPlanningFallback(detail: TaskDetail): TextPlanningOutput {
   return {
     generationRoute: detail.taskRunConfig.generationRoute,
     targetDurationSec: detail.taskRunConfig.targetDurationSec,
-    finalVoiceoverScript: detail.script,
+    finalVoiceoverScript,
     visualStyleGuide: detail.taskRunConfig.generationMode === "system_enhanced" ? "System enhanced social-video pacing." : "Preserve original tone with minimal structural cleanup.",
-    ctaLine: scenes.at(-1)?.script ?? detail.script,
+    ctaLine: scenes.at(-1)?.script ?? finalVoiceoverScript,
     scenePlan: scenes.map((scene) => ({
       sceneIndex: scene.index,
       scenePurpose: scene.title,

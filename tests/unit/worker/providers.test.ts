@@ -65,4 +65,17 @@ Here's the thing. In Chinese destiny analysis, there's a pattern called "late bl
 
     expect(providers.resolveTtsRateForTargetDuration(20, 15, 0)).toBeGreaterThan(0)
   })
+
+  it("builds a distinct fallback script for system-enhanced mode when structured planning fails", async () => {
+    const providers = await import("../../../apps/worker/src/lib/providers")
+
+    const enhanced = providers.buildSystemEnhancedFallbackScript(
+      "A wooden desk is messy with cables everywhere. A compact charger appears and instantly organizes the setup. The mood changes from stressed to calm. End by inviting viewers to upgrade their desk today.",
+      15,
+    )
+
+    expect(enhanced).not.toContain("A wooden desk is messy with cables everywhere")
+    expect(enhanced.toLowerCase()).toContain("upgrade")
+    expect(enhanced.split(/\s+/).length).toBeLessThanOrEqual(33)
+  })
 })
