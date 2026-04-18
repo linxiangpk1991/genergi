@@ -652,24 +652,28 @@ export function buildSystemEnhancedFallbackScript(originalScript: string, target
   const third = sentences[2] ?? ""
   const closing = sentences.at(-1) ?? normalized
 
-  const hookLine = /messy|clutter|chaos|cables/i.test(hook)
-    ? "Messy desk. Cables everywhere."
+  const hasDeskChaos = /messy|clutter|chaos|cables/i.test(normalized)
+  const hasProductReveal = /charger|organize|setup/i.test(normalized)
+  const hasRelief = /stress|calm|clean/i.test(normalized)
+  const hasUpgrade = /upgrade|link in bio|shop|grab/i.test(normalized)
+
+  const hookLine = hasDeskChaos
+    ? "Messy desk? Cables everywhere."
     : hook.replace(/\.$/, "").trim()
 
-  const transformationLine = /charger|organize|setup/i.test(second)
-    ? "One compact charger clears the whole setup fast."
+  const revealLine = hasProductReveal
+    ? "One compact charger clears the setup fast."
     : second || "One clean switch changes everything."
 
-  const payoffLine = /stress|calm/i.test(third)
-    ? "Stress out. Calm in."
+  const payoffLine = hasRelief
+    ? "Clean desk. Clear head."
     : third || "Clean setup. Instant relief."
 
-  const ctaLine =
-    closing.toLowerCase().includes("link in bio") || closing.toLowerCase().includes("upgrade")
-      ? closing
-      : "Upgrade your desk today. Link in bio."
+  const ctaLine = hasUpgrade
+    ? "Upgrade your desk today."
+    : "Upgrade your desk today. Link in bio."
 
-  const enhanced = [hookLine, transformationLine, payoffLine, ctaLine]
+  const enhanced = [hookLine, revealLine, payoffLine, ctaLine]
     .join(" ")
     .replace(/\s+/g, " ")
     .trim()
