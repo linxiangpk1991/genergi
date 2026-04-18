@@ -293,6 +293,16 @@ export async function upsertTaskDetail(detail: TaskDetail) {
   await writeTaskDetails(details)
 }
 
+export async function deleteTaskDetail(taskId: string) {
+  const details = await readTaskDetails()
+  if (!(taskId in details)) {
+    return
+  }
+
+  delete details[taskId]
+  await writeTaskDetails(details)
+}
+
 export async function readTaskDetail(taskId: string) {
   const details = await readTaskDetails()
   return details[taskId] ?? null
@@ -389,6 +399,16 @@ export async function readAssetRecords(): Promise<Record<string, AssetRecord[]>>
 export async function upsertTaskAssets(taskId: string, assets: AssetRecord[]) {
   const records = await readAssetRecords()
   records[taskId] = assets
+  await writeAssetRecords(records)
+}
+
+export async function deleteTaskAssets(taskId: string) {
+  const records = await readAssetRecords()
+  if (!(taskId in records)) {
+    return
+  }
+
+  delete records[taskId]
   await writeAssetRecords(records)
 }
 

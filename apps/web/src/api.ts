@@ -132,6 +132,19 @@ export type TaskSummary = {
   planning?: TaskPlanningSnapshot
 }
 
+function buildWorkspaceUrl(pathname: string, params: Record<string, string | undefined>) {
+  const searchParams = new URLSearchParams()
+
+  Object.entries(params).forEach(([key, value]) => {
+    if (value) {
+      searchParams.set(key, value)
+    }
+  })
+
+  const search = searchParams.toString()
+  return search ? `${pathname}?${search}` : pathname
+}
+
 export type StoryboardScene = {
   id: string
   index: number
@@ -215,6 +228,34 @@ export function buildAssetPreviewUrl(taskId: string, assetId: string) {
 
 export function buildKeyframePreviewUrl(taskId: string, sceneId: string) {
   return `${API_BASE_URL}/api/tasks/${taskId}/keyframes/${sceneId}/preview`
+}
+
+export function buildStoryboardReviewUrl(taskId?: string, sceneId?: string) {
+  return buildWorkspaceUrl("/storyboard-review", { taskId, sceneId })
+}
+
+export function buildKeyframeReviewUrl(taskId?: string, sceneId?: string) {
+  return buildWorkspaceUrl("/keyframe-review", { taskId, sceneId })
+}
+
+export function buildBatchDashboardUrl(taskId?: string) {
+  return buildWorkspaceUrl("/batch-dashboard", { taskId })
+}
+
+export function buildAssetCenterUrl(taskId?: string) {
+  return buildWorkspaceUrl("/asset-center", { taskId })
+}
+
+export function buildTaskReviewUrl(task: Pick<TaskSummary, "id" | "reviewStage">, sceneId?: string) {
+  if (task.reviewStage === "keyframe_review") {
+    return buildKeyframeReviewUrl(task.id, sceneId)
+  }
+
+  if (task.reviewStage === "storyboard_review") {
+    return buildStoryboardReviewUrl(task.id, sceneId)
+  }
+
+  return buildAssetCenterUrl(task.id)
 }
 
 export type CreateTaskPayload = {

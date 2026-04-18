@@ -29,6 +29,28 @@ export type SceneReviewMetadataCarrier = {
   index?: number | null
 } & SceneReviewMetadata
 
+export type SceneReviewRequirements = {
+  requireStoryboardReview?: boolean
+  requireKeyframeReview?: boolean
+}
+
+export function resolveSceneReviewDefaults(
+  sceneIndex: number,
+  requirements: SceneReviewRequirements = {},
+) {
+  const requireStoryboardReview = requirements.requireStoryboardReview ?? true
+  const requireKeyframeReview = requirements.requireKeyframeReview ?? true
+  const reviewStatus: PlannedStoryboardScene["reviewStatus"] = requireStoryboardReview
+    ? (sceneIndex === 0 ? "approved" : "pending")
+    : "approved"
+  const keyframeStatus: PlannedStoryboardScene["keyframeStatus"] = requireKeyframeReview ? "pending" : "approved"
+
+  return {
+    reviewStatus,
+    keyframeStatus,
+  }
+}
+
 export function resolveSceneCountForDuration(targetDurationSec: number) {
   return resolveSceneCountForDurationWithLimit(targetDurationSec, 8)
 }
@@ -180,6 +202,7 @@ export function buildStoryboardScenes(input: {
   maxSceneDurationSec?: number
   aspectRatio: string
   existingScenes?: SceneReviewMetadataCarrier[]
+  reviewRequirements?: SceneReviewRequirements
 }): Array<PlannedStoryboardScene & SceneReviewMetadata> {
   const sceneCount = resolveSceneCountForDurationWithLimit(input.targetDurationSec, input.maxSceneDurationSec ?? 8)
   const durations = planSceneDurations(input.targetDurationSec, sceneCount)
@@ -194,6 +217,7 @@ export function buildStoryboardScenes(input: {
     const startLabel = formatTimestamp(cursorSec)
     cursorSec += durationSec
     const endLabel = formatTimestamp(cursorSec)
+    const reviewDefaults = resolveSceneReviewDefaults(index, input.reviewRequirements)
 
     return {
       id: `scene_${index + 1}`,
@@ -205,8 +229,8 @@ export function buildStoryboardScenes(input: {
       durationSec,
       startLabel,
       endLabel,
-      reviewStatus: index === 0 ? "approved" : "pending",
-      keyframeStatus: "pending",
+      reviewStatus: reviewDefaults.reviewStatus,
+      keyframeStatus: reviewDefaults.keyframeStatus,
       reviewNote: null,
       reviewedAt: null,
       keyframeReviewNote: null,

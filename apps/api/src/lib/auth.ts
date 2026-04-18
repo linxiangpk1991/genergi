@@ -9,6 +9,7 @@ import {
 } from "./user-store.js"
 
 const SESSION_COOKIE = "genergi_session"
+const LOCALHOST_HOSTNAME_PATTERN = /^(localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/i
 
 function buildSignature(username: string, secret: string) {
   return createHmac("sha256", secret).update(username).digest("hex")
@@ -38,6 +39,37 @@ function verifySessionSignature(username: string, signature: string, secret: str
   const expected = Buffer.from(buildSignature(username, secret), "utf8")
   const actual = Buffer.from(signature, "utf8")
   return expected.length === actual.length && timingSafeEqual(expected, actual)
+}
+
+function requestUsesHttps(c: Context) {
+  const forwardedProto = c.req.header("x-forwarded-proto")?.split(",")[0]?.trim().toLowerCase()
+  if (forwardedProto) {
+    return forwardedProto === "https"
+  }
+
+  try {
+    return new URL(c.req.url).protocol === "https:"
+  } catch {
+    return false
+  }
+}
+
+function isLocalHostRequest(c: Context) {
+  const forwardedHost = c.req.header("x-forwarded-host")?.split(",")[0]?.trim()
+  const host = forwardedHost || c.req.header("host") || ""
+  return LOCALHOST_HOSTNAME_PATTERN.test(host)
+}
+
+function shouldUseSecureSessionCookie(c: Context) {
+  if (requestUsesHttps(c)) {
+    return true
+  }
+
+  if (process.env.NODE_ENV !== "production") {
+    return false
+  }
+
+  return !isLocalHostRequest(c)
 }
 
 export async function getSessionUserFromCookieValue(value: string | undefined) {
@@ -78,7 +110,7 @@ export async function loginWithPassword(c: Context, username: string, password: 
     httpOnly: true,
     sameSite: "Lax",
     path: "/",
-    secure: false,
+    secure: shouldUseSecureSessionCookie(c),
     maxAge: 60 * 60 * 12,
   })
 
@@ -86,7 +118,10 @@ export async function loginWithPassword(c: Context, username: string, password: 
 }
 
 export function clearSession(c: Context) {
-  deleteCookie(c, SESSION_COOKIE, { path: "/" })
+  deleteCookie(c, SESSION_COOKIE, {
+    path: "/",
+    secure: shouldUseSecureSessionCookie(c),
+  })
 }
 
 export function requireAuth() {

@@ -309,6 +309,31 @@ Here's the thing. In Chinese destiny analysis, there's a pattern called "late bl
     expect(providers.resolveTtsRateForTargetDuration(20, 15, 0)).toBeGreaterThan(0)
   })
 
+  it("resolves runtime generation models from the frozen final-model task config instead of the draft models", async () => {
+    const providers = await import("../../../apps/worker/src/lib/providers")
+
+    const runtime = providers.resolveRuntimeGenerationConfig(createTaskDetail())
+
+    expect(runtime.imageModelId).toBe("image.premium")
+    expect(runtime.videoModelId).toBe("video.hd")
+    expect(runtime.ttsProvider).toBe("edge-tts")
+  })
+
+  it("rejects unsupported tts providers instead of silently falling back to edge tts", async () => {
+    const providers = await import("../../../apps/worker/src/lib/providers")
+
+    expect(() =>
+      providers.resolveRuntimeGenerationConfig(
+        createTaskDetail({
+          taskRunConfig: {
+            ...createTaskDetail().taskRunConfig,
+            ttsProvider: "azure-tts",
+          },
+        }),
+      ),
+    ).toThrow(/Unsupported TTS provider/i)
+  })
+
   it("builds a distinct fallback script for system-enhanced mode when structured planning fails", async () => {
     const providers = await import("../../../apps/worker/src/lib/providers")
 

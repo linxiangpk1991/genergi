@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -13,14 +14,50 @@ function normalizeRelative(relativePath) {
   return relativePath.replace(/\\/g, "/");
 }
 
-async function listChangedFiles() {
-  const { stdout } = await runLocal("git", ["-C", repoRoot, "status", "--short"]);
-  return stdout
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => line.replace(/^[A-Z? ]+/, "").trim())
-    .filter((line) => line && line !== "genergi-release.tgz");
+function normalizeRemoteRelative(relativePath) {
+  const normalized = normalizeRelative(relativePath).replace(/^\.?\//, "");
+  if (!normalized || normalized.includes("..")) {
+    throw new Error(`Unsafe remote relative path: ${relativePath}`);
+  }
+  return normalized;
+}
+
+async function listChangedEntries() {
+  const { stdout } = await runLocal("git", ["-C", repoRoot, "status", "--porcelain=v1", "-z"]);
+  const rawEntries = stdout.split("\0").filter(Boolean);
+  const changes = [];
+
+  for (let index = 0; index < rawEntries.length; index += 1) {
+    const entry = rawEntries[index];
+    const statusCode = entry.slice(0, 2);
+    const filePath = entry.slice(3).trim();
+    if (!filePath || filePath === "genergi-release.tgz") {
+      continue;
+    }
+
+    const status = statusCode.trim();
+    if (status.startsWith("R")) {
+      const renamedTo = rawEntries[index + 1]?.trim();
+      if (!renamedTo) {
+        continue;
+      }
+      changes.push({ type: "delete", path: filePath });
+      if (renamedTo !== "genergi-release.tgz") {
+        changes.push({ type: "sync", path: renamedTo });
+      }
+      index += 1;
+      continue;
+    }
+
+    if (status === "D" || statusCode[0] === "D" || statusCode[1] === "D") {
+      changes.push({ type: "delete", path: filePath });
+      continue;
+    }
+
+    changes.push({ type: "sync", path: filePath });
+  }
+
+  return changes;
 }
 
 function runLocal(command, args) {
@@ -64,7 +101,7 @@ async function ensureRemoteDirectory(remotePath) {
 
 async function syncFile(relativePath) {
   const localPath = path.join(repoRoot, relativePath);
-  const remotePath = `${remoteRoot}/${normalizeRelative(relativePath)}`;
+  const remotePath = `${remoteRoot}/${normalizeRemoteRelative(relativePath)}`;
   await ensureRemoteDirectory(remotePath);
   await copyFileToRemote(localPath, remotePath, {
     cwd: repoRoot,
@@ -75,10 +112,23 @@ async function syncFile(relativePath) {
   });
 }
 
+async function deleteRemotePath(relativePath) {
+  const remotePath = `${remoteRoot}/${normalizeRemoteRelative(relativePath)}`;
+  await runRemoteCommand(`rm -rf '${remotePath}'`, {
+    cwd: repoRoot,
+    attempts: 4,
+    label: `delete ${relativePath}`,
+    extraSshArgs: ["-o", "ConnectTimeout=15"],
+  });
+}
+
 async function runRemoteRebuild() {
   const script = `
 set -euo pipefail
 cd ${remoteRoot}
+set -a
+. /opt/genergi/shared.env
+set +a
 corepack pnpm --filter @genergi/shared build
 corepack pnpm --filter @genergi/config build
 corepack pnpm --filter @genergi/api build
@@ -95,6 +145,15 @@ for attempt in 1 2 3 4 5 6 7 8 9 10; do
   sleep 2
 done
 cat /tmp/genergi-hotfix-health.json
+curl -fsS -H 'Host: ai.genergius.com' http://127.0.0.1/ >/tmp/genergi-hotfix-home.html
+grep -q "GENERGI" /tmp/genergi-hotfix-home.html
+curl -fsS http://127.0.0.1:8787/api/bootstrap >/tmp/genergi-hotfix-bootstrap.json
+if [ -n "\${GENERGI_ADMIN_USERNAME:-}" ] && [ -n "\${GENERGI_ADMIN_PASSWORD:-}" ]; then
+  rm -f /tmp/genergi-hotfix-cookies.txt
+  login_payload="$(node -e "console.log(JSON.stringify({ username: process.env.GENERGI_ADMIN_USERNAME, password: process.env.GENERGI_ADMIN_PASSWORD }))")"
+  curl -fsS -c /tmp/genergi-hotfix-cookies.txt -H 'Content-Type: application/json' -d "$login_payload" http://127.0.0.1:8787/api/auth/login >/tmp/genergi-hotfix-login.json
+  curl -fsS -b /tmp/genergi-hotfix-cookies.txt http://127.0.0.1:8787/api/tasks >/tmp/genergi-hotfix-tasks.json
+fi
 `;
 
   await runRemoteScript(script, {
@@ -123,16 +182,25 @@ Behavior:
 
   await probeRemote({ cwd: repoRoot, attempts: 4, extraSshArgs: ["-o", "ConnectTimeout=15"] });
   const files = args;
-  const changedFiles = files.length ? files : await listChangedFiles();
-  const syncable = changedFiles.filter((item) => item && item !== "genergi-release.tgz");
+  const changedEntries = files.length
+    ? files.map((file) => ({
+        type: existsSync(path.join(repoRoot, file)) ? "sync" : "delete",
+        path: file,
+      }))
+    : await listChangedEntries();
+  const actionable = changedEntries.filter((item) => item.path && item.path !== "genergi-release.tgz");
 
-  if (!syncable.length) {
+  if (!actionable.length) {
     console.log("No changed files to sync.");
     return;
   }
 
-  for (const file of syncable) {
-    await syncFile(file);
+  for (const entry of actionable) {
+    if (entry.type === "delete") {
+      await deleteRemotePath(entry.path);
+      continue;
+    }
+    await syncFile(entry.path);
   }
 
   await runRemoteRebuild();

@@ -1,5 +1,13 @@
 import { useEffect, useMemo, useState } from "react"
-import { api, type RuntimeStatusResponse, type TaskSummary } from "../api"
+import { Link, useSearchParams } from "react-router-dom"
+import {
+  api,
+  buildAssetCenterUrl,
+  buildKeyframeReviewUrl,
+  buildStoryboardReviewUrl,
+  type RuntimeStatusResponse,
+  type TaskSummary,
+} from "../api"
 
 function formatDurationDelta(task: TaskSummary) {
   if (task.actualDurationSec == null) {
@@ -11,11 +19,69 @@ function formatDurationDelta(task: TaskSummary) {
   return `${prefix}${delta.toFixed(1)}s`
 }
 
+function getTaskExceptionLabel(task: TaskSummary) {
+  if (task.reviewStage === "storyboard_review") {
+    return `分镜待审 ${task.pendingReviewCount ?? 0} 项`
+  }
+
+  if (task.reviewStage === "keyframe_review") {
+    return `关键帧待审 ${task.pendingReviewCount ?? 0} 项`
+  }
+
+  if (task.status === "failed") {
+    return "任务失败，需人工排查"
+  }
+
+  if (task.actualDurationSec != null && Math.abs(task.actualDurationSec - task.targetDurationSec) > 2) {
+    return `时长偏差 ${formatDurationDelta(task)}`
+  }
+
+  return "查看当前任务上下文"
+}
+
+function getTaskActions(task: TaskSummary) {
+  const actions: Array<{ label: string; to: string; tone: "primary" | "ghost" }> = []
+
+  if (task.reviewStage === "storyboard_review") {
+    actions.push({
+      label: `继续分镜审阅${task.pendingReviewCount ? ` · ${task.pendingReviewCount}` : ""}`,
+      to: buildStoryboardReviewUrl(task.id),
+      tone: "primary",
+    })
+  }
+
+  if (task.reviewStage === "keyframe_review") {
+    actions.push({
+      label: `继续关键帧审阅${task.pendingReviewCount ? ` · ${task.pendingReviewCount}` : ""}`,
+      to: buildKeyframeReviewUrl(task.id),
+      tone: "primary",
+    })
+  }
+
+  if (
+    task.status === "failed" ||
+    (task.actualDurationSec != null && Math.abs(task.actualDurationSec - task.targetDurationSec) > 2) ||
+    actions.length === 0
+  ) {
+    actions.push({
+      label: task.status === "failed" ? "查看失败任务资产" : "打开任务资产",
+      to: buildAssetCenterUrl(task.id),
+      tone: actions.length === 0 ? "primary" : "ghost",
+    })
+  }
+
+  return actions.slice(0, 2)
+}
+
 export function BatchDashboardPage() {
+  const [searchParams] = useSearchParams()
+  const focusedTaskId = searchParams.get("taskId") ?? ""
+
   const [tasks, setTasks] = useState<TaskSummary[]>([])
   const [runtime, setRuntime] = useState<RuntimeStatusResponse["runtime"] | null>(null)
   const [lastRefreshAt, setLastRefreshAt] = useState<string>("")
   const [isStale, setIsStale] = useState(false)
+  const [loadError, setLoadError] = useState("")
 
   useEffect(() => {
     async function load() {
@@ -24,9 +90,13 @@ export function BatchDashboardPage() {
       setRuntime(runtimeResult.runtime)
       setLastRefreshAt(new Date().toLocaleTimeString("zh-CN"))
       setIsStale(false)
+      setLoadError("")
     }
 
-    void load().catch(() => {})
+    void load().catch(() => {
+      setLoadError("任务或系统状态加载失败，当前结果可能不完整。")
+      setIsStale(true)
+    })
 
     const timer = window.setInterval(() => {
       void Promise.all([api.listTasks(), api.runtimeStatus()])
@@ -35,12 +105,17 @@ export function BatchDashboardPage() {
           setRuntime(runtimeResult.runtime)
           setLastRefreshAt(new Date().toLocaleTimeString("zh-CN"))
           setIsStale(false)
+          setLoadError("")
         })
-        .catch(() => setIsStale(true))
+        .catch(() => {
+          setIsStale(true)
+          setLoadError("自动刷新失败，当前看板可能显示的是旧数据。")
+        })
     }, 5000)
 
     return () => window.clearInterval(timer)
   }, [])
+
   const sortedTasks = useMemo(
     () => [...tasks].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
     [tasks],
@@ -104,6 +179,11 @@ export function BatchDashboardPage() {
       <div className="review-grid">
         <section className="card">
           <h3>生产概览</h3>
+          {loadError ? (
+            <div className="review-inline-note review-inline-note--danger" role="alert">
+              {loadError}
+            </div>
+          ) : null}
           <div className="metric-grid">
             <div className="metric-card"><span>运行中</span><strong>{metrics.runningCount}</strong></div>
             <div className="metric-card"><span>已完成</span><strong>{metrics.completedCount}</strong></div>
@@ -124,31 +204,50 @@ export function BatchDashboardPage() {
             </span>
           </div>
           <div className="task-list">
-            {sortedTasks.map((task) => (
-              <div key={task.id} className="task-item task-item--wide">
-                <div>
-                  <strong>{task.title}</strong>
-                  <span>
-                    {task.targetDurationSec}s · {task.planning?.generationRouteLabel ?? "待预判"} · {task.planning?.generationPreferenceLabel ?? "待接入"}
-                    {task.reviewStage === "storyboard_review"
-                      ? ` · 待审分镜(${task.pendingReviewCount ?? 0})`
-                      : task.reviewStage === "keyframe_review"
-                        ? ` · 待审关键帧(${task.pendingReviewCount ?? 0})`
-                        : task.reviewStage === "auto_qa"
-                          ? " · 自动 QA"
-                          : ""}
-                  </span>
+            {sortedTasks.map((task) => {
+              const actions = getTaskActions(task)
+              const isFocused = focusedTaskId === task.id
+
+              return (
+                <div key={task.id} className={isFocused ? "task-item task-item--wide task-item--focused" : "task-item task-item--wide"}>
+                  <div>
+                    <div className="task-item__title-row">
+                      <strong>{task.title}</strong>
+                      {isFocused ? <span className="pill pill--sm pill--accent">当前定位</span> : null}
+                    </div>
+                    <span>
+                      {task.targetDurationSec}s · {task.planning?.generationRouteLabel ?? "待预判"} · {task.planning?.generationPreferenceLabel ?? "待接入"}
+                      {task.reviewStage === "storyboard_review"
+                        ? ` · 待审分镜(${task.pendingReviewCount ?? 0})`
+                        : task.reviewStage === "keyframe_review"
+                          ? ` · 待审关键帧(${task.pendingReviewCount ?? 0})`
+                          : task.reviewStage === "auto_qa"
+                            ? " · 自动 QA"
+                            : ""}
+                    </span>
+                  </div>
+                  <div>
+                    <strong>{task.progressPct}%</strong>
+                    <span>重试 {task.retryCount} · {task.actualDurationSec ? `偏差 ${formatDurationDelta(task)}` : "等待成片"}</span>
+                  </div>
+                  <div>
+                    <strong>¥{task.estimatedCostCny.toFixed(2)}</strong>
+                    <span>{task.status} · {task.channelId}</span>
+                  </div>
+                  <div className="task-item__actions">
+                    {actions.map((action, index) => (
+                      <Link
+                        key={`${task.id}-${action.to}-${index}`}
+                        className={action.tone === "primary" ? "primary-button" : "ghost-button"}
+                        to={action.to}
+                      >
+                        {action.label}
+                      </Link>
+                    ))}
+                  </div>
                 </div>
-                <div>
-                  <strong>{task.progressPct}%</strong>
-                  <span>重试 {task.retryCount} · {task.actualDurationSec ? `偏差 ${formatDurationDelta(task)}` : "等待成片"}</span>
-                </div>
-                <div>
-                  <strong>¥{task.estimatedCostCny.toFixed(2)}</strong>
-                  <span>{task.status} · {task.channelId}</span>
-                </div>
-              </div>
-            ))}
+              )
+            })}
           </div>
         </section>
 
@@ -174,24 +273,35 @@ export function BatchDashboardPage() {
           <section className="card card--compact">
             <h3>需要复核</h3>
             <div className="muted" style={{ marginBottom: 10 }}>
-              共 {reviewQueue.length} 条任务正在等待人工确认或重试。
+              共 {reviewQueue.length} 条任务正在等待人工确认、重新审阅或资产排查。
             </div>
             <div className="task-list compact-list">
               {reviewQueue.length ? (
-                reviewQueue.map((task) => (
-                  <div key={task.id} className="task-item">
-                    <strong>{task.title}</strong>
-                    <span>
-                      {task.reviewStage === "storyboard_review"
-                        ? `分镜待审 ${task.pendingReviewCount ?? 0} 项`
-                        : task.reviewStage === "keyframe_review"
-                          ? `关键帧待审 ${task.pendingReviewCount ?? 0} 项`
-                          : task.status === "failed"
-                        ? "任务失败，需人工重试"
-                        : `时长偏差 ${formatDurationDelta(task)}`}
-                    </span>
-                  </div>
-                ))
+                reviewQueue.map((task) => {
+                  const actions = getTaskActions(task)
+                  const isFocused = focusedTaskId === task.id
+
+                  return (
+                    <div key={task.id} className={isFocused ? "task-item task-item--focused" : "task-item"}>
+                      <div className="task-item__title-row">
+                        <strong>{task.title}</strong>
+                        {isFocused ? <span className="pill pill--sm pill--accent">当前定位</span> : null}
+                      </div>
+                      <span>{getTaskExceptionLabel(task)}</span>
+                      <div className="task-item__actions">
+                        {actions.map((action, index) => (
+                          <Link
+                            key={`${task.id}-${action.to}-${index}`}
+                            className={action.tone === "primary" ? "primary-button" : "ghost-button"}
+                            to={action.to}
+                          >
+                            {action.label}
+                          </Link>
+                        ))}
+                      </div>
+                    </div>
+                  )
+                })
               ) : (
                 <div className="task-item">
                   <strong>暂无重点异常</strong>

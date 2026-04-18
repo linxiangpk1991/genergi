@@ -172,6 +172,110 @@ describe("API task store", () => {
     expect(persistedDetail?.scenes[0]?.keyframeReviewedAt).toBeTruthy()
   })
 
+  it("skips storyboard review for new mass production tasks and ignores stale storyboard pending states when review is disabled", async () => {
+    dataDir = await mkdtemp(path.join(os.tmpdir(), "genergi-task-store-"))
+    process.env.GENERGI_DATA_DIR = dataDir
+
+    const store = await import("../../../apps/api/src/lib/task-store")
+
+    const created = await store.createTask({
+      title: "Fast desk charger drop",
+      script:
+        "Show the cluttered desk. Reveal the compact charger. Show the clean setup. End with a quick shop-now CTA.",
+      modeId: "mass_production",
+      channelId: "tiktok",
+      aspectRatio: "9:16",
+      targetDurationSec: 30,
+      generationMode: "user_locked",
+    })
+
+    expect(created.task.status).toBe("waiting_review")
+    expect(created.task.reviewStage).toBe("keyframe_review")
+    expect(created.task.pendingReviewCount).toBe(4)
+
+    const detail = await store.getTaskDetail(created.task.id)
+    expect(detail?.reviewStage).toBe("keyframe_review")
+    expect(detail?.pendingReviewCount).toBe(4)
+    expect(detail?.scenes.every((scene) => scene.reviewStatus === "approved")).toBe(true)
+    expect(detail?.scenes.every((scene) => scene.keyframeStatus === "pending")).toBe(true)
+
+    const tasksFile = path.join(dataDir, "tasks.json")
+    const detailsFile = path.join(dataDir, "task-details.json")
+    const taskRecords = await readJsonFile<Array<Record<string, unknown>>>(tasksFile)
+    const detailRecords = await readJsonFile<Record<string, Record<string, unknown>>>(detailsFile)
+
+    detailRecords[created.task.id] = {
+      ...detailRecords[created.task.id],
+      scenes: (detailRecords[created.task.id]?.scenes as Array<Record<string, unknown>>).map((scene, index) => ({
+        ...scene,
+        reviewStatus: "pending",
+        reviewNote: index === 0 ? "Legacy storyboard note" : null,
+        reviewedAt: index === 0 ? "2026-04-19T09:00:00.000Z" : null,
+      })),
+    }
+
+    await writeJsonFile(tasksFile, taskRecords)
+    await writeJsonFile(detailsFile, detailRecords)
+
+    const normalized = await store.getTaskDetail(created.task.id)
+
+    expect(normalized?.reviewStage).toBe("keyframe_review")
+    expect(normalized?.pendingReviewCount).toBe(4)
+    expect(normalized?.reviewUpdatedAt).toBe("2026-04-19T09:00:00.000Z")
+    expect(normalized?.scenes[0]?.reviewStatus).toBe("pending")
+    expect(normalized?.scenes[0]?.reviewNote).toBe("Legacy storyboard note")
+    expect(normalized?.scenes[0]?.reviewedAt).toBe("2026-04-19T09:00:00.000Z")
+  })
+
+  it("promotes derived review state to auto qa when keyframe review is disabled in the frozen task config", async () => {
+    dataDir = await mkdtemp(path.join(os.tmpdir(), "genergi-task-store-"))
+    process.env.GENERGI_DATA_DIR = dataDir
+
+    const store = await import("../../../apps/api/src/lib/task-store")
+
+    const created = await store.createTask({
+      title: "Desk charger launch",
+      script:
+        "Show the messy desk first. Introduce the charger as the upgrade. Demonstrate the clean transformation. End with a short premium CTA.",
+      modeId: "high_quality",
+      channelId: "reels",
+      aspectRatio: "9:16",
+      targetDurationSec: 30,
+      generationMode: "system_enhanced",
+    })
+
+    const tasksFile = path.join(dataDir, "tasks.json")
+    const detailsFile = path.join(dataDir, "task-details.json")
+    const taskRecords = await readJsonFile<Array<Record<string, unknown>>>(tasksFile)
+    const detailRecords = await readJsonFile<Record<string, Record<string, unknown>>>(detailsFile)
+
+    detailRecords[created.task.id] = {
+      ...detailRecords[created.task.id],
+      taskRunConfig: {
+        ...detailRecords[created.task.id]?.taskRunConfig,
+        requireKeyframeReview: false,
+      },
+      scenes: (detailRecords[created.task.id]?.scenes as Array<Record<string, unknown>>).map((scene) => ({
+        ...scene,
+        reviewStatus: "approved",
+        keyframeStatus: "pending",
+      })),
+    }
+
+    await writeJsonFile(tasksFile, taskRecords)
+    await writeJsonFile(detailsFile, detailRecords)
+
+    const normalized = await store.getTaskDetail(created.task.id)
+    const summaries = await store.listTasks()
+    const updatedSummary = summaries.find((task) => task.id === created.task.id)
+
+    expect(normalized?.reviewStage).toBe("auto_qa")
+    expect(normalized?.pendingReviewCount).toBe(0)
+    expect(updatedSummary?.reviewStage).toBe("auto_qa")
+    expect(updatedSummary?.pendingReviewCount).toBe(0)
+    expect(updatedSummary?.status).toBe("running")
+  })
+
   it("normalizes legacy review fields and preserves existing review metadata when detail scenes are rebuilt", async () => {
     dataDir = await mkdtemp(path.join(os.tmpdir(), "genergi-task-store-"))
     process.env.GENERGI_DATA_DIR = dataDir

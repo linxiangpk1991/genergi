@@ -15,6 +15,7 @@ import {
   createFallbackKeyframeBundleFromVideos,
   createKeyframeBundle,
   createSceneVideoBundle,
+  resolveRuntimeGenerationConfig,
   rewriteTaskWithTextProvider,
   synthesizeNarration,
   writeTaskSourceFiles,
@@ -69,6 +70,7 @@ async function writeTaskArtifacts(taskId: string) {
   }
 
   const preparedDetail = await mergeLatestReviewMetadata(await rewriteTaskWithTextProvider(detail))
+  const runtime = resolveRuntimeGenerationConfig(preparedDetail)
   await upsertTaskDetail(preparedDetail)
   await writeWorkerHeartbeat(`Preparing source files for ${taskId}`)
   const taskDir = await writeTaskSourceFiles(preparedDetail)
@@ -79,7 +81,7 @@ async function writeTaskArtifacts(taskId: string) {
   const sceneVideos = await createSceneVideoBundle({
     taskId,
     detail: preparedDetail,
-    model: process.env.GENERGI_VIDEO_MODEL ?? preparedDetail.taskRunConfig.videoDraftModel.id,
+    model: runtime.videoModelId,
     onSceneStart: async (scene, totalScenes) => {
       await writeWorkerHeartbeat(`Generating scene ${scene.index + 1}/${totalScenes} for ${taskId}`)
     },
@@ -91,7 +93,7 @@ async function writeTaskArtifacts(taskId: string) {
       createKeyframeBundle({
         taskId,
         detail: preparedDetail,
-        model: process.env.GENERGI_IMAGE_MODEL ?? preparedDetail.taskRunConfig.imageDraftModel.id,
+        model: runtime.imageModelId,
       }),
       new Promise<never>((_, reject) =>
         setTimeout(() => reject(new Error("Image generation timeout, switching to video-derived keyframe")), 30000),
@@ -156,7 +158,7 @@ async function writeTaskArtifacts(taskId: string) {
       id: `${taskId}_audio`,
       taskId,
       assetType: "audio",
-      label: `Edge TTS (${preparedDetail.taskRunConfig.ttsProvider ?? "edge-tts"})`,
+      label: `${runtime.ttsLabel} (${runtime.ttsProvider})`,
       status: "ready",
       path: narration.audioPath,
       createdAt: now,

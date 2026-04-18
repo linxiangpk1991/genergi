@@ -24,8 +24,8 @@ import {
   updateUserInputSchema,
 } from "@genergi/shared"
 import { clearSession, getAuthStatus, getSessionUser, loginWithPassword, requireAuth } from "./lib/auth.js"
-import { enqueueTask } from "./lib/queue/enqueue.js"
-import { applySceneReviewDecision, createTask, getTaskAsset, getTaskAssets, getTaskDetail, listTasks } from "./lib/task-store.js"
+import { assertQueueAvailable, enqueueTask, QueueUnavailableError } from "./lib/queue/enqueue.js"
+import { applySceneReviewDecision, createTask, deleteTask, getTaskAsset, getTaskAssets, getTaskDetail, listTasks } from "./lib/task-store.js"
 import {
   createStoredUser,
   getEnvFallbackUser,
@@ -355,6 +355,21 @@ function getInlineFileMimeType(filePath: string) {
   return "image/jpeg"
 }
 
+function toQueueUnavailableResponse(c: Context, error: unknown) {
+  const queueError =
+    error instanceof QueueUnavailableError
+      ? error
+      : new QueueUnavailableError(error instanceof Error ? error.message : "QUEUE_UNAVAILABLE")
+
+  return c.json(
+    {
+      message: queueError.code,
+      reason: queueError.message,
+    },
+    503,
+  )
+}
+
 app.get("/api/tasks/:taskId/assets/:assetId/download", async (c) => {
   const asset = await getTaskAsset(c.req.param("taskId"), c.req.param("assetId"))
   return sendAssetFile(c, asset, "attachment")
@@ -482,8 +497,20 @@ app.post("/api/tasks", async (c) => {
     return c.json({ message: "INVALID_TASK_PAYLOAD" }, 400)
   }
 
+  try {
+    await assertQueueAvailable()
+  } catch (error) {
+    return toQueueUnavailableResponse(c, error)
+  }
+
   const result = await createTask(parsed.data)
-  const queue = await enqueueTask(result.task.id)
+  let queue
+  try {
+    queue = await enqueueTask(result.task.id)
+  } catch (error) {
+    await deleteTask(result.task.id)
+    return toQueueUnavailableResponse(c, error)
+  }
   const createdDetail = await getTaskDetail(result.task.id)
   const planning = buildPlanningSnapshot(
     result.task.targetDurationSec,

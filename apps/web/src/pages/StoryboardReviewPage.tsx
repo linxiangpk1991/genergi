@@ -1,5 +1,15 @@
 import { useEffect, useMemo, useState } from "react"
-import { api, type ReviewDecision, type StoryboardScene, type TaskDetail, type TaskSummary } from "../api"
+import { Link, useSearchParams } from "react-router-dom"
+import {
+  api,
+  buildAssetCenterUrl,
+  buildBatchDashboardUrl,
+  buildKeyframeReviewUrl,
+  type ReviewDecision,
+  type StoryboardScene,
+  type TaskDetail,
+  type TaskSummary,
+} from "../api"
 
 function getReviewStatusLabel(status: StoryboardScene["reviewStatus"]) {
   if (status === "approved") {
@@ -36,6 +46,15 @@ function getNextStoryboardSceneId(detail: TaskDetail, currentSceneId: string) {
   return laterPending?.id ?? pendingScenes[0]?.id ?? currentSceneId
 }
 
+function getPreferredStoryboardSceneId(detail: TaskDetail, requestedSceneId: string) {
+  const requestedScene = requestedSceneId ? detail.scenes.find((scene) => scene.id === requestedSceneId) : null
+  if (requestedScene) {
+    return requestedScene.id
+  }
+
+  return detail.scenes.find((scene) => scene.reviewStatus === "pending")?.id ?? detail.scenes[0]?.id ?? ""
+}
+
 function replaceTaskSummary(tasks: TaskSummary[], nextTask: TaskSummary) {
   const existingIndex = tasks.findIndex((task) => task.id === nextTask.id)
   if (existingIndex < 0) {
@@ -46,46 +65,150 @@ function replaceTaskSummary(tasks: TaskSummary[], nextTask: TaskSummary) {
 }
 
 export function StoryboardReviewPage() {
+  const [searchParams, setSearchParams] = useSearchParams()
+  const routeTaskId = searchParams.get("taskId") ?? ""
+  const routeSceneId = searchParams.get("sceneId") ?? ""
+
   const [tasks, setTasks] = useState<TaskSummary[]>([])
   const [detail, setDetail] = useState<TaskDetail | null>(null)
   const [selectedTaskId, setSelectedTaskId] = useState("")
-  const [selectedSceneId, setSelectedSceneId] = useState<string>("")
+  const [selectedSceneId, setSelectedSceneId] = useState("")
   const [reviewNote, setReviewNote] = useState("")
   const [submittingDecision, setSubmittingDecision] = useState<ReviewDecision | null>(null)
   const [submitError, setSubmitError] = useState("")
   const [submitMessage, setSubmitMessage] = useState("")
+  const [loadError, setLoadError] = useState("")
+  const [detailLoading, setDetailLoading] = useState(false)
 
-  useEffect(() => {
-    async function load() {
-      const taskList = await api.listTasks()
-      setTasks(taskList.tasks)
-      const targetTask = taskList.tasks[0]
-      if (!targetTask) {
-        return
-      }
+  function syncRouteContext(taskId?: string, sceneId?: string, replace = true) {
+    const currentTaskId = searchParams.get("taskId") ?? ""
+    const currentSceneId = searchParams.get("sceneId") ?? ""
+    const nextTaskId = taskId ?? ""
+    const nextSceneId = sceneId ?? ""
 
-      setSelectedTaskId(targetTask.id)
+    if (currentTaskId === nextTaskId && currentSceneId === nextSceneId) {
+      return
     }
 
-    void load().catch(() => {})
+    const nextSearchParams = new URLSearchParams(searchParams)
+
+    if (taskId) {
+      nextSearchParams.set("taskId", taskId)
+    } else {
+      nextSearchParams.delete("taskId")
+    }
+
+    if (sceneId) {
+      nextSearchParams.set("sceneId", sceneId)
+    } else {
+      nextSearchParams.delete("sceneId")
+    }
+
+    setSearchParams(nextSearchParams, { replace })
+  }
+
+  useEffect(() => {
+    let active = true
+
+    async function load() {
+      try {
+        const taskList = await api.listTasks()
+        if (!active) {
+          return
+        }
+
+        setTasks(taskList.tasks)
+        setLoadError("")
+      } catch {
+        if (!active) {
+          return
+        }
+
+        setTasks([])
+        setLoadError("任务列表加载失败，请稍后刷新页面重试。")
+      }
+    }
+
+    void load()
+
+    return () => {
+      active = false
+    }
   }, [])
 
   useEffect(() => {
-    async function loadDetail() {
-      if (!selectedTaskId) {
-        return
-      }
-
-      const result = await api.getTaskDetail(selectedTaskId)
-      setDetail(result.detail)
-      const pendingScene = result.detail.scenes.find((scene) => scene.reviewStatus === "pending")
-      setSelectedSceneId(pendingScene?.id ?? result.detail.scenes[0]?.id ?? "")
-      setSubmitError("")
-      setSubmitMessage("")
+    if (!tasks.length) {
+      setSelectedTaskId("")
+      return
     }
 
-    void loadDetail().catch(() => {})
+    const nextTask =
+      tasks.find((task) => task.id === routeTaskId) ??
+      tasks.find((task) => task.reviewStage === "storyboard_review") ??
+      tasks[0] ??
+      null
+
+    if (nextTask && nextTask.id !== selectedTaskId) {
+      setSelectedTaskId(nextTask.id)
+    }
+  }, [routeTaskId, selectedTaskId, tasks])
+
+  useEffect(() => {
+    if (!selectedTaskId) {
+      setDetail(null)
+      setSelectedSceneId("")
+      return
+    }
+
+    let active = true
+
+    async function loadDetail() {
+      setDetailLoading(true)
+
+      try {
+        const result = await api.getTaskDetail(selectedTaskId)
+        if (!active) {
+          return
+        }
+
+        setDetail(result.detail)
+        setLoadError("")
+        setSubmitError("")
+        setSubmitMessage("")
+      } catch {
+        if (!active) {
+          return
+        }
+
+        setDetail(null)
+        setSelectedSceneId("")
+        setLoadError("任务详情加载失败，当前无法进入分镜审阅。")
+      } finally {
+        if (active) {
+          setDetailLoading(false)
+        }
+      }
+    }
+
+    void loadDetail()
+
+    return () => {
+      active = false
+    }
   }, [selectedTaskId])
+
+  useEffect(() => {
+    if (!detail) {
+      return
+    }
+
+    const nextSceneId = getPreferredStoryboardSceneId(detail, routeSceneId)
+    if (nextSceneId !== selectedSceneId) {
+      setSelectedSceneId(nextSceneId)
+    }
+
+    syncRouteContext(detail.taskId, nextSceneId || undefined, true)
+  }, [detail, routeSceneId, selectedSceneId])
 
   const selectedScene = useMemo<StoryboardScene | null>(() => {
     if (!detail) {
@@ -106,6 +229,18 @@ export function StoryboardReviewPage() {
     setSubmitMessage("")
   }, [selectedScene?.id, selectedScene?.reviewNote])
 
+  function handleTaskChange(taskId: string) {
+    setSelectedTaskId(taskId)
+    setDetail(null)
+    setSelectedSceneId("")
+    syncRouteContext(taskId, undefined, false)
+  }
+
+  function handleSceneChange(sceneId: string) {
+    setSelectedSceneId(sceneId)
+    syncRouteContext(selectedTaskId, sceneId, false)
+  }
+
   async function submitDecision(decision: ReviewDecision) {
     if (!selectedTaskId || !selectedScene) {
       return
@@ -121,13 +256,15 @@ export function StoryboardReviewPage() {
         note: reviewNote.trim() || undefined,
       })
 
-      setTasks((current) => replaceTaskSummary(current, response.task))
-      setDetail(response.detail)
-      setSelectedSceneId(
+      const nextSceneId =
         decision === "approved"
           ? getNextStoryboardSceneId(response.detail, selectedScene.id)
-          : selectedScene.id,
-      )
+          : selectedScene.id
+
+      setTasks((current) => replaceTaskSummary(current, response.task))
+      setDetail(response.detail)
+      setSelectedSceneId(nextSceneId)
+      syncRouteContext(response.detail.taskId, nextSceneId, true)
       setSubmitMessage(decision === "approved" ? "当前 Scene 已通过并写回服务器。" : "当前 Scene 已退回并写回服务器。")
     } catch (error) {
       setSubmitError(error instanceof Error ? error.message : "提交失败，请稍后重试。")
@@ -156,7 +293,7 @@ export function StoryboardReviewPage() {
       <div className="review-grid">
         <section className="card review-sidebar">
           <label className="field-label">任务选择</label>
-          <select className="input" value={selectedTaskId} onChange={(event) => setSelectedTaskId(event.target.value)}>
+          <select className="input" value={selectedTaskId} onChange={(event) => handleTaskChange(event.target.value)}>
             {tasks.map((task) => (
               <option key={task.id} value={task.id}>
                 {task.title} · {task.targetDurationSec}s · {task.planning?.generationRouteLabel ?? "待预判"}
@@ -174,6 +311,15 @@ export function StoryboardReviewPage() {
             </div>
           </div>
 
+          <div className="route-context-card">
+            <strong>当前定位会写入链接</strong>
+            <span>
+              {selectedTaskId
+                ? `任务 ${selectedTaskId}${selectedScene ? ` · Scene #${selectedScene.index + 1}` : ""} 已同步到 URL，可刷新或收藏后继续处理。`
+                : "选择任务和 Scene 后，地址会自动同步当前上下文。"}
+            </span>
+          </div>
+
           <div className="review-sidebar-card">
             <h3>规划依据</h3>
             <div className="task-list compact-list">
@@ -186,12 +332,21 @@ export function StoryboardReviewPage() {
           </div>
 
           <h3>Scene 列表</h3>
+          {detailLoading ? <div className="review-inline-note">正在加载任务分镜...</div> : null}
+          {loadError ? (
+            <div className="review-inline-note review-inline-note--danger" role="alert">
+              {loadError}
+            </div>
+          ) : null}
+          {!detailLoading && detail && detail.scenes.length === 0 ? (
+            <div className="review-inline-note">当前任务还没有可审的分镜，稍后刷新会自动补位。</div>
+          ) : null}
           <div className="scene-list">
             {detail?.scenes.map((scene) => (
               <button
                 key={scene.id}
                 className={scene.id === selectedSceneId ? "scene-chip scene-chip--active" : "scene-chip"}
-                onClick={() => setSelectedSceneId(scene.id)}
+                onClick={() => handleSceneChange(scene.id)}
                 type="button"
               >
                 <div className="scene-chip__title-row">
@@ -219,6 +374,7 @@ export function StoryboardReviewPage() {
             <span className="pill pill--sm">{detail?.planning?.generationPreferenceLabel ?? "待接入"}</span>
             <span className="pill pill--sm">偏差 {formatDurationDelta(detail, selectedTask)}</span>
           </div>
+          {!selectedScene && !detailLoading ? <div className="review-inline-note">当前没有可展示的 Scene 内容。</div> : null}
           <div className="review-block">
             <label className="field-label">英文脚本文案</label>
             <div className="review-content">{selectedScene?.script ?? "暂无分镜内容"}</div>
@@ -246,12 +402,12 @@ export function StoryboardReviewPage() {
               : "当前页会把分镜审阅结果真实写回服务器，并按服务器返回结果刷新任务状态。"}
           </div>
           {submitError ? (
-            <div className="review-actions-note" role="alert">
+            <div className="review-actions-note review-actions-note--danger" role="alert">
               提交失败：{submitError}
             </div>
           ) : null}
           {submitMessage ? (
-            <div className="review-actions-note">
+            <div className="review-actions-note review-actions-note--success">
               {submitMessage}
             </div>
           ) : null}
@@ -276,15 +432,23 @@ export function StoryboardReviewPage() {
           </div>
 
           <div className="review-aside-group">
-            <h3>重工动作</h3>
-            <button className="ghost-button" disabled type="button">重新生成建议</button>
-            <button className="ghost-button" disabled type="button">返回脚本调整</button>
+            <h3>定位入口</h3>
+            <Link className="ghost-button" to={buildKeyframeReviewUrl(selectedTaskId || undefined, selectedScene?.id)}>
+              查看同 Scene 关键帧
+            </Link>
+            <Link className="ghost-button" to={buildAssetCenterUrl(selectedTaskId || undefined)}>
+              打开任务资产
+            </Link>
+            <Link className="ghost-button" to={buildBatchDashboardUrl(selectedTaskId || undefined)}>
+              返回生产看板
+            </Link>
           </div>
 
           <div className="review-aside-group">
-            <h3>高级操作</h3>
-            <button className="ghost-button" disabled type="button">合并 Scene</button>
-            <button className="ghost-button" disabled type="button">拆分 Scene</button>
+            <h3>暂未开放</h3>
+            <div className="review-inline-note">
+              Scene 合并、拆分、脚本回写和“重新生成建议”仍未接入后端。当前只保留可直接到达真实处理页的入口，不展示假动作。
+            </div>
           </div>
 
           <label className="field-label">审阅备注</label>

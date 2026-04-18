@@ -4,6 +4,8 @@ import { buildDefaultTaskRunConfig, estimateCost, resolveVideoModelCapability } 
 import {
   buildStoryboardScenes,
   createDefaultReviewSummary,
+  deleteTaskAssets,
+  deleteTaskDetail,
   normalizeStoryboardScene,
   normalizeTaskDetailRecord,
   readTaskAssets,
@@ -19,6 +21,7 @@ import type {
   ReviewSummary,
   StoryboardScene,
   TaskDetail,
+  TaskRunConfig,
   TaskSummary,
   TaskStatus,
 } from "@genergi/shared"
@@ -277,7 +280,7 @@ function findLatestReviewTimestamp(scenes: StoryboardScene[]) {
   return timestamps.reduce((latest, value) => (value > latest ? value : latest))
 }
 
-export function deriveReviewSummary(detail: Pick<TaskDetail, "scenes">): ReviewSummary {
+export function deriveReviewSummary(detail: Pick<TaskDetail, "scenes" | "taskRunConfig">): ReviewSummary {
   const scenes = detail.scenes.map((scene) => normalizeSceneReviewMetadata(scene))
   if (scenes.length === 0) {
     return {
@@ -288,9 +291,14 @@ export function deriveReviewSummary(detail: Pick<TaskDetail, "scenes">): ReviewS
   }
 
   const latestReviewUpdatedAt = findLatestReviewTimestamp(scenes)
-  const storyboardPendingCount = scenes.filter((scene) => scene.reviewStatus === "pending").length
-  const storyboardApproved = scenes.every((scene) => scene.reviewStatus === "approved")
-  if (!storyboardApproved) {
+  const requireStoryboardReview = detail.taskRunConfig.requireStoryboardReview
+  const requireKeyframeReview = detail.taskRunConfig.requireKeyframeReview
+
+  const storyboardPendingCount = requireStoryboardReview
+    ? scenes.filter((scene) => scene.reviewStatus === "pending").length
+    : 0
+  const storyboardApproved = !requireStoryboardReview || scenes.every((scene) => scene.reviewStatus === "approved")
+  if (requireStoryboardReview && !storyboardApproved) {
     return {
       reviewStage: "storyboard_review",
       pendingReviewCount: storyboardPendingCount,
@@ -298,9 +306,11 @@ export function deriveReviewSummary(detail: Pick<TaskDetail, "scenes">): ReviewS
     }
   }
 
-  const keyframePendingCount = scenes.filter((scene) => scene.keyframeStatus === "pending").length
-  const keyframeApproved = scenes.every((scene) => scene.keyframeStatus === "approved")
-  if (!keyframeApproved) {
+  const keyframePendingCount = requireKeyframeReview
+    ? scenes.filter((scene) => scene.keyframeStatus === "pending").length
+    : 0
+  const keyframeApproved = !requireKeyframeReview || scenes.every((scene) => scene.keyframeStatus === "approved")
+  if (requireKeyframeReview && !keyframeApproved) {
     return {
       reviewStage: "keyframe_review",
       pendingReviewCount: keyframePendingCount,
@@ -361,6 +371,13 @@ function applyDerivedReviewState(detail: TaskDetail, currentStatus: TaskStatus) 
       reviewUpdatedAt: reviewSummary.reviewUpdatedAt,
     } satisfies ReviewSummary,
     status: resolveTaskStatusForReview(currentStatus, resolvedReviewStage),
+  }
+}
+
+function buildSceneReviewRequirements(taskRunConfig: TaskRunConfig) {
+  return {
+    requireStoryboardReview: taskRunConfig.requireStoryboardReview,
+    requireKeyframeReview: taskRunConfig.requireKeyframeReview,
   }
 }
 
@@ -454,6 +471,7 @@ export async function getTaskDetail(taskId: string) {
         targetDurationSec: task.targetDurationSec,
         maxSceneDurationSec: resolveVideoModelCapability(taskRunConfig.videoDraftModel.id).maxSingleShotSec,
         aspectRatio: taskRunConfig.aspectRatio,
+        reviewRequirements: buildSceneReviewRequirements(taskRunConfig),
       }),
     )
     const normalized = applyDerivedReviewState(
@@ -484,6 +502,7 @@ export async function getTaskDetail(taskId: string) {
         targetDurationSec: task.targetDurationSec,
         maxSceneDurationSec: resolveVideoModelCapability(taskRunConfig.videoDraftModel.id).maxSingleShotSec,
         aspectRatio: taskRunConfig.aspectRatio,
+        reviewRequirements: buildSceneReviewRequirements(taskRunConfig),
       }),
       updatedAt: task.updatedAt,
     },
@@ -529,6 +548,7 @@ export async function createTask(input: CreateTaskInput): Promise<{ task: TaskSu
         targetDurationSec: input.targetDurationSec,
         maxSceneDurationSec: resolveVideoModelCapability(taskRunConfig.videoDraftModel.id).maxSingleShotSec,
         aspectRatio: taskRunConfig.aspectRatio,
+        reviewRequirements: buildSceneReviewRequirements(taskRunConfig),
       }),
       updatedAt: timestamp,
       ...createDefaultReviewSummary(),
@@ -565,6 +585,17 @@ export async function createTask(input: CreateTaskInput): Promise<{ task: TaskSu
     task,
     taskRunConfig,
   }
+}
+
+export async function deleteTask(taskId: string) {
+  const tasks = await listTasks()
+  const nextTasks = tasks.filter((task) => task.id !== taskId)
+  if (nextTasks.length !== tasks.length) {
+    await writeTaskSummaries(nextTasks)
+  }
+
+  await deleteTaskDetail(taskId)
+  await deleteTaskAssets(taskId)
 }
 
 export async function applySceneReviewDecision(

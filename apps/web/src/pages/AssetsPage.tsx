@@ -1,5 +1,16 @@
 import { useEffect, useMemo, useState } from "react"
-import { api, buildAssetDownloadUrl, buildAssetPreviewUrl, type AssetRecord, type RuntimeStatusResponse, type TaskSummary } from "../api"
+import { Link, useSearchParams } from "react-router-dom"
+import {
+  api,
+  buildAssetDownloadUrl,
+  buildAssetPreviewUrl,
+  buildBatchDashboardUrl,
+  buildKeyframeReviewUrl,
+  buildStoryboardReviewUrl,
+  type AssetRecord,
+  type RuntimeStatusResponse,
+  type TaskSummary,
+} from "../api"
 
 function getDurationDelta(task: TaskSummary | null) {
   if (!task || task.actualDurationSec == null) {
@@ -57,39 +68,80 @@ function sortAssetsForDelivery(assets: AssetRecord[]) {
 }
 
 export function AssetsPage() {
+  const [searchParams, setSearchParams] = useSearchParams()
+  const routeTaskId = searchParams.get("taskId") ?? ""
+
   const [tasks, setTasks] = useState<TaskSummary[]>([])
   const [runtime, setRuntime] = useState<RuntimeStatusResponse["runtime"] | null>(null)
   const [selectedTaskId, setSelectedTaskId] = useState("")
   const [assets, setAssets] = useState<AssetRecord[]>([])
   const [lastRefreshAt, setLastRefreshAt] = useState<string>("")
   const [isStale, setIsStale] = useState(false)
+  const [loadError, setLoadError] = useState("")
+
+  function syncTaskContext(taskId?: string, replace = true) {
+    const currentTaskId = searchParams.get("taskId") ?? ""
+    const nextTaskId = taskId ?? ""
+
+    if (currentTaskId === nextTaskId) {
+      return
+    }
+
+    const nextSearchParams = new URLSearchParams(searchParams)
+
+    if (taskId) {
+      nextSearchParams.set("taskId", taskId)
+    } else {
+      nextSearchParams.delete("taskId")
+    }
+
+    setSearchParams(nextSearchParams, { replace })
+  }
 
   useEffect(() => {
     async function load() {
       const [taskResult, runtimeResult] = await Promise.all([api.listTasks(), api.runtimeStatus()])
       setTasks(taskResult.tasks)
       setRuntime(runtimeResult.runtime)
-      setSelectedTaskId((current) => current || taskResult.tasks[0]?.id || "")
       setLastRefreshAt(new Date().toLocaleTimeString("zh-CN"))
       setIsStale(false)
+      setLoadError("")
     }
 
-    void load().catch(() => {})
+    void load().catch(() => {
+      setLoadError("任务或运行时状态加载失败，当前结果可能不完整。")
+      setIsStale(true)
+    })
 
     const timer = window.setInterval(() => {
       void Promise.all([api.listTasks(), api.runtimeStatus()])
         .then(([taskResult, runtimeResult]) => {
           setTasks(taskResult.tasks)
           setRuntime(runtimeResult.runtime)
-          setSelectedTaskId((current) => current || taskResult.tasks[0]?.id || "")
           setLastRefreshAt(new Date().toLocaleTimeString("zh-CN"))
           setIsStale(false)
+          setLoadError("")
         })
-        .catch(() => setIsStale(true))
+        .catch(() => {
+          setIsStale(true)
+          setLoadError("自动刷新失败，当前可能显示的是旧任务状态。")
+        })
     }, 5000)
 
     return () => window.clearInterval(timer)
   }, [])
+
+  useEffect(() => {
+    if (!tasks.length) {
+      setSelectedTaskId("")
+      return
+    }
+
+    const nextTask = tasks.find((task) => task.id === routeTaskId) ?? tasks[0] ?? null
+    if (nextTask && nextTask.id !== selectedTaskId) {
+      setSelectedTaskId(nextTask.id)
+    }
+  }, [routeTaskId, selectedTaskId, tasks])
 
   useEffect(() => {
     async function loadAssets() {
@@ -102,21 +154,32 @@ export function AssetsPage() {
       setAssets(result.assets)
       setLastRefreshAt(new Date().toLocaleTimeString("zh-CN"))
       setIsStale(false)
+      setLoadError("")
     }
 
     void loadAssets().catch(() => {
       setAssets([])
       setIsStale(true)
+      setLoadError("资产列表加载失败，当前无法确认交付物完整性。")
     })
 
     const timer = window.setInterval(() => {
       void loadAssets().catch(() => {
         setAssets([])
         setIsStale(true)
+        setLoadError("资产自动刷新失败，当前可能显示的是旧结果。")
       })
     }, 5000)
 
     return () => window.clearInterval(timer)
+  }, [selectedTaskId])
+
+  useEffect(() => {
+    if (!selectedTaskId) {
+      return
+    }
+
+    syncTaskContext(selectedTaskId, true)
   }, [selectedTaskId])
 
   const selectedTask = useMemo(
@@ -251,7 +314,14 @@ export function AssetsPage() {
       <div className="workspace-grid">
         <section className="card card--main">
           <label className="field-label">任务选择</label>
-          <select className="input" value={selectedTaskId} onChange={(event) => setSelectedTaskId(event.target.value)}>
+          <select
+            className="input"
+            value={selectedTaskId}
+            onChange={(event) => {
+              setSelectedTaskId(event.target.value)
+              syncTaskContext(event.target.value, false)
+            }}
+          >
             {tasks.map((task) => (
               <option key={task.id} value={task.id}>
                 {task.title} · {task.targetDurationSec}s · {task.planning?.generationRouteLabel ?? "待预判"}
@@ -270,9 +340,24 @@ export function AssetsPage() {
               ) : null}
             </div>
           </div>
+
+          <div className="route-context-card">
+            <strong>当前任务已写入链接</strong>
+            <span>
+              {selectedTaskId
+                ? `任务 ${selectedTaskId} 已同步到 URL，可直接收藏这个资产视角，再从侧栏回到对应处理页。`
+                : "选择任务后，地址会自动同步当前资产上下文。"}
+            </span>
+          </div>
+
           <div className="muted" style={{ marginBottom: 12 }}>
             最近刷新：{lastRefreshAt || "刚刚进入页面"}{isStale ? " · 当前可能显示的是旧数据" : ""}
           </div>
+          {loadError ? (
+            <div className="review-inline-note review-inline-note--danger" role="alert">
+              {loadError}
+            </div>
+          ) : null}
 
           <div className="asset-metrics">
             <div className="asset-metric-card">
@@ -326,6 +411,34 @@ export function AssetsPage() {
               <div className="task-item">
                 <strong>{runtime?.redis.name ?? "redis"}</strong>
                 <span>{runtime?.redis.status ?? "unknown"} · {runtime?.redis.message ?? "N/A"}</span>
+              </div>
+            </div>
+          </section>
+
+          <section className="card card--compact">
+            <h3>当前处理入口</h3>
+            <div className="task-list compact-list">
+              <div className="task-item">
+                <strong>{getReviewStageLabel(selectedTask)}</strong>
+                <span>资产排查完成后，可以直接跳回当前任务真正需要处理的工作台。</span>
+                <div className="task-item__actions">
+                  {selectedTask?.reviewStage === "storyboard_review" ? (
+                    <Link className="primary-button" to={buildStoryboardReviewUrl(selectedTask.id)}>
+                      进入分镜审阅
+                    </Link>
+                  ) : selectedTask?.reviewStage === "keyframe_review" ? (
+                    <Link className="primary-button" to={buildKeyframeReviewUrl(selectedTask.id)}>
+                      进入关键帧审阅
+                    </Link>
+                  ) : (
+                    <Link className="primary-button" to={buildBatchDashboardUrl(selectedTaskId || undefined)}>
+                      返回生产看板
+                    </Link>
+                  )}
+                  <Link className="ghost-button" to={buildBatchDashboardUrl(selectedTaskId || undefined)}>
+                    打开任务在看板中的位置
+                  </Link>
+                </div>
               </div>
             </div>
           </section>

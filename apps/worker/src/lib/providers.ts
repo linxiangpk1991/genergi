@@ -9,6 +9,7 @@ import {
   mergeSceneReviewMetadata,
   planningSceneSchema,
   resolveSceneCountForDurationWithLimit,
+  resolveSceneReviewDefaults,
   textPlanningOutputSchema,
   type StoryboardScene,
   type TaskDetail,
@@ -67,6 +68,20 @@ function normalizeImageModel(model: string) {
   }
 
   return lower
+}
+
+export function resolveRuntimeGenerationConfig(detail: Pick<TaskDetail, "taskRunConfig">) {
+  const ttsProvider = detail.taskRunConfig.ttsProvider.trim().toLowerCase()
+  if (ttsProvider !== "edge-tts") {
+    throw new Error(`Unsupported TTS provider: ${detail.taskRunConfig.ttsProvider}`)
+  }
+
+  return {
+    ttsProvider,
+    ttsLabel: "Edge TTS",
+    imageModelId: detail.taskRunConfig.imageFinalModel.id,
+    videoModelId: detail.taskRunConfig.videoFinalModel.id,
+  }
 }
 
 function buildKeyframePrompt(scene: StoryboardScene, aspectRatio: string) {
@@ -692,6 +707,10 @@ function alignDetailScenes(detail: TaskDetail, script: string): TaskDetail {
       maxSceneDurationSec: resolveVideoModelCapability(detail.taskRunConfig.videoDraftModel.id).maxSingleShotSec,
       aspectRatio: detail.taskRunConfig.aspectRatio,
       existingScenes: detail.scenes,
+      reviewRequirements: {
+        requireStoryboardReview: detail.taskRunConfig.requireStoryboardReview,
+        requireKeyframeReview: detail.taskRunConfig.requireKeyframeReview,
+      },
     }),
     updatedAt: new Date().toISOString(),
   }
@@ -707,6 +726,10 @@ function buildPlanningFallback(detail: TaskDetail): TextPlanningOutput {
     targetDurationSec: detail.taskRunConfig.targetDurationSec ?? 30,
     maxSceneDurationSec: resolveVideoModelCapability(detail.taskRunConfig.videoDraftModel.id).maxSingleShotSec,
     aspectRatio: detail.taskRunConfig.aspectRatio,
+    reviewRequirements: {
+      requireStoryboardReview: detail.taskRunConfig.requireStoryboardReview,
+      requireKeyframeReview: detail.taskRunConfig.requireKeyframeReview,
+    },
   })
 
   return {
@@ -836,6 +859,10 @@ export async function rewriteTaskWithTextProvider(detail: TaskDetail): Promise<T
     const planned = (await requestStructuredPlanning(detail)) ?? buildPlanningFallback(detail)
     const normalizedRewrite = normalizeRewriteToVoiceoverScript(planned.finalVoiceoverScript, detail.taskRunConfig.targetDurationSec ?? 30)
     const scenes: StoryboardScene[] = planned.scenePlan.map((scene, index) => ({
+      ...resolveSceneReviewDefaults(index, {
+        requireStoryboardReview: detail.taskRunConfig.requireStoryboardReview,
+        requireKeyframeReview: detail.taskRunConfig.requireKeyframeReview,
+      }),
       id: `scene_${index + 1}`,
       index,
       title: scene.scenePurpose,
@@ -845,10 +872,8 @@ export async function rewriteTaskWithTextProvider(detail: TaskDetail): Promise<T
       durationSec: scene.durationSec,
       startLabel: "00:00",
       endLabel: "00:00",
-      reviewStatus: index === 0 ? "approved" : "pending",
       reviewNote: null,
       reviewedAt: null,
-      keyframeStatus: "pending",
       keyframeReviewNote: null,
       keyframeReviewedAt: null,
     }))
@@ -887,10 +912,15 @@ export async function writeTaskSourceFiles(detail: TaskDetail) {
 
 export async function synthesizeNarration(detail: TaskDetail) {
   const dir = ensureTaskDir(detail.taskId)
-  const edge = new EdgeTTS()
+  const runtime = resolveRuntimeGenerationConfig(detail)
   const voice = process.env.GENERGI_TTS_VOICE ?? "en-US-AvaMultilingualNeural"
   const targetDurationSec = detail.taskRunConfig.targetDurationSec
   const attempts = [0]
+  const edge = runtime.ttsProvider === "edge-tts" ? new EdgeTTS() : null
+
+  if (!edge) {
+    throw new Error(`Unsupported TTS provider: ${detail.taskRunConfig.ttsProvider}`)
+  }
 
   let result = await edge.synthesize(detail.script, voice, { rate: attempts[0], pitch: 0, volume: 0 })
   let bestDuration = await result.getDurationSeconds()
