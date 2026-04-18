@@ -404,6 +404,8 @@ export function validatePlanningOutput(
     targetDurationSec: number
     maxSceneCount?: number
     maxSingleShotSec?: number
+    generationMode?: "user_locked" | "system_enhanced"
+    originalScript?: string
   },
 ):
   | { ok: true; value: TextPlanningOutput }
@@ -528,7 +530,23 @@ export function validatePlanningOutput(
     return { ok: false, reason: "scenePlan contains invalid scene entries" }
   }
 
+  if (
+    expected.generationMode === "system_enhanced" &&
+    expected.originalScript &&
+    normalizeForComparison(output.finalVoiceoverScript) === normalizeForComparison(expected.originalScript)
+  ) {
+    return { ok: false, reason: "system-enhanced output is too close to the original wording" }
+  }
+
   return { ok: true, value: output }
+}
+
+function normalizeForComparison(text: string) {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
 }
 
 function calculateWordBudget(targetDurationSec: number) {
@@ -754,6 +772,8 @@ async function requestStructuredPlanning(detail: TaskDetail): Promise<TextPlanni
       targetDurationSec: detail.taskRunConfig.targetDurationSec,
       maxSceneCount,
       maxSingleShotSec: capability.maxSingleShotSec,
+      generationMode: detail.taskRunConfig.generationMode,
+      originalScript: detail.script,
     })
 
     if (validated.ok) {
