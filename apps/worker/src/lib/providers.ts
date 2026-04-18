@@ -7,6 +7,7 @@ import axios from "axios"
 import {
   buildStoryboardScenes,
   planningSceneSchema,
+  resolveSceneCountForDurationWithLimit,
   textPlanningOutputSchema,
   type StoryboardScene,
   type TaskDetail,
@@ -352,7 +353,12 @@ export function buildPlanningPromptContext(input: {
   routeReason: string
   maxSingleShotSec: number
   enhancementKeywords: string[]
+  maxSceneCount?: number
 }) {
+  const requiredSceneCount =
+    input.generationRoute === "multi_scene"
+      ? input.maxSceneCount ?? resolveSceneCountForDurationWithLimit(input.targetDurationSec, input.maxSingleShotSec)
+      : 1
   return [
     `platform: ${input.platform}`,
     `target duration: ${input.targetDurationSec}s`,
@@ -371,9 +377,10 @@ export function buildPlanningPromptContext(input: {
     "- do not output markdown separators",
     "- do not output what changed and why",
     "- finalVoiceoverScript must be direct voiceover text",
+    "- when route is multi_scene, use the minimum number of scenes needed to satisfy the current model single-shot ceiling",
     input.generationRoute === "single_shot"
       ? "- scenePlan must contain exactly one scene"
-      : "- scenePlan must contain multiple scenes and their duration total must match the target duration",
+      : `- scenePlan must contain exactly ${requiredSceneCount} scenes and their duration total must match the target duration`,
   ].join("\n")
 }
 
@@ -382,6 +389,8 @@ export function validatePlanningOutput(
   expected: {
     generationRoute: "single_shot" | "multi_scene"
     targetDurationSec: number
+    maxSceneCount?: number
+    maxSingleShotSec?: number
   },
 ):
   | { ok: true; value: TextPlanningOutput }
@@ -483,6 +492,24 @@ export function validatePlanningOutput(
     return { ok: false, reason: "multi_scene output must contain more than one scene" }
   }
 
+  if (expected.maxSceneCount != null && output.scenePlan.length !== expected.maxSceneCount) {
+    return {
+      ok: false,
+      reason: `scene count mismatch: expected ${expected.maxSceneCount}, received ${output.scenePlan.length}`,
+    }
+  }
+
+  const maxSingleShotSec = expected.maxSingleShotSec
+  if (
+    maxSingleShotSec != null &&
+    output.scenePlan.some((scene) => scene.durationSec > maxSingleShotSec)
+  ) {
+    return {
+      ok: false,
+      reason: `scene duration exceeds current model single-shot limit of ${maxSingleShotSec}s`,
+    }
+  }
+
   const invalidScene = output.scenePlan.find((scene) => !planningSceneSchema.safeParse(scene).success)
   if (invalidScene) {
     return { ok: false, reason: "scenePlan contains invalid scene entries" }
@@ -493,6 +520,23 @@ export function validatePlanningOutput(
 
 function calculateWordBudget(targetDurationSec: number) {
   return Math.max(12, Math.floor(targetDurationSec * 2.2))
+}
+
+function clampRate(rate: number) {
+  return Math.max(-50, Math.min(50, Math.round(rate)))
+}
+
+export function resolveTtsRateForTargetDuration(
+  actualDurationSec: number,
+  targetDurationSec: number,
+  currentRate = 0,
+) {
+  if (!Number.isFinite(actualDurationSec) || !Number.isFinite(targetDurationSec) || targetDurationSec <= 0) {
+    return currentRate
+  }
+
+  const desiredRateDelta = ((actualDurationSec / targetDurationSec) - 1) * 100
+  return clampRate(currentRate + desiredRateDelta)
 }
 
 export function normalizeRewriteToVoiceoverScript(text: string, targetDurationSec: number) {
@@ -617,6 +661,10 @@ async function requestStructuredPlanning(detail: TaskDetail): Promise<TextPlanni
 
   const preference = GENERATION_PREFERENCES.find((item) => item.id === detail.taskRunConfig.generationMode)
   const capability = resolveVideoModelCapability(detail.taskRunConfig.videoDraftModel.id)
+  const maxSceneCount =
+    detail.taskRunConfig.generationRoute === "single_shot"
+      ? 1
+      : resolveSceneCountForDurationWithLimit(detail.taskRunConfig.targetDurationSec, capability.maxSingleShotSec)
   const promptContext = buildPlanningPromptContext({
     originalScript: detail.script,
     targetDurationSec: detail.taskRunConfig.targetDurationSec,
@@ -626,6 +674,7 @@ async function requestStructuredPlanning(detail: TaskDetail): Promise<TextPlanni
     routeReason: detail.taskRunConfig.routeReason,
     maxSingleShotSec: capability.maxSingleShotSec,
     enhancementKeywords: preference?.keywords ?? [],
+    maxSceneCount,
   })
 
   const systemPrompt =
@@ -690,6 +739,8 @@ async function requestStructuredPlanning(detail: TaskDetail): Promise<TextPlanni
     const validated = validatePlanningOutput(parsedJson, {
       generationRoute: detail.taskRunConfig.generationRoute,
       targetDurationSec: detail.taskRunConfig.targetDurationSec,
+      maxSceneCount,
+      maxSingleShotSec: capability.maxSingleShotSec,
     })
 
     if (validated.ok) {
@@ -750,19 +801,35 @@ export async function writeTaskSourceFiles(detail: TaskDetail) {
 export async function synthesizeNarration(detail: TaskDetail) {
   const dir = ensureTaskDir(detail.taskId)
   const edge = new EdgeTTS()
-  const result = await edge.synthesize(
-    detail.script,
-    process.env.GENERGI_TTS_VOICE ?? "en-US-AvaMultilingualNeural",
-    { rate: 0, pitch: 0, volume: 0 },
-  )
+  const voice = process.env.GENERGI_TTS_VOICE ?? "en-US-AvaMultilingualNeural"
+  const targetDurationSec = detail.taskRunConfig.targetDurationSec
+  const attempts = [0]
+
+  let result = await edge.synthesize(detail.script, voice, { rate: attempts[0], pitch: 0, volume: 0 })
+  let bestDuration = await result.getDurationSeconds()
+  let bestResult = result
+
+  if (Math.abs(bestDuration - targetDurationSec) > 2) {
+    const adjustedRate = resolveTtsRateForTargetDuration(bestDuration, targetDurationSec, attempts[0])
+    if (adjustedRate !== attempts[0]) {
+      attempts.push(adjustedRate)
+      const adjustedResult = await edge.synthesize(detail.script, voice, { rate: adjustedRate, pitch: 0, volume: 0 })
+      const adjustedDuration = await adjustedResult.getDurationSeconds()
+      if (Math.abs(adjustedDuration - targetDurationSec) < Math.abs(bestDuration - targetDurationSec)) {
+        bestResult = adjustedResult
+        bestDuration = adjustedDuration
+      }
+    }
+  }
+
   const audioPath = path.join(dir, "narration.mp3")
   const srtPath = path.join(dir, "subtitles.srt")
-  await result.toFile(audioPath)
-  writeFileSync(srtPath, result.getCaptionSrtString(), "utf8")
+  await bestResult.toFile(audioPath)
+  writeFileSync(srtPath, bestResult.getCaptionSrtString(), "utf8")
   return {
     audioPath,
     srtPath,
-    durationSec: await result.getDurationSeconds(),
+    durationSec: bestDuration,
   }
 }
 

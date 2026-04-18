@@ -38,6 +38,7 @@ describe("worker planning prompt", () => {
     expect(prompt).toContain("native pacing")
     expect(prompt).toContain("clear CTA")
     expect(prompt).toContain("do not output explanations")
+    expect(prompt).toContain("exactly 2 scenes")
   })
 
   it("rejects planning output that includes commentary instead of machine-usable fields", async () => {
@@ -92,5 +93,37 @@ describe("worker planning prompt", () => {
       throw new Error("expected validation failure")
     }
     expect(result.reason).toContain("commentary")
+  })
+
+  it("rejects multi-scene output when the model returns more scenes than the system route allows", async () => {
+    const providers = await import("../../../apps/worker/src/lib/providers")
+
+    const result = providers.validatePlanningOutput(
+      {
+        generationRoute: "multi_scene",
+        targetDurationSec: 15,
+        finalVoiceoverScript: "Valid script.",
+        visualStyleGuide: "Native pacing.",
+        ctaLine: "Link in bio.",
+        scenePlan: [
+          { sceneIndex: 0, scenePurpose: "Hook", durationSec: 4, script: "A", imagePrompt: "A", videoPrompt: "A", transitionHint: "cut" },
+          { sceneIndex: 1, scenePurpose: "Body", durationSec: 4, script: "B", imagePrompt: "B", videoPrompt: "B", transitionHint: "cut" },
+          { sceneIndex: 2, scenePurpose: "Body", durationSec: 4, script: "C", imagePrompt: "C", videoPrompt: "C", transitionHint: "cut" },
+          { sceneIndex: 3, scenePurpose: "CTA", durationSec: 3, script: "D", imagePrompt: "D", videoPrompt: "D", transitionHint: "close" },
+        ],
+      },
+      {
+        generationRoute: "multi_scene",
+        targetDurationSec: 15,
+        maxSceneCount: 2,
+        maxSingleShotSec: 8,
+      },
+    )
+
+    expect(result.ok).toBe(false)
+    if (result.ok) {
+      throw new Error("expected validation failure")
+    }
+    expect(result.reason).toContain("scene count")
   })
 })

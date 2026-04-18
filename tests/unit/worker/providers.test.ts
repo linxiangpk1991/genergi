@@ -53,4 +53,16 @@ Here's the thing. In Chinese destiny analysis, there's a pattern called "late bl
     expect(script).toContain("some people peak later")
     expect(script.endsWith("bio.")).toBe(true)
   })
+
+  it("computes a slower tts rate when generated narration is shorter than target duration", async () => {
+    const providers = await import("../../../apps/worker/src/lib/providers")
+
+    expect(providers.resolveTtsRateForTargetDuration(10, 15, 0)).toBeLessThan(0)
+  })
+
+  it("computes a faster tts rate when generated narration is longer than target duration", async () => {
+    const providers = await import("../../../apps/worker/src/lib/providers")
+
+    expect(providers.resolveTtsRateForTargetDuration(20, 15, 0)).toBeGreaterThan(0)
+  })
 })
