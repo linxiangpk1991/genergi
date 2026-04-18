@@ -18,6 +18,7 @@ describe("worker planning prompt", () => {
     expect(prompt).toContain("A user-supplied whole-video script.")
     expect(prompt).toContain("generation route: multi_scene")
     expect(prompt).not.toContain("stronger hook")
+    expect(prompt).toContain("preserve the user's original wording and tone as much as possible")
   })
 
   it("builds a system-enhanced planning prompt with enhancement keywords and explicit output rules", async () => {
@@ -39,6 +40,7 @@ describe("worker planning prompt", () => {
     expect(prompt).toContain("clear CTA")
     expect(prompt).toContain("do not output explanations")
     expect(prompt).toContain("exactly 2 scenes")
+    expect(prompt).toContain("you may strengthen the hook, pacing, and CTA")
   })
 
   it("rejects planning output that includes commentary instead of machine-usable fields", async () => {

@@ -359,6 +359,18 @@ export function buildPlanningPromptContext(input: {
     input.generationRoute === "multi_scene"
       ? input.maxSceneCount ?? resolveSceneCountForDurationWithLimit(input.targetDurationSec, input.maxSingleShotSec)
       : 1
+  const modeInstruction =
+    input.generationMode === "user_locked"
+      ? [
+          "- preserve the user's original wording and tone as much as possible",
+          "- do not change the core phrasing unless it is necessary for grammar or timing",
+          "- keep the planning close to the original content structure",
+        ]
+      : [
+          "- you may strengthen the hook, pacing, and CTA while preserving the original theme",
+          "- use the enhancement keywords to make the output more platform-native and more direct",
+          "- prefer stronger contrast, clearer transitions, and higher conversion clarity",
+        ]
   return [
     `platform: ${input.platform}`,
     `target duration: ${input.targetDurationSec}s`,
@@ -372,6 +384,7 @@ export function buildPlanningPromptContext(input: {
     "original script:",
     input.originalScript,
     "output requirements:",
+    ...modeInstruction,
     "- return machine-usable JSON only",
     "- do not output explanations",
     "- do not output markdown separators",
