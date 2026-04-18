@@ -256,15 +256,10 @@ done
 
 cat /tmp/genergi-health.json
 curl -fsS -H 'Host: ai.genergius.com' http://127.0.0.1/api/health
-curl -fsS -H 'Host: ai.genergius.com' http://127.0.0.1/ >/tmp/genergi-home.html
+curl -kfsSL --resolve ai.genergius.com:443:127.0.0.1 https://ai.genergius.com/ >/tmp/genergi-home.html
 grep -q "GENERGI" /tmp/genergi-home.html
-curl -fsS http://127.0.0.1:8787/api/bootstrap >/tmp/genergi-bootstrap.json
-if [ -n "\${GENERGI_ADMIN_USERNAME:-}" ] && [ -n "\${GENERGI_ADMIN_PASSWORD:-}" ]; then
-  rm -f /tmp/genergi-cookies.txt
-  login_payload="$(node -e "console.log(JSON.stringify({ username: process.env.GENERGI_ADMIN_USERNAME, password: process.env.GENERGI_ADMIN_PASSWORD }))")"
-  curl -fsS -c /tmp/genergi-cookies.txt -H 'Content-Type: application/json' -d "$login_payload" http://127.0.0.1:8787/api/auth/login >/tmp/genergi-login.json
-  curl -fsS -b /tmp/genergi-cookies.txt http://127.0.0.1:8787/api/tasks >/tmp/genergi-tasks.json
-fi
+curl -kfsSL --resolve ai.genergius.com:443:127.0.0.1 https://ai.genergius.com/api/bootstrap >/tmp/genergi-bootstrap.json
+curl -kfsSL --resolve ai.genergius.com:443:127.0.0.1 https://ai.genergius.com/api/auth/session >/tmp/genergi-session.json
 systemctl is-active genergi-worker
 ls -ld ${remoteRoot}/current ${remoteRoot}/current.prev 2>/dev/null || true
 find ${remoteRoot}/releases -maxdepth 1 -mindepth 1 -type d | sort

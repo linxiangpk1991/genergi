@@ -145,15 +145,10 @@ for attempt in 1 2 3 4 5 6 7 8 9 10; do
   sleep 2
 done
 cat /tmp/genergi-hotfix-health.json
-curl -fsS -H 'Host: ai.genergius.com' http://127.0.0.1/ >/tmp/genergi-hotfix-home.html
+curl -kfsSL --resolve ai.genergius.com:443:127.0.0.1 https://ai.genergius.com/ >/tmp/genergi-hotfix-home.html
 grep -q "GENERGI" /tmp/genergi-hotfix-home.html
-curl -fsS http://127.0.0.1:8787/api/bootstrap >/tmp/genergi-hotfix-bootstrap.json
-if [ -n "\${GENERGI_ADMIN_USERNAME:-}" ] && [ -n "\${GENERGI_ADMIN_PASSWORD:-}" ]; then
-  rm -f /tmp/genergi-hotfix-cookies.txt
-  login_payload="$(node -e "console.log(JSON.stringify({ username: process.env.GENERGI_ADMIN_USERNAME, password: process.env.GENERGI_ADMIN_PASSWORD }))")"
-  curl -fsS -c /tmp/genergi-hotfix-cookies.txt -H 'Content-Type: application/json' -d "$login_payload" http://127.0.0.1:8787/api/auth/login >/tmp/genergi-hotfix-login.json
-  curl -fsS -b /tmp/genergi-hotfix-cookies.txt http://127.0.0.1:8787/api/tasks >/tmp/genergi-hotfix-tasks.json
-fi
+curl -kfsSL --resolve ai.genergius.com:443:127.0.0.1 https://ai.genergius.com/api/bootstrap >/tmp/genergi-hotfix-bootstrap.json
+curl -kfsSL --resolve ai.genergius.com:443:127.0.0.1 https://ai.genergius.com/api/auth/session >/tmp/genergi-hotfix-session.json
 `;
 
   await runRemoteScript(script, {
