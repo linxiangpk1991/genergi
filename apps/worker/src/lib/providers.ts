@@ -648,29 +648,28 @@ export function buildSystemEnhancedFallbackScript(originalScript: string, target
     .filter(Boolean)
 
   const hook = sentences[0] ?? normalized
-  const body = sentences.slice(1, -1).join(" ")
+  const second = sentences[1] ?? ""
+  const third = sentences[2] ?? ""
   const closing = sentences.at(-1) ?? normalized
 
-  const compactHook = hook
-    .replace(/^a wooden desk is /i, "")
-    .replace(/^your /i, "")
-    .replace(/^there is /i, "")
-    .replace(/\.$/, "")
-    .trim()
+  const hookLine = /messy|clutter|chaos|cables/i.test(hook)
+    ? "Messy desk. Cables everywhere."
+    : hook.replace(/\.$/, "").trim()
 
-  const compactBody = body
-    .replace(/^a compact charger appears and /i, "")
-    .replace(/^the mood changes from /i, "")
-    .replace(/\.$/, "")
-    .trim()
+  const transformationLine = /charger|organize|setup/i.test(second)
+    ? "One compact charger clears the whole setup fast."
+    : second || "One clean switch changes everything."
 
-  const enhanced = [
-    `Messy desk? ${compactHook || "Cable chaos everywhere."}`,
-    compactBody ? `One clean switch changes everything. ${compactBody}` : "One clean switch changes everything.",
-    closing.includes("link in bio") || closing.toLowerCase().includes("upgrade")
+  const payoffLine = /stress|calm/i.test(third)
+    ? "Stress out. Calm in."
+    : third || "Clean setup. Instant relief."
+
+  const ctaLine =
+    closing.toLowerCase().includes("link in bio") || closing.toLowerCase().includes("upgrade")
       ? closing
-      : "Upgrade your desk today. Link in bio.",
-  ]
+      : "Upgrade your desk today. Link in bio."
+
+  const enhanced = [hookLine, transformationLine, payoffLine, ctaLine]
     .join(" ")
     .replace(/\s+/g, " ")
     .trim()
