@@ -17,9 +17,10 @@ import {
   createKeyframeBundle,
   createSceneVideoBundle,
   describeRuntimeGenerationConfig,
+  prepareTaskBlueprint,
   resolveRuntimeGenerationConfig,
-  rewriteTaskWithTextProvider,
   synthesizeNarration,
+  upsertTaskBlueprintSnapshot,
   writeTaskSourceFiles,
 } from "./lib/providers.js"
 
@@ -51,7 +52,12 @@ async function writeWorkerHeartbeat(message: string, status: "healthy" | "degrad
   }))
 }
 
-async function writeTaskArtifacts(taskId: string) {
+async function writeTaskArtifacts(
+  taskId: string,
+  options: {
+    continueExecution?: boolean
+  } = {},
+) {
   const detail = await readTaskDetail(taskId)
   const now = new Date().toISOString()
 
@@ -67,11 +73,24 @@ async function writeTaskArtifacts(taskId: string) {
 
     return {
       ...detailToPersist,
-      scenes: mergeSceneReviewMetadata(detailToPersist.scenes, latestDetail.scenes),
+      scenes: mergeSceneReviewMetadata(
+        detailToPersist.scenes.map((scene) => ({
+          ...scene,
+          sceneGoal: scene.sceneGoal ?? scene.title,
+          voiceoverScript: scene.voiceoverScript ?? scene.script,
+          startFrameDescription: scene.startFrameDescription ?? scene.title,
+          startFrameIntent: scene.startFrameIntent ?? scene.title,
+          endFrameIntent: scene.endFrameIntent ?? scene.title,
+          continuityConstraints: scene.continuityConstraints ?? [],
+        })),
+        latestDetail.scenes,
+      ),
     }
   }
 
-  const preparedDetail = await mergeLatestReviewMetadata(await rewriteTaskWithTextProvider(detail))
+  const prepared = await prepareTaskBlueprint(detail)
+  const preparedDetail = await mergeLatestReviewMetadata(prepared.detail)
+  let blueprintRecord = prepared.blueprintRecord
   const runtime = resolveRuntimeGenerationConfig(preparedDetail)
   const runtimeSummary = describeRuntimeGenerationConfig(runtime)
   const runtimeLabels = buildWorkerRuntimeLabels(runtime, {
@@ -84,19 +103,14 @@ async function writeTaskArtifacts(taskId: string) {
   await upsertTaskDetail(preparedDetail)
   await writeWorkerHeartbeat(`Preparing source files for ${taskId}`)
   const taskDir = await writeTaskSourceFiles(preparedDetail)
-  await writeWorkerHeartbeat(`Synthesizing narration for ${taskId} with ${runtime.ttsLabel}`)
-  const narration = await synthesizeNarration(preparedDetail)
-  const firstScene = preparedDetail.scenes[0]
-  await writeWorkerHeartbeat(`Creating scene videos for ${taskId} with ${runtime.videoModelLabel}`)
-  const sceneVideos = await createSceneVideoBundle({
-    taskId,
-    detail: preparedDetail,
-    model: runtime.videoModelId,
-    onSceneStart: async (scene, totalScenes) => {
-      await writeWorkerHeartbeat(`Generating scene ${scene.index + 1}/${totalScenes} for ${taskId}`)
-    },
-  })
-  let keyframes
+
+  let keyframes:
+    | {
+        keyframeDir: string
+        manifestPath: string
+        frameCount: number
+      }
+    | null = null
   try {
     await writeWorkerHeartbeat(`Generating keyframes for ${taskId} with ${runtime.imageModelLabel}`)
     keyframes = await Promise.race([
@@ -110,14 +124,138 @@ async function writeTaskArtifacts(taskId: string) {
       ),
     ])
   } catch (error) {
-    console.warn(`[worker] ${taskId} image keyframe generation failed, fallback to video frame:`, error instanceof Error ? error.message : String(error))
-    await writeWorkerHeartbeat(`Falling back to video-derived keyframe for ${taskId}`, "degraded")
+    console.warn(`[worker] ${taskId} image keyframe generation failed:`, error instanceof Error ? error.message : String(error))
+    if (preparedDetail.taskRunConfig.executionMode === "review_required" && !options.continueExecution) {
+      throw error
+    }
+    await writeWorkerHeartbeat(`Image generation failed, will continue with prompt-only video path for ${taskId}`, "degraded")
+    keyframes = null
+  }
+
+  blueprintRecord = await upsertTaskBlueprintSnapshot({
+    detail: preparedDetail,
+    blueprint: {
+      executionMode: blueprintRecord.blueprint.executionMode,
+      renderSpec: blueprintRecord.blueprint.renderSpec,
+      globalTheme: blueprintRecord.blueprint.globalTheme,
+      visualStyleGuide: blueprintRecord.blueprint.visualStyleGuide,
+      subjectProfile: blueprintRecord.blueprint.subjectProfile,
+      productProfile: blueprintRecord.blueprint.productProfile,
+      backgroundConstraints: blueprintRecord.blueprint.backgroundConstraints,
+      negativeConstraints: blueprintRecord.blueprint.negativeConstraints,
+      totalVoiceoverScript: blueprintRecord.blueprint.totalVoiceoverScript,
+      sceneContracts: blueprintRecord.blueprint.sceneContracts,
+    },
+    status:
+      preparedDetail.taskRunConfig.executionMode === "review_required" && !options.continueExecution
+        ? "ready_for_review"
+        : "queued_for_video",
+    keyframeManifestPath: keyframes?.manifestPath ?? blueprintRecord.keyframeManifestPath ?? null,
+  })
+
+  const blueprintAwareDetail = await mergeLatestReviewMetadata({
+    ...preparedDetail,
+    blueprintVersion: blueprintRecord.version,
+    blueprintStatus: blueprintRecord.status,
+    taskRunConfig: {
+      ...preparedDetail.taskRunConfig,
+      blueprintVersion: blueprintRecord.version,
+      blueprintStatus: blueprintRecord.status,
+    },
+  })
+  await upsertTaskDetail(blueprintAwareDetail)
+
+  if (preparedDetail.taskRunConfig.executionMode === "review_required" && !options.continueExecution) {
+    const previewAssets: AssetRecord[] = [
+      {
+        id: `${taskId}_script`,
+        taskId,
+        assetType: "script",
+        label: "英文脚本",
+        status: "ready",
+        path: `${taskDir}/script.txt`,
+        createdAt: now,
+      },
+      {
+        id: `${taskId}_storyboard`,
+        taskId,
+        assetType: "storyboard",
+        label: "分镜 JSON",
+        status: "ready",
+        path: `${taskDir}/storyboard.json`,
+        createdAt: now,
+      },
+      ...(keyframes
+        ? [
+            {
+              id: `${taskId}_keyframes`,
+              taskId,
+              assetType: "keyframe_bundle" as const,
+              label: buildWorkerRuntimeLabels(runtime, {
+                sceneCount: preparedDetail.scenes.length,
+                targetDurationSec: preparedDetail.taskRunConfig.targetDurationSec,
+                keyframeCount: keyframes.frameCount,
+              }).keyframes,
+              status: "ready" as const,
+              path: keyframes.manifestPath,
+              createdAt: now,
+            },
+          ]
+        : []),
+    ]
+
+    await upsertTaskAssets(taskId, previewAssets)
+    await updateTaskSummary(taskId, (task: TaskSummary) => ({
+      ...task,
+      status: "waiting_review",
+      progressPct: 45,
+      blueprintVersion: blueprintRecord.version,
+      blueprintStatus: blueprintRecord.status,
+      updatedAt: new Date().toISOString(),
+    }))
+    await writeWorkerHeartbeat(`Blueprint and keyframes ready for review for ${taskId}`)
+    return { phase: "review_ready" as const }
+  }
+
+  await writeWorkerHeartbeat(`Creating scene videos for ${taskId} with ${runtime.videoModelLabel}`)
+  const sceneVideos = await createSceneVideoBundle({
+    taskId,
+    detail: blueprintAwareDetail,
+    model: runtime.videoModelId,
+    blueprintRecord,
+    onSceneStart: async (scene, totalScenes) => {
+      await writeWorkerHeartbeat(`Generating scene ${scene.index + 1}/${totalScenes} for ${taskId}`)
+    },
+  })
+
+  if (!keyframes) {
+    await writeWorkerHeartbeat(`Creating fallback keyframes from video outputs for ${taskId}`, "degraded")
     keyframes = await createFallbackKeyframeBundleFromVideos({
       taskId,
-      scenes: preparedDetail.scenes,
+      scenes: blueprintAwareDetail.scenes,
       sceneVideos,
     })
+    blueprintRecord = await upsertTaskBlueprintSnapshot({
+      detail: blueprintAwareDetail,
+      blueprint: {
+        executionMode: blueprintRecord.blueprint.executionMode,
+        renderSpec: blueprintRecord.blueprint.renderSpec,
+        globalTheme: blueprintRecord.blueprint.globalTheme,
+        visualStyleGuide: blueprintRecord.blueprint.visualStyleGuide,
+        subjectProfile: blueprintRecord.blueprint.subjectProfile,
+        productProfile: blueprintRecord.blueprint.productProfile,
+        backgroundConstraints: blueprintRecord.blueprint.backgroundConstraints,
+        negativeConstraints: blueprintRecord.blueprint.negativeConstraints,
+        totalVoiceoverScript: blueprintRecord.blueprint.totalVoiceoverScript,
+        sceneContracts: blueprintRecord.blueprint.sceneContracts,
+      },
+      status: "queued_for_video",
+      keyframeManifestPath: keyframes.manifestPath,
+    })
   }
+
+  await writeWorkerHeartbeat(`Synthesizing narration for ${taskId} with ${runtime.ttsLabel}`)
+  const narration = await synthesizeNarration(blueprintAwareDetail)
   await writeWorkerHeartbeat(`Muxing final video for ${taskId}`)
   const finalVideo = await buildFinalVideoWithNarration({
     taskId,
@@ -127,13 +265,19 @@ async function writeTaskArtifacts(taskId: string) {
   })
   await upsertTaskDetail(
     await mergeLatestReviewMetadata({
-      ...preparedDetail,
+      ...blueprintAwareDetail,
       actualDurationSec: finalVideo.actualDurationSec,
+      blueprintStatus: "completed",
+      taskRunConfig: {
+        ...blueprintAwareDetail.taskRunConfig,
+        blueprintStatus: "completed",
+      },
     }),
   )
   await updateTaskSummary(taskId, (task: TaskSummary) => ({
     ...task,
     actualDurationSec: finalVideo.actualDurationSec,
+    blueprintStatus: "completed",
   }))
 
   const assets: AssetRecord[] = [
@@ -202,11 +346,22 @@ async function writeTaskArtifacts(taskId: string) {
   ]
 
   await upsertTaskAssets(taskId, assets)
+  return { phase: "completed" as const }
 }
 
 const worker = new Worker(
   TASK_QUEUE_NAME,
-  async (job: { id?: string; data: { taskId: string } }) => {
+  async (job: {
+    id?: string
+    data: {
+      taskId: string
+      continueExecution?: boolean
+      reason?: string | null
+      blueprintVersion?: number | null
+      stage?: string | null
+      resumeFrom?: string | null
+    }
+  }) => {
     const taskId = job.data.taskId
 
     try {
@@ -231,7 +386,9 @@ const worker = new Worker(
       }))
 
       console.log(`[worker] ${taskId} => generate media assets`)
-      await writeTaskArtifacts(taskId)
+      await writeTaskArtifacts(taskId, {
+        continueExecution: job.data.continueExecution ?? false,
+      })
 
       await updateTaskSummary(taskId, (task: TaskSummary) => ({
         ...task,

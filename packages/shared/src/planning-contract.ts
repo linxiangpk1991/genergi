@@ -6,6 +6,7 @@ import {
   generationRouteSchema,
 } from "./generation-route.js"
 import {
+  blueprintSceneContractSchema,
   executionModeSchema,
   plannedExecutionBlueprintSchema,
   renderSpecSchema,
@@ -52,7 +53,7 @@ export const planningSceneSchema = z.object({
 export type PlanningScene = z.infer<typeof planningSceneSchema>
 
 export const planningBlueprintSchema = plannedExecutionBlueprintSchema.extend({
-  sceneContracts: z.array(planningSceneSchema).min(1),
+  sceneContracts: z.array(blueprintSceneContractSchema).min(1),
 })
 export type PlanningBlueprint = z.infer<typeof planningBlueprintSchema>
 

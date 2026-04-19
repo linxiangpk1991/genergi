@@ -10,17 +10,32 @@ describe("worker provider helpers", () => {
   function createTaskDetail(overrides: Partial<TaskDetail> = {}): TaskDetail {
     return {
       taskId: "task_review_preservation",
+      projectId: "project_default",
       title: "Desk charger launch",
       script: "Hook the viewer fast. Reveal the desk upgrade. End with a clear CTA.",
       taskRunConfig: {
+        projectId: "project_default",
         modeId: "high_quality",
+        executionMode: "review_required",
         channelId: "reels",
+        terminalPresetId: "phone_portrait",
+        renderSpecJson: {
+          terminalPresetId: "phone_portrait",
+          width: 1080,
+          height: 1920,
+          aspectRatio: "9:16",
+          safeArea: { topPct: 8, rightPct: 6, bottomPct: 10, leftPct: 6 },
+          compositionGuideline: "主体保持在竖屏中心安全区",
+          motionGuideline: "优先轻推拉",
+        },
         targetDurationSec: 15,
         generationMode: "system_enhanced",
         enhancementMode: "system_enhanced",
         generationRoute: "multi_scene",
         routeReason: "target duration exceeds the current model single-shot limit of 8s",
         planningVersion: "v1",
+        blueprintVersion: 1,
+        blueprintStatus: "pending_generation",
         textModel: { id: "text.default", label: "Claude Opus 4.6", provider: "anthropic-compatible" },
         imageModel: { id: "image.premium", label: "Gemini 3 Pro Image Preview 2k", provider: "openai-compatible" },
         videoModel: { id: "video.hd", label: "Veo 3.1 Portrait HD", provider: "openai-compatible" },
@@ -33,6 +48,8 @@ describe("worker provider helpers", () => {
         aspectRatio: "9:16",
         slotSnapshots: [],
       },
+      blueprintVersion: 1,
+      blueprintStatus: "pending_generation",
       scenes: [],
       updatedAt: "2026-04-19T00:00:00.000Z",
       ...overrides,
@@ -264,6 +281,172 @@ A few notes to make it hit:
     expect(merged[1].reviewNote).toBe("CTA copy still needs work.")
     expect(merged[1].reviewedAt).toBe("2026-04-19T11:00:00.000Z")
     expect(merged[1].keyframeReviewedAt).toBe("2026-04-19T12:00:00.000Z")
+  })
+
+  it("builds planned execution blueprints from planning output with render-spec aware prompts", async () => {
+    const providers = await import("../../../apps/worker/src/lib/providers")
+
+    const detail = createTaskDetail()
+    const blueprint = providers.buildPlannedExecutionBlueprint(detail, {
+      generationRoute: "multi_scene",
+      targetDurationSec: 15,
+      finalVoiceoverScript: "Hook. Reveal. CTA.",
+      visualStyleGuide: "Premium vertical composition.",
+      ctaLine: "Upgrade today.",
+      scenePlan: [
+        {
+          sceneIndex: 0,
+          scenePurpose: "Open on the problem",
+          durationSec: 5,
+          script: "The desk starts cluttered.",
+          voiceoverScript: "The desk starts cluttered.",
+          startFrameDescription: "Cluttered desk opening frame",
+          imagePrompt: "Phone portrait 1080x1920, cluttered desk, centered subject.",
+          videoPrompt: "Use the input frame and slowly push into the clutter before reveal.",
+          startFrameIntent: "Introduce the problem",
+          endFrameIntent: "Hold on clutter",
+          transitionHint: "open",
+          continuityConstraints: ["product hidden"],
+        },
+      ],
+      blueprint: {
+        executionMode: "review_required",
+        renderSpec: detail.taskRunConfig.renderSpecJson,
+        globalTheme: "Desk refresh",
+        visualStyleGuide: "Premium vertical composition.",
+        subjectProfile: "Single desk hero",
+        productProfile: "Fast charging dock",
+        backgroundConstraints: ["clean desk"],
+        negativeConstraints: ["no subtitles"],
+        totalVoiceoverScript: "Hook. Reveal. CTA.",
+        sceneContracts: [],
+      },
+    })
+
+    expect(blueprint.renderSpec.width).toBe(1080)
+    expect(blueprint.renderSpec.height).toBe(1920)
+    expect(blueprint.sceneContracts[0]?.imagePrompt).toContain("1080x1920")
+    expect(blueprint.sceneContracts[0]?.videoPrompt).toContain("input frame")
+  })
+
+  it("builds scene video inputs from keyframe manifests and falls back honestly when frames are missing", async () => {
+    const providers = await import("../../../apps/worker/src/lib/providers")
+
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "genergi-scene-video-inputs-"))
+    const manifestPath = path.join(tempDir, "manifest.json")
+    const keyframePath = path.join(tempDir, "scene-01.png")
+
+    await writeFile(keyframePath, "png", "utf8")
+    await writeFile(
+      manifestPath,
+      JSON.stringify({
+        frames: [
+          {
+            sceneId: "scene_1",
+            sceneIndex: 0,
+            filePath: keyframePath,
+          },
+        ],
+      }),
+      "utf8",
+    )
+
+    const detail = createTaskDetail({
+      scenes: [
+        {
+          id: "scene_1",
+          index: 0,
+          title: "Hook",
+          sceneGoal: "Hook",
+          voiceoverScript: "Desk clutter.",
+          startFrameDescription: "Cluttered desk",
+          script: "Desk clutter.",
+          imagePrompt: "clutter prompt",
+          videoPrompt: "motion prompt",
+          startFrameIntent: "introduce clutter",
+          endFrameIntent: "hold clutter",
+          durationSec: 8,
+          startLabel: "00:00",
+          endLabel: "00:08",
+          reviewStatus: "pending",
+          keyframeStatus: "pending",
+          continuityConstraints: ["same desk"],
+          reviewNote: null,
+          reviewedAt: null,
+          keyframeReviewNote: null,
+          keyframeReviewedAt: null,
+        },
+        {
+          id: "scene_2",
+          index: 1,
+          title: "Reveal",
+          sceneGoal: "Reveal",
+          voiceoverScript: "Show the charger.",
+          startFrameDescription: "Product reveal",
+          script: "Show the charger.",
+          imagePrompt: "reveal prompt",
+          videoPrompt: "reveal motion",
+          startFrameIntent: "introduce product",
+          endFrameIntent: "hold reveal",
+          durationSec: 7,
+          startLabel: "00:08",
+          endLabel: "00:15",
+          reviewStatus: "pending",
+          keyframeStatus: "pending",
+          continuityConstraints: ["same product"],
+          reviewNote: null,
+          reviewedAt: null,
+          keyframeReviewNote: null,
+          keyframeReviewedAt: null,
+        },
+      ],
+    })
+
+    const inputs = await providers.buildSceneVideoGenerationInputs({
+      detail,
+      blueprintRecord: {
+        taskId: detail.taskId,
+        version: 1,
+        status: "queued_for_video",
+        createdAt: "2026-04-20T00:00:00.000Z",
+        updatedAt: "2026-04-20T00:00:00.000Z",
+        blueprint: {
+          taskId: detail.taskId,
+          projectId: detail.projectId,
+          version: 1,
+          createdAt: "2026-04-20T00:00:00.000Z",
+          executionMode: detail.taskRunConfig.executionMode,
+          renderSpec: detail.taskRunConfig.renderSpecJson,
+          globalTheme: detail.title,
+          visualStyleGuide: "Premium vertical composition.",
+          subjectProfile: "Single desk hero",
+          productProfile: "Fast charging dock",
+          backgroundConstraints: ["clean desk"],
+          negativeConstraints: ["no subtitles"],
+          totalVoiceoverScript: detail.script,
+          sceneContracts: detail.scenes.map((scene) => ({
+            id: scene.id,
+            index: scene.index,
+            sceneGoal: scene.sceneGoal ?? scene.title,
+            voiceoverScript: scene.voiceoverScript ?? scene.script,
+            startFrameDescription: scene.startFrameDescription ?? scene.title,
+            imagePrompt: scene.imagePrompt,
+            videoPrompt: scene.videoPrompt,
+            startFrameIntent: scene.startFrameIntent ?? scene.title,
+            endFrameIntent: scene.endFrameIntent ?? scene.title,
+            durationSec: scene.durationSec,
+            transitionHint: "cut",
+            continuityConstraints: scene.continuityConstraints ?? [],
+          })),
+        },
+        keyframeManifestPath: manifestPath,
+      },
+    })
+
+    expect(inputs[0]?.inputStrategy).toBe("keyframe_plus_prompt")
+    expect(inputs[0]?.keyframePath).toBe(keyframePath)
+    expect(inputs[1]?.inputStrategy).toBe("prompt_only")
+    expect(inputs[1]?.keyframePath).toBeNull()
   })
 
   it("strips markdown separators and drops trailing incomplete sentence fragments", async () => {

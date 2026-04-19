@@ -7,13 +7,18 @@ import axios from "axios"
 
 import {
   buildStoryboardScenes,
+  readTaskBlueprintRecords,
   mergeSceneReviewMetadata,
   planningSceneSchema,
   resolveSceneCountForDurationWithLimit,
   resolveSceneReviewDefaults,
   readProviderRecords,
+  writeTaskBlueprintRecords,
   textPlanningOutputSchema,
+  type ExecutionBlueprint,
+  type PlannedExecutionBlueprint,
   type StoryboardScene,
+  type TaskBlueprintRecord,
   type TaskDetail,
   type TextPlanningOutput,
 } from "@genergi/shared"
@@ -246,6 +251,185 @@ function buildKeyframePrompt(scene: StoryboardScene, aspectRatio: string) {
     `Vertical keyframe for a ${orientation} short-form social video.`,
     "Cinematic composition, premium product readability, crisp subject separation, no watermark, no UI chrome, no caption text.",
   ].join(" ")
+}
+
+function normalizeTransitionHint(index: number, total: number, fallback?: string) {
+  if (fallback?.trim()) {
+    return fallback.trim()
+  }
+
+  if (index === 0) {
+    return "open"
+  }
+
+  if (index === total - 1) {
+    return "close"
+  }
+
+  return "cut"
+}
+
+export function buildPlannedExecutionBlueprint(
+  detail: TaskDetail,
+  planned: TextPlanningOutput,
+): PlannedExecutionBlueprint {
+  const sceneContracts = planned.scenePlan.map((scene, index, allScenes) => ({
+    id: `scene_${index + 1}`,
+    index,
+    sceneGoal: scene.scenePurpose,
+    voiceoverScript: scene.voiceoverScript,
+    startFrameDescription: scene.startFrameDescription,
+    imagePrompt: scene.imagePrompt,
+    videoPrompt: scene.videoPrompt,
+    startFrameIntent: scene.startFrameIntent,
+    endFrameIntent: scene.endFrameIntent,
+    durationSec: scene.durationSec,
+    transitionHint: normalizeTransitionHint(index, allScenes.length, scene.transitionHint),
+    continuityConstraints: scene.continuityConstraints ?? [],
+  }))
+
+  return {
+    executionMode: detail.taskRunConfig.executionMode,
+    renderSpec: detail.taskRunConfig.renderSpecJson,
+    globalTheme: detail.title,
+    visualStyleGuide: planned.blueprint.visualStyleGuide,
+    subjectProfile: planned.blueprint.subjectProfile,
+    productProfile: planned.blueprint.productProfile,
+    backgroundConstraints: planned.blueprint.backgroundConstraints,
+    negativeConstraints: planned.blueprint.negativeConstraints,
+    totalVoiceoverScript: planned.finalVoiceoverScript,
+    sceneContracts,
+  }
+}
+
+export function buildScenesFromBlueprint(detail: TaskDetail, blueprint: PlannedExecutionBlueprint): StoryboardScene[] {
+  let cursorSec = 0
+
+  const rebuilt = blueprint.sceneContracts.map((scene, index) => {
+    const startLabel = `${String(Math.floor(cursorSec / 60)).padStart(2, "0")}:${String(cursorSec % 60).padStart(2, "0")}`
+    cursorSec += scene.durationSec
+    const endLabel = `${String(Math.floor(cursorSec / 60)).padStart(2, "0")}:${String(cursorSec % 60).padStart(2, "0")}`
+    const defaults = resolveSceneReviewDefaults(index, {
+      requireStoryboardReview: detail.taskRunConfig.requireStoryboardReview,
+      requireKeyframeReview: detail.taskRunConfig.requireKeyframeReview,
+    })
+
+    return {
+      id: scene.id,
+      index,
+      title: scene.sceneGoal,
+      sceneGoal: scene.sceneGoal,
+      voiceoverScript: scene.voiceoverScript,
+      startFrameDescription: scene.startFrameDescription,
+      script: scene.voiceoverScript,
+      imagePrompt: scene.imagePrompt,
+      videoPrompt: scene.videoPrompt,
+      startFrameIntent: scene.startFrameIntent,
+      endFrameIntent: scene.endFrameIntent,
+      durationSec: scene.durationSec,
+      startLabel,
+      endLabel,
+      reviewStatus: defaults.reviewStatus,
+      keyframeStatus: defaults.keyframeStatus,
+      continuityConstraints: scene.continuityConstraints ?? [],
+      reviewNote: null,
+      reviewedAt: null,
+      keyframeReviewNote: null,
+      keyframeReviewedAt: null,
+    } satisfies StoryboardScene
+  })
+
+  return mergeSceneReviewMetadata(rebuilt, detail.scenes)
+}
+
+export async function getCurrentTaskBlueprintRecord(taskId: string): Promise<TaskBlueprintRecord | null> {
+  const records = await readTaskBlueprintRecords()
+  return (records[taskId] ?? []).slice().sort((left, right) => left.version - right.version).at(-1) ?? null
+}
+
+export async function upsertTaskBlueprintSnapshot(input: {
+  detail: TaskDetail
+  blueprint: PlannedExecutionBlueprint
+  status: TaskBlueprintRecord["status"]
+  keyframeManifestPath?: string | null
+}): Promise<TaskBlueprintRecord> {
+  const records = await readTaskBlueprintRecords()
+  const currentRecords = records[input.detail.taskId] ?? []
+  const version = input.detail.blueprintVersion > 0 ? input.detail.blueprintVersion : 1
+  const existing = currentRecords.find((record) => record.version === version)
+  const updatedAt = new Date().toISOString()
+  const nextRecord: TaskBlueprintRecord = {
+    taskId: input.detail.taskId,
+    version,
+    status: input.status,
+    createdAt: existing?.createdAt ?? updatedAt,
+    updatedAt,
+    blueprint: {
+      taskId: input.detail.taskId,
+      projectId: input.detail.projectId,
+      version,
+      createdAt: existing?.blueprint.createdAt ?? updatedAt,
+      ...input.blueprint,
+    },
+    keyframeManifestPath: input.keyframeManifestPath ?? existing?.keyframeManifestPath ?? null,
+  }
+
+  records[input.detail.taskId] = [...currentRecords.filter((record) => record.version !== version), nextRecord]
+    .sort((left, right) => left.version - right.version)
+  await writeTaskBlueprintRecords(records)
+  return nextRecord
+}
+
+export type SceneVideoGenerationInput = {
+  scene: StoryboardScene
+  keyframePath: string | null
+  inputStrategy: "keyframe_plus_prompt" | "prompt_only"
+}
+
+export async function buildSceneVideoGenerationInputs(input: {
+  detail: TaskDetail
+  blueprintRecord: TaskBlueprintRecord | null
+}): Promise<SceneVideoGenerationInput[]> {
+  if (!input.blueprintRecord?.keyframeManifestPath) {
+    return input.detail.scenes.map((scene) => ({
+      scene,
+      keyframePath: null,
+      inputStrategy: "prompt_only",
+    }))
+  }
+
+  try {
+    const manifestRaw = await fs.readFile(input.blueprintRecord.keyframeManifestPath, "utf8")
+    const manifest = JSON.parse(manifestRaw) as {
+      frames?: Array<{ sceneId?: string; sceneIndex?: number; filePath?: string }>
+    }
+    return input.detail.scenes.map((scene) => {
+      const frame =
+        manifest.frames?.find((item) => item.sceneId === scene.id) ??
+        manifest.frames?.find((item) => item.sceneIndex === scene.index) ??
+        null
+
+      if (frame?.filePath) {
+        return {
+          scene,
+          keyframePath: frame.filePath,
+          inputStrategy: "keyframe_plus_prompt",
+        }
+      }
+
+      return {
+        scene,
+        keyframePath: null,
+        inputStrategy: "prompt_only",
+      }
+    })
+  } catch {
+    return input.detail.scenes.map((scene) => ({
+      scene,
+      keyframePath: null,
+      inputStrategy: "prompt_only",
+    }))
+  }
 }
 
 function extractGenerationId(payload: any) {
@@ -613,8 +797,18 @@ function extractJsonObject(text: string) {
 
 export function buildPlanningPromptContext(input: {
   originalScript: string
+  projectId: string
   targetDurationSec: number
   platform: string
+  executionMode: "automated" | "review_required"
+  terminalPresetId: string
+  renderSpec: {
+    width: number
+    height: number
+    aspectRatio: string
+    compositionGuideline: string
+    motionGuideline: string
+  }
   generationMode: "user_locked" | "system_enhanced"
   generationRoute: "single_shot" | "multi_scene"
   routeReason: string
@@ -639,7 +833,14 @@ export function buildPlanningPromptContext(input: {
           "- prefer stronger contrast, clearer transitions, and higher conversion clarity",
         ]
   return [
+    `project id: ${input.projectId}`,
     `platform: ${input.platform}`,
+    `execution mode: ${input.executionMode}`,
+    `terminal preset: ${input.terminalPresetId}`,
+    `render size: ${input.renderSpec.width}x${input.renderSpec.height}`,
+    `render aspect ratio: ${input.renderSpec.aspectRatio}`,
+    `composition guideline: ${input.renderSpec.compositionGuideline}`,
+    `motion guideline: ${input.renderSpec.motionGuideline}`,
     `target duration: ${input.targetDurationSec}s`,
     `generation mode: ${input.generationMode}`,
     `generation route: ${input.generationRoute}`,
@@ -726,6 +927,11 @@ export function validatePlanningOutput(
               imagePrompt?: string
               videoPrompt?: string
               transitionHint?: string
+              startFrameDescription?: string
+              voiceoverScript?: string
+              startFrameIntent?: string
+              endFrameIntent?: string
+              continuityConstraints?: string[]
             }>
           }).scenePlan.map((scene, index, allScenes) => {
             const script = scene.script ?? scene.voiceoverSegment ?? ""
@@ -737,13 +943,41 @@ export function validatePlanningOutput(
               scenePurpose: scene.scenePurpose ?? `Scene ${index + 1}`,
               durationSec: scene.durationSec ?? scene.durationSeconds ?? Math.floor(expected.targetDurationSec / allScenes.length),
               script,
+              voiceoverScript: scene.voiceoverScript ?? script,
+              startFrameDescription: scene.startFrameDescription ?? visual,
               imagePrompt: scene.imagePrompt ?? `${visual}${mood}${camera}`.trim(),
               videoPrompt:
                 scene.videoPrompt ??
                 `${visual}${mood}${camera} Generate a short-form social video shot that matches this exact beat.`.trim(),
+              startFrameIntent: scene.startFrameIntent ?? (scene.scenePurpose ?? `Introduce scene ${index + 1}`),
+              endFrameIntent: scene.endFrameIntent ?? (index === allScenes.length - 1 ? "Close on the final message" : `Hand off from scene ${index + 1}`),
               transitionHint: scene.transitionHint ?? (index === allScenes.length - 1 ? "close" : "cut"),
+              continuityConstraints: Array.isArray(scene.continuityConstraints) ? scene.continuityConstraints : [],
             }
           }),
+          blueprint: {
+            globalTheme:
+              (raw as { globalTheme?: string }).globalTheme ??
+              "Preserve the original content theme with platform-native execution.",
+            visualStyleGuide:
+              (raw as { visualStyleGuide?: string }).visualStyleGuide ??
+              "Use the returned image and video prompts as the canonical visual guide.",
+            subjectProfile:
+              (raw as { subjectProfile?: string }).subjectProfile ??
+              "Maintain one consistent subject profile across all scenes.",
+            productProfile:
+              (raw as { productProfile?: string }).productProfile ??
+              "Keep product presentation consistent across all scenes.",
+            backgroundConstraints: [],
+            negativeConstraints: [],
+            totalVoiceoverScript:
+              (raw as { finalVoiceoverScript?: string }).finalVoiceoverScript ??
+              ((raw as { scenePlan: Array<{ voiceoverSegment?: string }> }).scenePlan
+                .map((scene) => scene.voiceoverSegment ?? "")
+                .join(" ")
+                .trim()),
+            sceneContracts: [],
+          },
         }
       : raw
 
@@ -752,7 +986,29 @@ export function validatePlanningOutput(
     return { ok: false, reason: `planning output schema invalid: ${parsed.error.issues[0]?.message ?? "unknown error"}` }
   }
 
-  const output = parsed.data
+  const output = parsed.data.blueprint.sceneContracts.length
+    ? parsed.data
+    : {
+        ...parsed.data,
+        blueprint: {
+          ...parsed.data.blueprint,
+          totalVoiceoverScript: parsed.data.finalVoiceoverScript,
+          sceneContracts: parsed.data.scenePlan.map((scene, index, allScenes) => ({
+            id: `scene_${index + 1}`,
+            index,
+            sceneGoal: scene.scenePurpose,
+            voiceoverScript: scene.voiceoverScript,
+            startFrameDescription: scene.startFrameDescription,
+            imagePrompt: scene.imagePrompt,
+            videoPrompt: scene.videoPrompt,
+            startFrameIntent: scene.startFrameIntent,
+            endFrameIntent: scene.endFrameIntent,
+            durationSec: scene.durationSec,
+            transitionHint: normalizeTransitionHint(index, allScenes.length, scene.transitionHint),
+            continuityConstraints: scene.continuityConstraints ?? [],
+          })),
+        },
+      }
   if (output.generationRoute !== expected.generationRoute) {
     return { ok: false, reason: `route mismatch: expected ${expected.generationRoute}, received ${output.generationRoute}` }
   }
@@ -982,6 +1238,45 @@ function buildPlanningFallback(detail: TaskDetail): TextPlanningOutput {
       requireKeyframeReview: detail.taskRunConfig.requireKeyframeReview,
     },
   })
+  const blueprint = buildPlannedExecutionBlueprint(detail, {
+    generationRoute: detail.taskRunConfig.generationRoute,
+    targetDurationSec: detail.taskRunConfig.targetDurationSec,
+    finalVoiceoverScript,
+    visualStyleGuide:
+      detail.taskRunConfig.generationMode === "system_enhanced"
+        ? "System enhanced social-video pacing."
+        : "Preserve original tone with minimal structural cleanup.",
+    ctaLine: scenes.at(-1)?.script ?? finalVoiceoverScript,
+    scenePlan: scenes.map((scene) => ({
+      sceneIndex: scene.index,
+      scenePurpose: scene.title,
+      durationSec: scene.durationSec,
+      script: scene.script,
+      voiceoverScript: scene.voiceoverScript ?? scene.script,
+      startFrameDescription: scene.startFrameDescription ?? scene.title,
+      imagePrompt: scene.imagePrompt,
+      videoPrompt: scene.videoPrompt,
+      startFrameIntent: scene.startFrameIntent ?? scene.title,
+      endFrameIntent: scene.endFrameIntent ?? scene.title,
+      transitionHint: scene.index === 0 ? "open" : scene.index === scenes.length - 1 ? "close" : "cut",
+      continuityConstraints: scene.continuityConstraints ?? [],
+    })),
+    blueprint: {
+      executionMode: detail.taskRunConfig.executionMode,
+      renderSpec: detail.taskRunConfig.renderSpecJson,
+      globalTheme: detail.title,
+      visualStyleGuide:
+        detail.taskRunConfig.generationMode === "system_enhanced"
+          ? "System enhanced social-video pacing."
+          : "Preserve original tone with minimal structural cleanup.",
+      subjectProfile: "Maintain one consistent subject profile across all scenes.",
+      productProfile: "Keep product presentation consistent across all scenes.",
+      backgroundConstraints: [],
+      negativeConstraints: ["No subtitles", "No watermark", "No UI elements"],
+      totalVoiceoverScript: finalVoiceoverScript,
+      sceneContracts: [],
+    },
+  })
 
   return {
     generationRoute: detail.taskRunConfig.generationRoute,
@@ -994,10 +1289,16 @@ function buildPlanningFallback(detail: TaskDetail): TextPlanningOutput {
       scenePurpose: scene.title,
       durationSec: scene.durationSec,
       script: scene.script,
+      voiceoverScript: scene.voiceoverScript ?? scene.script,
+      startFrameDescription: scene.startFrameDescription ?? scene.title,
       imagePrompt: scene.imagePrompt,
       videoPrompt: scene.videoPrompt,
+      startFrameIntent: scene.startFrameIntent ?? scene.title,
+      endFrameIntent: scene.endFrameIntent ?? scene.title,
       transitionHint: scene.index === 0 ? "open" : scene.index === scenes.length - 1 ? "close" : "cut",
+      continuityConstraints: scene.continuityConstraints ?? [],
     })),
+    blueprint,
   }
 }
 
@@ -1020,8 +1321,12 @@ async function requestStructuredPlanning(detail: TaskDetail): Promise<TextPlanni
       : resolveSceneCountForDurationWithLimit(detail.taskRunConfig.targetDurationSec, capability.maxSingleShotSec)
   const promptContext = buildPlanningPromptContext({
     originalScript: detail.script,
+    projectId: detail.projectId,
     targetDurationSec: detail.taskRunConfig.targetDurationSec,
     platform: detail.taskRunConfig.channelId,
+    executionMode: detail.taskRunConfig.executionMode,
+    terminalPresetId: detail.taskRunConfig.terminalPresetId,
+    renderSpec: detail.taskRunConfig.renderSpecJson,
     generationMode: detail.taskRunConfig.generationMode,
     generationRoute: detail.taskRunConfig.generationRoute,
     routeReason: detail.taskRunConfig.routeReason,
@@ -1107,51 +1412,84 @@ async function requestStructuredPlanning(detail: TaskDetail): Promise<TextPlanni
 }
 
 export async function rewriteTaskWithTextProvider(detail: TaskDetail): Promise<TaskDetail> {
+  const prepared = await buildPreparedTaskDetail(detail)
+  return prepared.detail
+}
+
+async function buildPreparedTaskDetail(detail: TaskDetail): Promise<{
+  detail: TaskDetail
+  blueprint: PlannedExecutionBlueprint
+}> {
   try {
     const planned = (await requestStructuredPlanning(detail)) ?? buildPlanningFallback(detail)
     const normalizedRewrite = normalizeRewriteToVoiceoverScript(planned.finalVoiceoverScript, detail.taskRunConfig.targetDurationSec ?? 30)
-    const scenes: StoryboardScene[] = planned.scenePlan.map((scene, index) => ({
-      ...resolveSceneReviewDefaults(index, {
-        requireStoryboardReview: detail.taskRunConfig.requireStoryboardReview,
-        requireKeyframeReview: detail.taskRunConfig.requireKeyframeReview,
-      }),
-      id: `scene_${index + 1}`,
-      index,
-      title: scene.scenePurpose,
-      script: scene.script,
-      imagePrompt: scene.imagePrompt,
-      videoPrompt: scene.videoPrompt,
-      durationSec: scene.durationSec,
-      startLabel: "00:00",
-      endLabel: "00:00",
-      reviewNote: null,
-      reviewedAt: null,
-      keyframeReviewNote: null,
-      keyframeReviewedAt: null,
-    }))
-
-    let cursorSec = 0
-    const normalizedScenes = mergeSceneReviewMetadata(
-      scenes.map((scene) => {
-        const startLabel = `${String(Math.floor(cursorSec / 60)).padStart(2, "0")}:${String(cursorSec % 60).padStart(2, "0")}`
-        cursorSec += scene.durationSec
-        const endLabel = `${String(Math.floor(cursorSec / 60)).padStart(2, "0")}:${String(cursorSec % 60).padStart(2, "0")}`
-        return { ...scene, startLabel, endLabel }
-      }),
-      detail.scenes,
-    )
+    const normalizedScenes = buildScenesFromBlueprint(detail, planned.blueprint)
 
     return {
-      ...detail,
-      script: normalizedRewrite || detail.script,
-      visualStyleGuide: planned.visualStyleGuide,
-      ctaLine: planned.ctaLine,
-      scenes: normalizedScenes,
-      updatedAt: new Date().toISOString(),
+      detail: {
+        ...detail,
+        script: normalizedRewrite || detail.script,
+        blueprintVersion: detail.blueprintVersion > 0 ? detail.blueprintVersion : 1,
+        blueprintStatus: detail.blueprintStatus,
+        taskRunConfig: {
+          ...detail.taskRunConfig,
+          blueprintVersion: detail.taskRunConfig.blueprintVersion > 0 ? detail.taskRunConfig.blueprintVersion : 1,
+          blueprintStatus: detail.taskRunConfig.blueprintStatus,
+        },
+        visualStyleGuide: planned.visualStyleGuide,
+        ctaLine: planned.ctaLine,
+        scenes: normalizedScenes,
+        updatedAt: new Date().toISOString(),
+      },
+      blueprint: planned.blueprint,
     }
   } catch (error) {
     console.warn(`[worker] structured planning skipped:`, error instanceof Error ? error.message : String(error))
-    return alignDetailScenes(detail, detail.script)
+    const fallbackDetail = alignDetailScenes(detail, detail.script)
+    const fallbackPlan = buildPlanningFallback(fallbackDetail)
+    return {
+      detail: fallbackDetail,
+      blueprint: fallbackPlan.blueprint,
+    }
+  }
+}
+
+export async function prepareTaskBlueprint(detail: TaskDetail): Promise<{
+  detail: TaskDetail
+  blueprintRecord: TaskBlueprintRecord
+}> {
+  const prepared = await buildPreparedTaskDetail(detail)
+  const blueprintRecord = await upsertTaskBlueprintSnapshot({
+    detail: {
+      ...prepared.detail,
+      blueprintVersion: prepared.detail.blueprintVersion > 0 ? prepared.detail.blueprintVersion : 1,
+      blueprintStatus: prepared.detail.blueprintStatus,
+      taskRunConfig: {
+        ...prepared.detail.taskRunConfig,
+        blueprintVersion: prepared.detail.taskRunConfig.blueprintVersion > 0 ? prepared.detail.taskRunConfig.blueprintVersion : 1,
+      },
+    },
+    blueprint: prepared.blueprint,
+    status: prepared.detail.taskRunConfig.executionMode === "review_required" ? "ready_for_review" : "pending_generation",
+  })
+
+  return {
+    detail: {
+      ...prepared.detail,
+      script: prepared.detail.script,
+      blueprintVersion: blueprintRecord.version,
+      blueprintStatus: blueprintRecord.status,
+      taskRunConfig: {
+        ...prepared.detail.taskRunConfig,
+        blueprintVersion: blueprintRecord.version,
+        blueprintStatus: blueprintRecord.status,
+      },
+      visualStyleGuide: blueprintRecord.blueprint.visualStyleGuide,
+      ctaLine: prepared.detail.ctaLine,
+      scenes: prepared.detail.scenes,
+      updatedAt: new Date().toISOString(),
+    },
+    blueprintRecord,
   }
 }
 
@@ -1202,9 +1540,24 @@ export async function synthesizeNarration(detail: TaskDetail) {
   }
 }
 
-export async function createVideoFromPrompt(input: { taskId: string; scene: StoryboardScene; model: string }) {
+export async function createVideoFromPrompt(input: {
+  taskId: string
+  scene: StoryboardScene
+  model: string
+  keyframePath?: string | null
+}) {
   if (!gatewayApiKey) {
     throw new Error("GENERGI_MEDIA_GATEWAY_API_KEY is missing")
+  }
+
+  let conditioningImage: string | null = null
+  if (input.keyframePath) {
+    try {
+      const bytes = await fs.readFile(input.keyframePath)
+      conditioningImage = `data:image/${path.extname(input.keyframePath).replace(".", "") || "png"};base64,${bytes.toString("base64")}`
+    } catch {
+      conditioningImage = null
+    }
   }
 
   let createResponse
@@ -1217,6 +1570,7 @@ export async function createVideoFromPrompt(input: { taskId: string; scene: Stor
           model: normalizeVideoModel(input.model),
           prompt: input.scene.videoPrompt || input.scene.script || input.scene.title,
           duration: Math.max(Math.round(input.scene.durationSec), 4),
+          ...(conditioningImage ? { image: conditioningImage } : {}),
         },
         {
           headers: {
@@ -1291,30 +1645,38 @@ export async function createSceneVideoBundle(input: {
   taskId: string
   detail: TaskDetail
   model: string
+  blueprintRecord?: TaskBlueprintRecord | null
   onSceneStart?: (scene: StoryboardScene, totalScenes: number) => Promise<void> | void
 }) {
+  const sceneInputs = await buildSceneVideoGenerationInputs({
+    detail: input.detail,
+    blueprintRecord: input.blueprintRecord ?? null,
+  })
   const videos = []
-  for (const scene of input.detail.scenes) {
-    await input.onSceneStart?.(scene, input.detail.scenes.length)
+  for (const sceneInput of sceneInputs) {
+    await input.onSceneStart?.(sceneInput.scene, input.detail.scenes.length)
 
     const video = await Promise.race([
       createVideoFromPrompt({
         taskId: input.taskId,
-        scene,
+        scene: sceneInput.scene,
         model: input.model,
+        keyframePath: sceneInput.keyframePath,
       }),
       new Promise<never>((_, reject) =>
         setTimeout(
-          () => reject(new Error(`Scene ${scene.index + 1} video generation timeout`)),
+          () => reject(new Error(`Scene ${sceneInput.scene.index + 1} video generation timeout`)),
           8 * 60 * 1000,
         ),
       ),
     ])
     videos.push({
       ...video,
-      sceneId: scene.id,
-      sceneIndex: scene.index,
-      durationSec: scene.durationSec,
+      sceneId: sceneInput.scene.id,
+      sceneIndex: sceneInput.scene.index,
+      durationSec: sceneInput.scene.durationSec,
+      inputStrategy: sceneInput.inputStrategy,
+      keyframePath: sceneInput.keyframePath,
     })
   }
   return videos

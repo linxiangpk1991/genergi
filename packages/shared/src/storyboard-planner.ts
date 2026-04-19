@@ -5,14 +5,20 @@ export type PlannedStoryboardScene = {
   id: string
   index: number
   title: string
+  sceneGoal: string
+  voiceoverScript: string
+  startFrameDescription: string
   script: string
   imagePrompt: string
   videoPrompt: string
+  startFrameIntent: string
+  endFrameIntent: string
   durationSec: number
   startLabel: string
   endLabel: string
   reviewStatus: "pending" | "approved" | "rejected"
   keyframeStatus: "pending" | "approved" | "rejected"
+  continuityConstraints: string[]
 }
 
 export type SceneReviewMetadata = {
@@ -223,14 +229,20 @@ export function buildStoryboardScenes(input: {
       id: `scene_${index + 1}`,
       index,
       title: buildSceneTitle(index, sceneScript),
+      sceneGoal: buildSceneTitle(index, sceneScript),
+      voiceoverScript: sceneScript,
+      startFrameDescription: buildSceneTitle(index, sceneScript),
       script: sceneScript,
       imagePrompt: buildImagePrompt(sceneScript, input.aspectRatio),
       videoPrompt: buildVideoPrompt(sceneScript, input.aspectRatio, durationSec),
+      startFrameIntent: buildSceneTitle(index, sceneScript),
+      endFrameIntent: index === sceneCount - 1 ? "Close on the final scene." : `Hand off from scene ${index + 1}.`,
       durationSec,
       startLabel,
       endLabel,
       reviewStatus: reviewDefaults.reviewStatus,
       keyframeStatus: reviewDefaults.keyframeStatus,
+      continuityConstraints: [],
       reviewNote: null,
       reviewedAt: null,
       keyframeReviewNote: null,
