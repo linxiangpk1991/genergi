@@ -1,0 +1,95 @@
+import type { HelpFeatureGuide } from "./types"
+
+export const featureGuides: HelpFeatureGuide[] = [
+  {
+    id: "task-launch",
+    title: "任务启动",
+    purpose: "发起新的短视频生产任务，并确定内容母本、时长、渠道和生成方式。",
+    whenToUse: "当你准备开始一条新内容生产任务时使用。",
+    sections: [
+      { title: "这个页面是干什么的", points: ["负责把内容母本转成任务。", "适合确定本次任务的基础方向。"] },
+      { title: "页面主要区域", points: ["内容母本配置区", "本次任务摘要", "任务级高级覆盖"] },
+      { title: "常见操作", points: ["填写任务名称和内容母本", "选择时长与渠道", "必要时展开高级覆盖"] },
+      { title: "常见误区", points: ["不要把技术提示词直接写进内容母本", "不要把临时覆盖当成长期默认"] },
+    ],
+    relatedWorkflowIds: ["launch-review-delivery", "model-onboarding-and-defaults"],
+  },
+  {
+    id: "storyboard-review",
+    title: "分镜审阅",
+    purpose: "确认脚本和分镜是否正确表达内容母本。",
+    whenToUse: "当任务进入分镜审阅阶段，需要人工判断脚本和分镜时使用。",
+    sections: [
+      { title: "这个页面是干什么的", points: ["帮助你判断场景分段是否合理。", "帮助你确认脚本和 scene 顺序是否正确。"] },
+      { title: "页面主要区域", points: ["任务选择区", "scene 列表", "脚本和提示词详情"] },
+      { title: "常见操作", points: ["逐段查看 scene", "确认脚本表达", "做通过或退回判断"] },
+      { title: "常见误区", points: ["不要只看某一段，要看整体顺序", "不要把图片问题和脚本问题混在一起判断"] },
+    ],
+    relatedWorkflowIds: ["launch-review-delivery", "failure-triage"],
+  },
+  {
+    id: "keyframe-review",
+    title: "关键帧审阅",
+    purpose: "确认关键帧主体、构图和方向是否符合内容要求。",
+    whenToUse: "当任务进入关键帧审阅阶段时使用。",
+    sections: [
+      { title: "这个页面是干什么的", points: ["帮助你检查画面主体是否对。", "帮助你判断风格和构图是否可接受。"] },
+      { title: "页面主要区域", points: ["关键帧预览区", "场景信息区", "审阅动作区"] },
+      { title: "常见操作", points: ["看关键帧是否偏题", "看画面是否与脚本一致", "决定继续或退回"] },
+      { title: "常见误区", points: ["不要只看画质，要先看内容是否对", "不要忽略与脚本的对应关系"] },
+    ],
+    relatedWorkflowIds: ["launch-review-delivery", "failure-triage"],
+  },
+  {
+    id: "batch-dashboard",
+    title: "生产看板",
+    purpose: "查看任务运行状态、异常和需要继续处理的工作。",
+    whenToUse: "当你需要快速定位异常任务或整体查看任务运行状态时使用。",
+    sections: [
+      { title: "这个页面是干什么的", points: ["帮助你找到需要继续处理的任务。", "帮助你区分运行中、完成和失败任务。"] },
+      { title: "页面主要区域", points: ["任务列表", "状态摘要", "异常入口"] },
+      { title: "常见操作", points: ["筛选异常任务", "从看板继续进入审阅或资产页", "确认运行状态"] },
+      { title: "常见误区", points: ["不要在看板里直接猜失败原因", "看板适合定位，不适合替代资产排查"] },
+    ],
+    relatedWorkflowIds: ["failure-triage"],
+  },
+  {
+    id: "asset-center",
+    title: "交付资产",
+    purpose: "查看最终交付物和中间产物，确认当前任务已经生成了什么。",
+    whenToUse: "当你需要确认任务产物、下载资产或排查交付缺口时使用。",
+    sections: [
+      { title: "这个页面是干什么的", points: ["帮助你确认最终视频是否可交付。", "帮助你回查字幕、脚本和中间产物。"] },
+      { title: "页面主要区域", points: ["最终交付物区域", "中间资产列表", "预览与下载入口"] },
+      { title: "常见操作", points: ["先看最终视频", "再看字幕和脚本", "必要时下载或预览中间文件"] },
+      { title: "常见误区", points: ["不要一上来先翻中间资产", "先看最终交付是否已经满足需求"] },
+    ],
+    relatedWorkflowIds: ["launch-review-delivery", "failure-triage"],
+  },
+  {
+    id: "model-control-center",
+    title: "模型控制中心",
+    purpose: "管理 Provider、Model、默认值和任务级模型覆盖的基线规则。",
+    whenToUse: "当你需要接入新模型、调整默认值或理解模型如何生效时使用。",
+    sections: [
+      { title: "这个页面是干什么的", points: ["帮助你维护模型接入链路。", "帮助你理解默认值如何影响任务。"] },
+      { title: "页面主要区域", points: ["总览", "Provider 管理", "Model Registry", "Defaults Center"] },
+      { title: "常见操作", points: ["新增 Provider", "登记 Model", "设置模式默认", "查看覆盖现状"] },
+      { title: "常见误区", points: ["不要用任务覆盖代替默认值治理", "不要把未校验记录当成可用项"] },
+    ],
+    relatedWorkflowIds: ["model-onboarding-and-defaults"],
+  },
+  {
+    id: "user-center",
+    title: "用户中心",
+    purpose: "维护内部账号、状态和密码。",
+    whenToUse: "当你需要新增或调整运营账号时使用。",
+    sections: [
+      { title: "这个页面是干什么的", points: ["负责内部账号管理。", "帮助你控制谁可以登录后台。"] },
+      { title: "页面主要区域", points: ["用户列表", "状态管理", "密码重置"] },
+      { title: "常见操作", points: ["新增用户", "启停账号", "重置密码"] },
+      { title: "常见误区", points: ["不要把临时账号长期保留", "不要忽略账号状态管理"] },
+    ],
+    relatedWorkflowIds: [],
+  },
+]

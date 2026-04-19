@@ -13,6 +13,10 @@ import { ModelControlCenterPage } from "./pages/ModelControlCenterPage"
 import { ModelProvidersPage } from "./pages/ModelProvidersPage"
 import { ModelRegistryPage } from "./pages/ModelRegistryPage"
 import { ModelDefaultsPage } from "./pages/ModelDefaultsPage"
+import { HelpCenterHomePage } from "./pages/HelpCenterHomePage"
+import { HelpWorkflowPage } from "./pages/HelpWorkflowPage"
+import { HelpFeaturePage } from "./pages/HelpFeaturePage"
+import { HelpReleaseTimelinePage } from "./pages/HelpReleaseTimelinePage"
 
 export function App() {
   const [authLoading, setAuthLoading] = useState(true)
@@ -50,6 +54,10 @@ export function App() {
         <Route path="/batch-dashboard" element={<BatchDashboardPage />} />
         <Route path="/asset-center" element={<AssetsPage />} />
         <Route path="/user-center" element={<UserCenterPage />} />
+        <Route path="/help-center" element={<HelpCenterHomePage />} />
+        <Route path="/help-center/workflows/:workflowId" element={<HelpWorkflowPage />} />
+        <Route path="/help-center/features/:featureId" element={<HelpFeaturePage />} />
+        <Route path="/help-center/releases" element={<HelpReleaseTimelinePage />} />
         <Route path="/model-control-center" element={<ModelControlCenterPage />} />
         <Route path="/model-control-center/providers" element={<ModelProvidersPage />} />
         <Route path="/model-control-center/registry" element={<ModelRegistryPage />} />

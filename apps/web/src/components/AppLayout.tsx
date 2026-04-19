@@ -16,6 +16,7 @@ const navGroups = [
   {
     label: "系统管理",
     items: [
+      { to: "/help-center", label: "帮助中心" },
       { to: "/model-control-center", label: "模型控制中心" },
       { to: "/user-center", label: "用户中心" },
     ],
@@ -59,6 +60,13 @@ function getWorkspaceMeta(pathname: string) {
     return {
       title: "模型控制中心",
       description: "管理 Provider、模型和默认值。",
+    }
+  }
+
+  if (pathname.startsWith("/help-center")) {
+    return {
+      title: "帮助中心",
+      description: "按流程学习、按功能查阅，并查看版本更新时间线。",
     }
   }
 
