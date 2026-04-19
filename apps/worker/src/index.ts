@@ -148,7 +148,7 @@ async function writeTaskArtifacts(
     },
     status:
       preparedDetail.taskRunConfig.executionMode === "review_required" && !options.continueExecution
-        ? "ready_for_review"
+        ? "pending_generation"
         : "queued_for_video",
     keyframeManifestPath: keyframes?.manifestPath ?? blueprintRecord.keyframeManifestPath ?? null,
   })
@@ -205,6 +205,23 @@ async function writeTaskArtifacts(
     ]
 
     await upsertTaskAssets(taskId, previewAssets)
+    blueprintRecord = await upsertTaskBlueprintSnapshot({
+      detail: blueprintAwareDetail,
+      blueprint: {
+        executionMode: blueprintRecord.blueprint.executionMode,
+        renderSpec: blueprintRecord.blueprint.renderSpec,
+        globalTheme: blueprintRecord.blueprint.globalTheme,
+        visualStyleGuide: blueprintRecord.blueprint.visualStyleGuide,
+        subjectProfile: blueprintRecord.blueprint.subjectProfile,
+        productProfile: blueprintRecord.blueprint.productProfile,
+        backgroundConstraints: blueprintRecord.blueprint.backgroundConstraints,
+        negativeConstraints: blueprintRecord.blueprint.negativeConstraints,
+        totalVoiceoverScript: blueprintRecord.blueprint.totalVoiceoverScript,
+        sceneContracts: blueprintRecord.blueprint.sceneContracts,
+      },
+      status: "ready_for_review",
+      keyframeManifestPath: keyframes?.manifestPath ?? blueprintRecord.keyframeManifestPath ?? null,
+    })
     await updateTaskSummary(taskId, (task: TaskSummary) => ({
       ...task,
       status: "waiting_review",

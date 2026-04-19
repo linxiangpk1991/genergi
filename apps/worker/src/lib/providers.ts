@@ -1470,7 +1470,7 @@ export async function prepareTaskBlueprint(detail: TaskDetail): Promise<{
       },
     },
     blueprint: prepared.blueprint,
-    status: prepared.detail.taskRunConfig.executionMode === "review_required" ? "ready_for_review" : "pending_generation",
+    status: "pending_generation",
   })
 
   return {
