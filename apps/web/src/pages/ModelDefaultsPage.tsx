@@ -219,7 +219,7 @@ export function ModelDefaultsPage() {
       <section className="card">
         <div className="section-header">
           <h3>优先级说明</h3>
-          <span className="muted">让运营在改默认值时知道最终影响范围</span>
+          <span className="muted">默认值生效顺序</span>
         </div>
         <div className="precedence-strip">
           <div className="planning-note-card">

@@ -381,7 +381,7 @@ export function ModelRegistryPage() {
             </div>
 
             <div className="form-note">
-              说明：能力元数据直接参与后端校验与最终冻结摘要，所以这里必须是合法 JSON，不能做“看起来像对的”假字段。
+              能力元数据会参与校验和任务快照，请保持为合法 JSON。
             </div>
 
             <div className="action-row">

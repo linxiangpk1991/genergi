@@ -51,14 +51,14 @@ function getWorkspaceMeta(pathname: string) {
   if (pathname === "/asset-center") {
     return {
       title: "交付资产",
-      description: "优先检查最终交付物，再回溯脚本、字幕和中间产物。",
+      description: "查看最终视频、字幕、脚本和中间资产。",
     }
   }
 
   if (pathname.startsWith("/model-control-center")) {
     return {
       title: "模型控制中心",
-      description: "管理 Provider、模型注册表、默认值优先级和任务发起页可选覆盖池。",
+      description: "管理 Provider、模型和默认值。",
     }
   }
 
@@ -97,11 +97,6 @@ export function AppLayout({ children, operator }: AppLayoutProps) {
             </div>
           </div>
 
-          <div className="sidebar-copy">
-            <strong>内容生产控制台</strong>
-            <span>让高频入口固定靠上，减少导航搜索成本。</span>
-          </div>
-
           <div className="sidebar-nav-groups">
             {navGroups.map((group) => (
               <div key={group.label} className="nav-group">
@@ -122,11 +117,6 @@ export function AppLayout({ children, operator }: AppLayoutProps) {
               </div>
             ))}
           </div>
-        </div>
-
-        <div className="sidebar-footer">
-          <span>中文运营 · 英文输出</span>
-          <span>模型与任务都走真实链路，不做假入口。</span>
         </div>
       </aside>
       <main className="workspace">

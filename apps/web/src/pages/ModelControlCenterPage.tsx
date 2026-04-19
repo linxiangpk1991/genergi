@@ -139,7 +139,7 @@ export function ModelControlCenterPage() {
             <div className="eyebrow">Model Control Plane</div>
             <h2>模型控制中心</h2>
             <p className="section-note">
-              这里管理真实 provider、真实可选模型、全局默认值与模式默认值。任务发起页只能从这里通过验证的池子里选择。
+              管理 Provider、Model、全局默认值和模式默认值。
             </p>
           </div>
           <div className="planning-summary-tags">
@@ -158,20 +158,20 @@ export function ModelControlCenterPage() {
 
         <div className="model-control-hero">
           <div className="model-control-hero__copy">
-            <span className="eyebrow">唯一控制面</span>
-            <h3>把 Provider、Model、默认值和任务覆盖统一到同一条真实链路里。</h3>
+            <span className="eyebrow">控制面概览</span>
+            <h3>先看当前可用能力，再进入具体配置。</h3>
             <p>
-              运营看到的是可操作的控制台，工程拿到的是可验证、可冻结、可追溯的运行配置。
+              这里汇总当前可用 Provider、可用 Model、默认值和最近变更。
             </p>
           </div>
           <div className="model-control-hero__rail">
             <div className="hero-rail-card">
               <strong>先校验，再入池</strong>
-              <span>草稿和失效项不会进入任务级高级覆盖。</span>
+              <span>只有可用记录会出现在选择列表里。</span>
             </div>
             <div className="hero-rail-card">
               <strong>创建后即冻结</strong>
-              <span>历史任务不会被后续默认值变化反向污染。</span>
+              <span>任务创建后继续沿用当时的解析结果。</span>
             </div>
           </div>
         </div>
@@ -207,7 +207,7 @@ export function ModelControlCenterPage() {
 
       <div className="model-control-section-label">
         <strong>常用操作路径</strong>
-        <span>按运营顺序进入具体配置，而不是先翻一整页信息。</span>
+        <span>先处理接入，再登记模型，最后调整默认值。</span>
       </div>
       <section className="model-control-link-grid">
         <Link className="card model-control-link-card" to="/model-control-center/providers">
@@ -267,7 +267,7 @@ export function ModelControlCenterPage() {
       <section className="card">
         <div className="section-header">
           <h2>六槽位覆盖现状</h2>
-          <span className="muted">下面显示每个模式当前会落到哪条默认链路</span>
+          <span className="muted">按模式查看当前默认组合。</span>
         </div>
         <div className="summary-list">
           {MODEL_CONTROL_SLOT_ORDER.map((slot) => (

@@ -202,7 +202,7 @@ export function ModelProvidersPage() {
             <div className="eyebrow">Provider Registry</div>
             <h2>Provider 管理</h2>
             <p className="section-note">
-              这里保存真实连接目标、鉴权方式和掩码后的密钥状态。前端不会拿到明文密钥，只能提交新值或空值保持不变。
+              管理连接目标、鉴权方式和密钥状态。
             </p>
           </div>
           <div className="planning-summary-tags">
@@ -346,7 +346,7 @@ export function ModelProvidersPage() {
             </div>
 
             <div className="form-note">
-              说明：保存只会调用真实 API。接口还没就绪时，这里会直接报错，不会伪造“保存成功”。
+              密钥不会回显；留空表示保持当前值。
             </div>
 
             <div className="action-row">
@@ -395,7 +395,7 @@ export function ModelProvidersPage() {
                       <td className="text-break mono">{provider.endpointUrl || "未配置"}</td>
                       <td>
                         <div>{provider.maskedSecret ?? (provider.hasSecret ? "已保存密钥" : "未配置密钥")}</div>
-                        <div className="muted">前端不会返回明文</div>
+                        <div className="muted">不会显示明文</div>
                       </td>
                       <td>
                         <div className={getStatusClass(provider.status)}>{provider.status}</div>
