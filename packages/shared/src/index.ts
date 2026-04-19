@@ -9,6 +9,17 @@ import {
   resolvedSlotSnapshotSchema,
   taskModelOverrideSchema,
 } from "./model-control.js"
+import {
+  blueprintStatusSchema,
+  executionBlueprintSchema,
+  executionModeSchema,
+  projectApprovedBlueprintRecordSchema,
+  projectRecordSchema,
+  renderSpecSchema,
+  taskBlueprintRecordSchema,
+  taskBlueprintReviewRecordSchema,
+  terminalPresetIdSchema,
+} from "./video-blueprint.js"
 
 export type AppId = "web" | "api" | "worker"
 
@@ -78,14 +89,20 @@ export const modelRefSchema = z.object({
 export type ModelRef = z.infer<typeof modelRefSchema>
 
 export const taskRunConfigSchema = z.object({
+  projectId: z.string().min(1),
   modeId: productionModeSchema,
+  executionMode: executionModeSchema.default("automated"),
   channelId: channelProfileSchema,
+  terminalPresetId: terminalPresetIdSchema.default("phone_portrait"),
+  renderSpecJson: renderSpecSchema,
   targetDurationSec: videoDurationSecSchema,
   generationMode: generationModeSchema,
   enhancementMode: enhancementModeSchema,
   generationRoute: generationRouteSchema,
   routeReason: z.string(),
   planningVersion: planningVersionSchema,
+  blueprintVersion: z.number().int().nonnegative().default(0),
+  blueprintStatus: blueprintStatusSchema.default("pending_generation"),
   textModel: modelRefSchema,
   imageModel: modelRefSchema,
   videoModel: modelRefSchema,
@@ -112,14 +129,20 @@ export type CostEstimate = z.infer<typeof costEstimateSchema>
 
 export const taskSummarySchema = z.object({
   id: z.string(),
+  projectId: z.string().min(1),
   title: z.string(),
   modeId: productionModeSchema,
+  executionMode: executionModeSchema.default("automated"),
   channelId: channelProfileSchema,
+  terminalPresetId: terminalPresetIdSchema.default("phone_portrait"),
+  renderSpecJson: renderSpecSchema,
   targetDurationSec: videoDurationSecSchema,
   generationMode: generationModeSchema,
   generationRoute: generationRouteSchema,
   routeReason: z.string(),
   planningVersion: planningVersionSchema,
+  blueprintVersion: z.number().int().nonnegative().default(0),
+  blueprintStatus: blueprintStatusSchema.default("pending_generation"),
   actualDurationSec: z.number().positive().nullable(),
   status: taskStatusSchema,
   progressPct: z.number().min(0).max(100),
@@ -134,14 +157,20 @@ export const storyboardSceneSchema = z.object({
   id: z.string(),
   index: z.number().int().nonnegative(),
   title: z.string(),
+  sceneGoal: z.string().optional(),
+  voiceoverScript: z.string().optional(),
+  startFrameDescription: z.string().optional(),
   script: z.string(),
   imagePrompt: z.string(),
   videoPrompt: z.string(),
+  startFrameIntent: z.string().optional(),
+  endFrameIntent: z.string().optional(),
   durationSec: z.number().positive(),
   startLabel: z.string(),
   endLabel: z.string(),
   reviewStatus: z.enum(["pending", "approved", "rejected"]),
   keyframeStatus: z.enum(["pending", "approved", "rejected"]),
+  continuityConstraints: z.array(z.string()).optional(),
   reviewNote: z.string().nullable().optional(),
   reviewedAt: z.string().nullable().optional(),
   keyframeReviewNote: z.string().nullable().optional(),
@@ -151,9 +180,12 @@ export type StoryboardScene = z.infer<typeof storyboardSceneSchema>
 
 export const taskDetailSchema = z.object({
   taskId: z.string(),
+  projectId: z.string().min(1),
   title: z.string(),
   script: z.string(),
   taskRunConfig: taskRunConfigSchema,
+  blueprintVersion: z.number().int().nonnegative().default(0),
+  blueprintStatus: blueprintStatusSchema.default("pending_generation"),
   visualStyleGuide: z.string().optional(),
   ctaLine: z.string().optional(),
   actualDurationSec: z.number().positive().nullable().optional(),
@@ -174,10 +206,12 @@ export const assetRecordSchema = z.object({
 export type AssetRecord = z.infer<typeof assetRecordSchema>
 
 export const createTaskInputSchema = z.object({
+  projectId: z.string().min(1),
   title: z.string().min(1),
   script: z.string().min(1),
   modeId: productionModeSchema,
   channelId: channelProfileSchema,
+  terminalPresetId: terminalPresetIdSchema.default("phone_portrait"),
   aspectRatio: z.string().default("9:16"),
   targetDurationSec: videoDurationSecSchema.default(30),
   generationMode: generationModeSchema.default("user_locked"),
@@ -251,3 +285,5 @@ export * from "./generation-route.js"
 export * from "./planning-contract.js"
 export * from "./model-control.js"
 export * from "./provider-model-ids.js"
+export * from "./video-blueprint.js"
+export * from "./blueprint-persistence.js"
