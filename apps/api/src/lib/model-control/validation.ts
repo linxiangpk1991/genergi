@@ -46,7 +46,7 @@ async function resolveModelRecord(model: ModelRecord | string) {
 }
 
 function assertModelCapability(model: ModelRecord) {
-  if ((model.slotType === "videoDraftModel" || model.slotType === "videoFinalModel")) {
+  if (model.slotType === "videoModel") {
     const maxSingleShotSec = model.capabilityJson.maxSingleShotSec
     if (typeof maxSingleShotSec !== "number" || maxSingleShotSec <= 0) {
       throw new Error("MODEL_CAPABILITY_MISSING:maxSingleShotSec")

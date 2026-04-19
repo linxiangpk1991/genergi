@@ -73,9 +73,9 @@ describe("API task store", () => {
     expect(detail?.scenes[1]?.reviewedAt).toBeNull()
     expect(detail?.scenes[1]?.keyframeReviewNote).toBeNull()
     expect(detail?.scenes[1]?.keyframeReviewedAt).toBeNull()
-    expect(created.taskRunConfig.slotSnapshots.length).toBe(6)
+    expect(created.taskRunConfig.slotSnapshots.length).toBe(4)
     expect(created.taskRunConfig.slotSnapshots.find((item) => item.slotType === "textModel")?.providerId).toEqual(expect.any(String))
-    expect(created.taskRunConfig.slotSnapshots.find((item) => item.slotType === "videoDraftModel")?.capabilityJson.maxSingleShotSec).toBeGreaterThan(0)
+    expect(created.taskRunConfig.slotSnapshots.find((item) => item.slotType === "videoModel")?.capabilityJson.maxSingleShotSec).toBeGreaterThan(0)
     expect(created.taskRunConfig.slotSnapshots.find((item) => item.slotType === "ttsProvider")?.providerType).toBe("edge-tts")
   })
 
@@ -142,62 +142,34 @@ describe("API task store", () => {
       displayName: "Later Text",
       capabilityJson: {},
     })
-    const imageDraft = await registryStore.createModelRecord({
-      modelKey: "image.draft",
-      providerId: imageProvider.id,
-      slotType: "imageDraftModel",
-      providerModelId: "image-draft",
-      displayName: "Image Draft",
-      capabilityJson: {},
-    })
-    const imageFinal = await registryStore.createModelRecord({
+    const imageModel = await registryStore.createModelRecord({
       modelKey: "image.final",
       providerId: imageProvider.id,
-      slotType: "imageFinalModel",
+      slotType: "imageModel",
       providerModelId: "image-final",
-      displayName: "Image Final",
+      displayName: "Image Model",
       capabilityJson: {},
     })
-    const videoDraft = await registryStore.createModelRecord({
-      modelKey: "video.draft",
-      providerId: videoProvider.id,
-      slotType: "videoDraftModel",
-      providerModelId: "video-draft",
-      displayName: "Video Draft",
-      capabilityJson: {
-        maxSingleShotSec: 8,
-      },
-    })
-    const videoFinal = await registryStore.createModelRecord({
+    const videoModel = await registryStore.createModelRecord({
       modelKey: "video.final",
       providerId: videoProvider.id,
-      slotType: "videoFinalModel",
+      slotType: "videoModel",
       providerModelId: "video-final",
-      displayName: "Video Final",
+      displayName: "Video Model",
       capabilityJson: {
         maxSingleShotSec: 8,
       },
     })
-    const ttsModel = await registryStore.createModelRecord({
-      modelKey: "edge-tts",
-      providerId: ttsProvider.id,
-      slotType: "ttsProvider",
-      providerModelId: "edge-tts",
-      displayName: "Edge TTS",
-      capabilityJson: {},
-    })
-    for (const model of [textMode, textOverride, textLater, imageDraft, imageFinal, videoDraft, videoFinal, ttsModel]) {
+    for (const model of [textMode, textOverride, textLater, imageModel, videoModel]) {
       await registryStore.updateModelRecord(model.id, { lifecycleStatus: "available" })
     }
 
     await registryStore.updateModelDefaultsDocument({
       globalDefaults: {
         textModel: { modelId: textMode.id },
-        imageDraftModel: { modelId: imageDraft.id },
-        imageFinalModel: { modelId: imageFinal.id },
-        videoDraftModel: { modelId: videoDraft.id },
-        videoFinalModel: { modelId: videoFinal.id },
-        ttsProvider: { modelId: ttsModel.id },
+        imageModel: { modelId: imageModel.id },
+        videoModel: { modelId: videoModel.id },
+        ttsProvider: { providerId: ttsProvider.id },
       },
       modeDefaults: [
         {
@@ -230,11 +202,9 @@ describe("API task store", () => {
     await registryStore.updateModelDefaultsDocument({
       globalDefaults: {
         textModel: { modelId: textLater.id },
-        imageDraftModel: { modelId: imageDraft.id },
-        imageFinalModel: { modelId: imageFinal.id },
-        videoDraftModel: { modelId: videoDraft.id },
-        videoFinalModel: { modelId: videoFinal.id },
-        ttsProvider: { modelId: ttsModel.id },
+        imageModel: { modelId: imageModel.id },
+        videoModel: { modelId: videoModel.id },
+        ttsProvider: { providerId: ttsProvider.id },
       },
       modeDefaults: [
         {

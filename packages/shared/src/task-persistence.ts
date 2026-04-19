@@ -154,42 +154,81 @@ function normalizeModelRecord(record: ModelRecord): ModelRecord {
   }
 }
 
+const unifiedDefaultSlotKeys = [
+  "textModel",
+  "imageModel",
+  "videoModel",
+  "ttsProvider",
+] as const satisfies ReadonlyArray<keyof GlobalModelDefaults>
+
+function normalizeSlotSelection(
+  selection: unknown,
+  slot: typeof unifiedDefaultSlotKeys[number],
+) {
+  if (typeof selection === "string" && selection.trim()) {
+    const valueId = selection.trim()
+    return slot === "ttsProvider"
+      ? { modelId: valueId, providerId: valueId }
+      : { modelId: valueId }
+  }
+
+  if (!selection || typeof selection !== "object" || Array.isArray(selection)) {
+    return null
+  }
+
+  const rawModelId = typeof (selection as { modelId?: unknown }).modelId === "string"
+    ? (selection as { modelId: string }).modelId.trim()
+    : ""
+  const rawProviderId = typeof (selection as { providerId?: unknown }).providerId === "string"
+    ? (selection as { providerId: string }).providerId.trim()
+    : ""
+  const modelId = rawModelId || (slot === "ttsProvider" ? rawProviderId : "")
+
+  if (!modelId) {
+    return null
+  }
+
+  return {
+    modelId,
+    providerId: rawProviderId || (slot === "ttsProvider" ? modelId : undefined),
+  }
+}
+
 function normalizeGlobalModelDefaults(value: unknown): GlobalModelDefaults {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return {}
   }
 
-  return Object.fromEntries(
-    Object.entries(value).flatMap(([slot, selection]) => {
-      if (typeof selection === "string" && selection.trim()) {
-        return [[
-          slot,
-          {
-            modelId: selection.trim(),
-            providerId: slot === "ttsProvider" ? selection.trim() : undefined,
-          },
-        ]]
-      }
+  const record = value as Record<string, unknown>
+  const normalized: GlobalModelDefaults = {}
 
-      if (!selection || typeof selection !== "object" || Array.isArray(selection)) {
-        return []
-      }
+  const textModel = normalizeSlotSelection(record.textModel, "textModel")
+  if (textModel) {
+    normalized.textModel = textModel
+  }
 
-      const modelId = typeof (selection as { modelId?: unknown }).modelId === "string"
-        ? (selection as { modelId: string }).modelId.trim()
-        : ""
-      if (!modelId) {
-        return []
-      }
+  const imageModel =
+    normalizeSlotSelection(record.imageModel, "imageModel") ??
+    normalizeSlotSelection(record.imageFinalModel, "imageModel") ??
+    normalizeSlotSelection(record.imageDraftModel, "imageModel")
+  if (imageModel) {
+    normalized.imageModel = imageModel
+  }
 
-      const providerId = typeof (selection as { providerId?: unknown }).providerId === "string"
-        ? (selection as { providerId: string }).providerId.trim()
-        : slot === "ttsProvider"
-          ? modelId
-          : undefined
-      return [[slot, { modelId, providerId }]]
-    }),
-  ) as GlobalModelDefaults
+  const videoModel =
+    normalizeSlotSelection(record.videoModel, "videoModel") ??
+    normalizeSlotSelection(record.videoFinalModel, "videoModel") ??
+    normalizeSlotSelection(record.videoDraftModel, "videoModel")
+  if (videoModel) {
+    normalized.videoModel = videoModel
+  }
+
+  const ttsProvider = normalizeSlotSelection(record.ttsProvider, "ttsProvider")
+  if (ttsProvider) {
+    normalized.ttsProvider = ttsProvider
+  }
+
+  return normalized
 }
 
 function normalizeModelDefaultsDocument(value: unknown): ModelDefaultsDocument {
@@ -742,8 +781,8 @@ export async function replaceModelDefaults(document: ModelDefaultsDocument) {
   await writeModelDefaults(document)
 }
 
-function toLegacyDefaults(document: ModelDefaultsDocument): ModelControlDefaults {
-  const legacy = {
+function toControlPlaneDefaults(document: ModelDefaultsDocument): ModelControlDefaults {
+  const controlPlane = {
     global: {} as NonNullable<ModelControlDefaults["global"]>,
     modes: {
       mass_production: {},
@@ -753,10 +792,10 @@ function toLegacyDefaults(document: ModelDefaultsDocument): ModelControlDefaults
   }
 
   for (const [slot, selection] of Object.entries(document.globalDefaults)) {
-    if (selection?.modelId) {
-      legacy.global[slot as keyof typeof legacy.global] = {
+    if (selection?.modelId || selection?.providerId) {
+      controlPlane.global[slot as keyof typeof controlPlane.global] = {
         slotType: slot as any,
-        providerId: selection.providerId ?? "",
+        providerId: selection.providerId,
         modelId: selection.modelId,
       }
     }
@@ -764,39 +803,25 @@ function toLegacyDefaults(document: ModelDefaultsDocument): ModelControlDefaults
 
   for (const entry of document.modeDefaults) {
     for (const [slot, selection] of Object.entries(entry.slots)) {
-      if (selection?.modelId) {
-        legacy.modes[entry.modeId][slot as keyof (typeof legacy.modes)[typeof entry.modeId]] = {
+      if (selection?.modelId || selection?.providerId) {
+        controlPlane.modes[entry.modeId][slot as keyof (typeof controlPlane.modes)[typeof entry.modeId]] = {
           slotType: slot as any,
-          providerId: selection.providerId ?? "",
+          providerId: selection.providerId,
           modelId: selection.modelId,
         }
       }
     }
   }
 
-  return legacy as ModelControlDefaults
+  return controlPlane as ModelControlDefaults
 }
 
-function fromLegacyDefaults(document: ModelControlDefaults): ModelDefaultsDocument {
+function fromControlPlaneDefaults(document: ModelControlDefaults): ModelDefaultsDocument {
   return {
-    globalDefaults: Object.fromEntries(
-      Object.entries(document.global ?? {}).map(([slot, selection]) => [
-        slot,
-        selection?.modelId
-          ? { modelId: selection.modelId, providerId: selection.providerId ?? undefined, slotType: selection.slotType ?? undefined }
-          : undefined,
-      ]),
-    ) as GlobalModelDefaults,
+    globalDefaults: normalizeGlobalModelDefaults(document.global ?? {}),
     modeDefaults: (["mass_production", "high_quality"] as const).map((modeId) => ({
       modeId,
-      slots: Object.fromEntries(
-        Object.entries(document.modes?.[modeId] ?? {}).map(([slot, selection]) => [
-          slot,
-          selection?.modelId
-            ? { modelId: selection.modelId, providerId: selection.providerId ?? undefined, slotType: selection.slotType ?? undefined }
-            : undefined,
-        ]),
-      ) as GlobalModelDefaults,
+      slots: normalizeGlobalModelDefaults(document.modes?.[modeId] ?? {}),
     })),
     updatedAt: document.updatedAt ?? null,
   }
@@ -804,9 +829,9 @@ function fromLegacyDefaults(document: ModelControlDefaults): ModelDefaultsDocume
 
 export async function readModelControlDefaults(): Promise<ModelControlDefaults> {
   const defaults = await readModelDefaults()
-  return toLegacyDefaults(defaults)
+  return toControlPlaneDefaults(defaults)
 }
 
 export async function replaceModelControlDefaults(document: ModelControlDefaults) {
-  await replaceModelDefaults(fromLegacyDefaults(document))
+  await replaceModelDefaults(fromControlPlaneDefaults(document))
 }

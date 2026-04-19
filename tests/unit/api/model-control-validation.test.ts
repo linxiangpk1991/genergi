@@ -116,11 +116,11 @@ describe("API model control validation routes", () => {
         Cookie: cookie,
       },
       body: JSON.stringify({
-        modelKey: "draft-image-final",
+        modelKey: "draft-image",
         providerId: providerPayload.provider.id,
-        slotType: "imageFinalModel",
+        slotType: "imageModel",
         providerModelId: "gpt-image-1",
-        displayName: "Draft Image Final",
+        displayName: "Draft Image",
         capabilityJson: {
           qualityTier: "standard",
         },
@@ -195,11 +195,11 @@ describe("API model control validation routes", () => {
         Cookie: cookie,
       },
       body: JSON.stringify({
-        modelKey: "video-final-valid",
+        modelKey: "video-valid",
         providerId: providerPayload.provider.id,
-        slotType: "videoFinalModel",
+        slotType: "videoModel",
         providerModelId: "veo-3.1-fast",
-        displayName: "Video Final Valid",
+        displayName: "Video Valid",
         capabilityJson: {
           maxSingleShotSec: 8,
         },

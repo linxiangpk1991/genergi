@@ -1,5 +1,12 @@
 # GENERGI Model Control Plane Redesign
 
+> Superseded on 2026-04-20 by [2026-04-20-unify-media-model-slots-design.md](C:/Users/linxi/.config/superpowers/worktrees/genergi/unify-media-model-slots/docs/superpowers/specs/2026-04-20-unify-media-model-slots-design.md).
+> 
+> This document still records the original control-plane rollout thinking, but its six-slot media model (`imageDraftModel / imageFinalModel / videoDraftModel / videoFinalModel`) is no longer the current product truth.
+> 
+> For current runtime behavior, operator guidance, defaults resolution, and rollout acceptance, follow the four-slot system:
+> `textModel / imageModel / videoModel / ttsProvider`.
+
 Date: 2026-04-19
 Status: Approved by operator direction, ready for implementation
 Scope: Rebuild model/provider management as a first-class control plane for GENERGI, covering both operator-facing model selection and engineering-safe runtime resolution.

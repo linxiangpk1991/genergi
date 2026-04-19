@@ -70,10 +70,8 @@ export const CHANNELS: Record<ChannelProfileId, { label: string; description: st
 
 export const MODE_MODELS: Record<ProductionModeId, {
   textModel: ModelRef
-  imageDraftModel: ModelRef
-  imageFinalModel: ModelRef
-  videoDraftModel: ModelRef
-  videoFinalModel: ModelRef
+  imageModel: ModelRef
+  videoModel: ModelRef
   ttsProvider: string
   budgetLimitCny: number
   requireStoryboardReview: boolean
@@ -81,10 +79,8 @@ export const MODE_MODELS: Record<ProductionModeId, {
 }> = {
   mass_production: {
     textModel: { id: "text.default", label: "Claude Opus 4.6", provider: "anthropic-compatible" },
-    imageDraftModel: { id: "image.draft", label: "Gemini 3.1 Flash Image Preview", provider: "openai-compatible" },
-    imageFinalModel: { id: "image.final", label: "Gemini 3 Pro Image Preview", provider: "openai-compatible" },
-    videoDraftModel: { id: "video.draft", label: "Veo 3.1 Fast", provider: "openai-compatible" },
-    videoFinalModel: { id: "video.final", label: "Veo 3.1 Portrait", provider: "openai-compatible" },
+    imageModel: { id: "image.final", label: "Gemini 3 Pro Image Preview", provider: "openai-compatible" },
+    videoModel: { id: "video.final", label: "Veo 3.1 Portrait", provider: "openai-compatible" },
     ttsProvider: "edge-tts",
     budgetLimitCny: 3,
     requireStoryboardReview: false,
@@ -92,10 +88,8 @@ export const MODE_MODELS: Record<ProductionModeId, {
   },
   high_quality: {
     textModel: { id: "text.default", label: "Claude Opus 4.6", provider: "anthropic-compatible" },
-    imageDraftModel: { id: "image.final", label: "Gemini 3 Pro Image Preview", provider: "openai-compatible" },
-    imageFinalModel: { id: "image.premium", label: "Gemini 3 Pro Image Preview 2k", provider: "openai-compatible" },
-    videoDraftModel: { id: "video.final", label: "Veo 3.1 Portrait", provider: "openai-compatible" },
-    videoFinalModel: { id: "video.hd", label: "Veo 3.1 Portrait HD", provider: "openai-compatible" },
+    imageModel: { id: "image.premium", label: "Gemini 3 Pro Image Preview 2k", provider: "openai-compatible" },
+    videoModel: { id: "video.hd", label: "Veo 3.1 Portrait HD", provider: "openai-compatible" },
     ttsProvider: "edge-tts",
     budgetLimitCny: 5,
     requireStoryboardReview: true,
@@ -123,7 +117,7 @@ export function buildDefaultTaskRunConfig(
   const enhancementMode = generationMode === "system_enhanced" ? "system_enhanced" : "user_locked"
   const routeDecision = resolveGenerationRoute({
     targetDurationSec,
-    maxSingleShotSec: resolveVideoModelCapability(mode.videoDraftModel.id).maxSingleShotSec,
+    maxSingleShotSec: resolveVideoModelCapability(mode.videoModel.id).maxSingleShotSec,
   })
   return {
     modeId,
@@ -135,10 +129,8 @@ export function buildDefaultTaskRunConfig(
     routeReason: routeDecision.routeReason,
     planningVersion: "v1",
     textModel: mode.textModel,
-    imageDraftModel: mode.imageDraftModel,
-    imageFinalModel: mode.imageFinalModel,
-    videoDraftModel: mode.videoDraftModel,
-    videoFinalModel: mode.videoFinalModel,
+    imageModel: mode.imageModel,
+    videoModel: mode.videoModel,
     ttsProvider: mode.ttsProvider,
     contentLocale: "en",
     operatorLocale: "zh-CN",

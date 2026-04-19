@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises"
+import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
@@ -42,6 +42,77 @@ describe("API model control registry routes", () => {
       cookie: `genergi_session=${buildSessionValue("admin", "test-secret")}`,
     }
   }
+
+  it("exposes only four runtime slots and collapses legacy media defaults into unified image/video defaults", async () => {
+    dataDir = await mkdtemp(path.join(os.tmpdir(), "genergi-model-control-registry-"))
+    process.env.GENERGI_DATA_DIR = dataDir
+
+    const modelControl = await import("../../../packages/shared/src/model-control")
+    const shared = await import("../../../packages/shared/src/index")
+
+    expect(modelControl.modelSlotTypeSchema.options).toEqual([
+      "textModel",
+      "imageModel",
+      "videoModel",
+      "ttsProvider",
+    ])
+    expect(Object.keys(modelControl.taskModelOverrideSchema.shape)).toEqual([
+      "textModel",
+      "imageModel",
+      "videoModel",
+      "ttsProvider",
+    ])
+    expect(Object.keys(modelControl.modelControlDefaultsSchema.shape.global.shape)).toEqual([
+      "textModel",
+      "imageModel",
+      "videoModel",
+      "ttsProvider",
+    ])
+
+    await writeFile(
+      path.join(dataDir, "model-defaults.json"),
+      JSON.stringify({
+        globalDefaults: {
+          textModel: { modelId: "text.global" },
+          imageDraftModel: { modelId: "image.draft" },
+          imageFinalModel: { modelId: "image.final" },
+          videoDraftModel: { modelId: "video.draft" },
+          videoFinalModel: { modelId: "video.final" },
+          ttsProvider: { providerId: "provider_edge_tts", modelId: "provider_edge_tts" },
+        },
+        modeDefaults: [
+          {
+            modeId: "high_quality",
+            slots: {
+              imageDraftModel: { modelId: "image.hq.draft" },
+              imageFinalModel: { modelId: "image.hq.final" },
+              videoDraftModel: { modelId: "video.hq.draft" },
+              videoFinalModel: { modelId: "video.hq.final" },
+            },
+          },
+        ],
+        updatedAt: "2026-04-20T00:00:00.000Z",
+      }, null, 2),
+      "utf8",
+    )
+
+    const normalized = await shared.readModelDefaults()
+
+    expect(normalized.globalDefaults).toMatchObject({
+      textModel: { modelId: "text.global" },
+      imageModel: { modelId: "image.final" },
+      videoModel: { modelId: "video.final" },
+      ttsProvider: { providerId: "provider_edge_tts", modelId: "provider_edge_tts" },
+    })
+    expect(normalized.modeDefaults.find((entry) => entry.modeId === "high_quality")?.slots).toMatchObject({
+      imageModel: { modelId: "image.hq.final" },
+      videoModel: { modelId: "video.hq.final" },
+    })
+    expect("imageDraftModel" in normalized.globalDefaults).toBe(false)
+    expect("imageFinalModel" in normalized.globalDefaults).toBe(false)
+    expect("videoDraftModel" in normalized.globalDefaults).toBe(false)
+    expect("videoFinalModel" in normalized.globalDefaults).toBe(false)
+  })
 
   it("lists seeded providers, models, defaults, and selectable pools without leaking raw secrets", async () => {
     const { app, cookie } = await createAuthedApp()
@@ -88,17 +159,29 @@ describe("API model control registry routes", () => {
     expect(modelsPayload.models.length).toBeGreaterThanOrEqual(5)
     expect(providersPayload.providers[0]).not.toHaveProperty("encryptedSecret")
     expect(providersPayload.providers[0]).not.toHaveProperty("secret")
-    expect(defaultsPayload.defaults.modes.high_quality.videoFinalModel).toEqual(expect.any(String))
-    expect(defaultsPayload.effective.high_quality.videoFinalModel?.valueId).toBe(
-      defaultsPayload.defaults.modes.high_quality.videoFinalModel,
+    expect(Object.keys(defaultsPayload.defaults.global)).toEqual([
+      "textModel",
+      "imageModel",
+      "videoModel",
+      "ttsProvider",
+    ])
+    expect(defaultsPayload.defaults.modes.high_quality.videoModel).toEqual(expect.any(String))
+    expect(defaultsPayload.effective.high_quality.videoModel?.valueId).toBe(
+      defaultsPayload.defaults.modes.high_quality.videoModel,
     )
-    expect(selectablePayload.slots.imageFinalModel.length).toBeGreaterThan(0)
-    expect(selectablePayload.effective.videoFinalModel?.valueId).toBe(
-      defaultsPayload.defaults.modes.high_quality.videoFinalModel,
+    expect(Object.keys(selectablePayload.slots)).toEqual([
+      "textModel",
+      "imageModel",
+      "videoModel",
+      "ttsProvider",
+    ])
+    expect(selectablePayload.slots.imageModel.length).toBeGreaterThan(0)
+    expect(selectablePayload.effective.videoModel?.valueId).toBe(
+      defaultsPayload.defaults.modes.high_quality.videoModel,
     )
   })
 
-  it("keeps draft providers and models out of selectable pools until validation succeeds", async () => {
+  it("keeps unvalidated providers and models out of selectable pools until validation succeeds", async () => {
     const { app, cookie } = await createAuthedApp()
 
     const providerResponse = await app.request("/api/model-control/providers", {
@@ -133,11 +216,11 @@ describe("API model control registry routes", () => {
         Cookie: cookie,
       },
       body: JSON.stringify({
-        modelKey: "staging-image-final",
+        modelKey: "staging-image",
         providerId: providerPayload.provider.id,
-        slotType: "imageFinalModel",
+        slotType: "imageModel",
         providerModelId: "gpt-image-1",
-        displayName: "Staging Image Final",
+        displayName: "Staging Image",
         capabilityJson: {
           qualityTier: "standard",
         },
@@ -153,15 +236,15 @@ describe("API model control registry routes", () => {
     }
     expect(modelPayload.model.lifecycleStatus).toBe("draft")
 
-    const selectableBefore = await app.request("/api/model-control/selectable?slotType=imageFinalModel", {
+    const selectableBefore = await app.request("/api/model-control/selectable?slotType=imageModel", {
       headers: { Cookie: cookie },
     })
     const selectableBeforePayload = (await selectableBefore.json()) as {
       slots: {
-        imageFinalModel: Array<{ valueId: string }>
+        imageModel: Array<{ valueId: string }>
       }
     }
-    expect(selectableBeforePayload.slots.imageFinalModel.some((item) => item.valueId === modelPayload.model.id)).toBe(
+    expect(selectableBeforePayload.slots.imageModel.some((item) => item.valueId === modelPayload.model.id)).toBe(
       false,
     )
 
@@ -177,15 +260,15 @@ describe("API model control registry routes", () => {
     })
     expect(validateModel.status).toBe(200)
 
-    const selectableAfter = await app.request("/api/model-control/selectable?slotType=imageFinalModel", {
+    const selectableAfter = await app.request("/api/model-control/selectable?slotType=imageModel", {
       headers: { Cookie: cookie },
     })
     const selectableAfterPayload = (await selectableAfter.json()) as {
       slots: {
-        imageFinalModel: Array<{ valueId: string }>
+        imageModel: Array<{ valueId: string }>
       }
     }
-    expect(selectableAfterPayload.slots.imageFinalModel.some((item) => item.valueId === modelPayload.model.id)).toBe(
+    expect(selectableAfterPayload.slots.imageModel.some((item) => item.valueId === modelPayload.model.id)).toBe(
       true,
     )
   })

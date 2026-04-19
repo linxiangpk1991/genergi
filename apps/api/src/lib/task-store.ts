@@ -389,10 +389,8 @@ function mapResolvedSlotsToTaskConfig(
   const bySlot = new Map(slotSnapshots.map((slot) => [slot.slotType, slot]))
 
   const textModel = bySlot.get("textModel")
-  const imageDraftModel = bySlot.get("imageDraftModel")
-  const imageFinalModel = bySlot.get("imageFinalModel")
-  const videoDraftModel = bySlot.get("videoDraftModel")
-  const videoFinalModel = bySlot.get("videoFinalModel")
+  const imageModel = bySlot.get("imageModel")
+  const videoModel = bySlot.get("videoModel")
   const ttsProvider = bySlot.get("ttsProvider")
 
   return {
@@ -400,18 +398,12 @@ function mapResolvedSlotsToTaskConfig(
     textModel: textModel
       ? { id: textModel.modelKey, label: textModel.displayName, provider: textModel.providerType }
       : taskRunConfig.textModel,
-    imageDraftModel: imageDraftModel
-      ? { id: imageDraftModel.modelKey, label: imageDraftModel.displayName, provider: imageDraftModel.providerType }
-      : taskRunConfig.imageDraftModel,
-    imageFinalModel: imageFinalModel
-      ? { id: imageFinalModel.modelKey, label: imageFinalModel.displayName, provider: imageFinalModel.providerType }
-      : taskRunConfig.imageFinalModel,
-    videoDraftModel: videoDraftModel
-      ? { id: videoDraftModel.modelKey, label: videoDraftModel.displayName, provider: videoDraftModel.providerType }
-      : taskRunConfig.videoDraftModel,
-    videoFinalModel: videoFinalModel
-      ? { id: videoFinalModel.modelKey, label: videoFinalModel.displayName, provider: videoFinalModel.providerType }
-      : taskRunConfig.videoFinalModel,
+    imageModel: imageModel
+      ? { id: imageModel.modelKey, label: imageModel.displayName, provider: imageModel.providerType }
+      : taskRunConfig.imageModel,
+    videoModel: videoModel
+      ? { id: videoModel.modelKey, label: videoModel.displayName, provider: videoModel.providerType }
+      : taskRunConfig.videoModel,
     ttsProvider: ttsProvider?.providerModelId ?? taskRunConfig.ttsProvider,
     slotSnapshots,
   }
@@ -505,7 +497,7 @@ export async function getTaskDetail(taskId: string) {
       buildStoryboardScenes({
         script: normalizedExisting.script,
         targetDurationSec: task.targetDurationSec,
-        maxSceneDurationSec: resolveVideoModelCapability(taskRunConfig.videoDraftModel.id).maxSingleShotSec,
+        maxSceneDurationSec: resolveVideoModelCapability(taskRunConfig.videoModel.id).maxSingleShotSec,
         aspectRatio: taskRunConfig.aspectRatio,
         reviewRequirements: buildSceneReviewRequirements(taskRunConfig),
       }),
@@ -536,7 +528,7 @@ export async function getTaskDetail(taskId: string) {
       scenes: buildStoryboardScenes({
         script,
         targetDurationSec: task.targetDurationSec,
-        maxSceneDurationSec: resolveVideoModelCapability(taskRunConfig.videoDraftModel.id).maxSingleShotSec,
+        maxSceneDurationSec: resolveVideoModelCapability(taskRunConfig.videoModel.id).maxSingleShotSec,
         aspectRatio: taskRunConfig.aspectRatio,
         reviewRequirements: buildSceneReviewRequirements(taskRunConfig),
       }),
@@ -593,7 +585,7 @@ export async function createTask(input: CreateTaskInput): Promise<{ task: TaskSu
       scenes: buildStoryboardScenes({
         script: input.script,
         targetDurationSec: input.targetDurationSec,
-        maxSceneDurationSec: resolveVideoModelCapability(taskRunConfig.videoDraftModel.id).maxSingleShotSec,
+        maxSceneDurationSec: resolveVideoModelCapability(taskRunConfig.videoModel.id).maxSingleShotSec,
         aspectRatio: taskRunConfig.aspectRatio,
         reviewRequirements: buildSceneReviewRequirements(taskRunConfig),
       }),

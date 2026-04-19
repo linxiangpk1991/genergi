@@ -84,7 +84,7 @@ describe("API model control defaults and selectable resolution", () => {
       body: JSON.stringify({
         modelKey,
         providerId: providerPayload.provider.id,
-        slotType: "imageFinalModel",
+        slotType: "imageModel",
         providerModelId: `${modelKey}-provider-model`,
         displayName,
         capabilityJson: {
@@ -109,8 +109,8 @@ describe("API model control defaults and selectable resolution", () => {
   it("resolves effective defaults with mode overrides taking precedence over global defaults", async () => {
     const { app, cookie } = await createAuthedApp()
 
-    const globalModelId = await createValidatedModel(app, cookie, "image-final-global", "Image Final Global")
-    const modeModelId = await createValidatedModel(app, cookie, "image-final-hq", "Image Final HQ")
+    const globalModelId = await createValidatedModel(app, cookie, "image-global", "Image Global")
+    const modeModelId = await createValidatedModel(app, cookie, "image-hq", "Image HQ")
 
     const updateDefaultsResponse = await app.request("/api/model-control/defaults", {
       method: "PUT",
@@ -120,14 +120,14 @@ describe("API model control defaults and selectable resolution", () => {
       },
       body: JSON.stringify({
         global: {
-          imageFinalModel: globalModelId,
+          imageModel: globalModelId,
         },
         modes: {
           mass_production: {
-            imageFinalModel: null,
+            imageModel: null,
           },
           high_quality: {
-            imageFinalModel: modeModelId,
+            imageModel: modeModelId,
           },
         },
       }),
@@ -138,8 +138,8 @@ describe("API model control defaults and selectable resolution", () => {
       effective: Record<string, Record<string, { valueId: string } | null>>
     }
 
-    expect(updatePayload.effective.mass_production.imageFinalModel?.valueId).toBe(globalModelId)
-    expect(updatePayload.effective.high_quality.imageFinalModel?.valueId).toBe(modeModelId)
+    expect(updatePayload.effective.mass_production.imageModel?.valueId).toBe(globalModelId)
+    expect(updatePayload.effective.high_quality.imageModel?.valueId).toBe(modeModelId)
   })
 
   it("rejects unavailable records when updating defaults", async () => {
@@ -173,11 +173,11 @@ describe("API model control defaults and selectable resolution", () => {
         Cookie: cookie,
       },
       body: JSON.stringify({
-        modelKey: "draft-image-final",
+        modelKey: "draft-image",
         providerId: providerPayload.provider.id,
-        slotType: "imageFinalModel",
+        slotType: "imageModel",
         providerModelId: "draft-provider-model",
-        displayName: "Draft Image Final",
+        displayName: "Draft Image",
       }),
     })
     const modelPayload = (await modelResponse.json()) as {
@@ -194,7 +194,7 @@ describe("API model control defaults and selectable resolution", () => {
       },
       body: JSON.stringify({
         global: {
-          imageFinalModel: modelPayload.model.id,
+          imageModel: modelPayload.model.id,
         },
       }),
     })

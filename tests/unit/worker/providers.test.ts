@@ -22,10 +22,8 @@ describe("worker provider helpers", () => {
         routeReason: "target duration exceeds the current model single-shot limit of 8s",
         planningVersion: "v1",
         textModel: { id: "text.default", label: "Claude Opus 4.6", provider: "anthropic-compatible" },
-        imageDraftModel: { id: "image.final", label: "Gemini 3 Pro Image Preview", provider: "openai-compatible" },
-        imageFinalModel: { id: "image.premium", label: "Gemini 3 Pro Image Preview 2k", provider: "openai-compatible" },
-        videoDraftModel: { id: "video.final", label: "Veo 3.1 Portrait", provider: "openai-compatible" },
-        videoFinalModel: { id: "video.hd", label: "Veo 3.1 Portrait HD", provider: "openai-compatible" },
+        imageModel: { id: "image.premium", label: "Gemini 3 Pro Image Preview 2k", provider: "openai-compatible" },
+        videoModel: { id: "video.hd", label: "Veo 3.1 Portrait HD", provider: "openai-compatible" },
         ttsProvider: "edge-tts",
         contentLocale: "en",
         operatorLocale: "zh-CN",
@@ -33,6 +31,7 @@ describe("worker provider helpers", () => {
         requireKeyframeReview: true,
         budgetLimitCny: 5,
         aspectRatio: "9:16",
+        slotSnapshots: [],
       },
       scenes: [],
       updatedAt: "2026-04-19T00:00:00.000Z",
@@ -310,7 +309,7 @@ Here's the thing. In Chinese destiny analysis, there's a pattern called "late bl
     expect(providers.resolveTtsRateForTargetDuration(20, 15, 0)).toBeGreaterThan(0)
   })
 
-  it("resolves runtime generation models from the frozen final-model task config instead of the draft models", async () => {
+  it("resolves runtime generation models from the frozen unified task config", async () => {
     const providers = await import("../../../apps/worker/src/lib/providers")
 
     const runtime = providers.resolveRuntimeGenerationConfig(createTaskDetail())
@@ -330,8 +329,8 @@ Here's the thing. In Chinese destiny analysis, there's a pattern called "late bl
         taskRunConfig: {
           ...createTaskDetail().taskRunConfig,
           textModel: { id: "text.alt", label: "Claude Sonnet Runtime", provider: "anthropic-compatible" },
-          imageFinalModel: { id: "image.alt", label: "Gemini Runtime Image", provider: "openai-compatible" },
-          videoFinalModel: { id: "video.alt", label: "Veo Runtime Video", provider: "openai-compatible" },
+          imageModel: { id: "image.alt", label: "Gemini Runtime Image", provider: "openai-compatible" },
+          videoModel: { id: "video.alt", label: "Veo Runtime Video", provider: "openai-compatible" },
           ttsProvider: "edge-tts",
         },
       }),
@@ -350,8 +349,8 @@ Here's the thing. In Chinese destiny analysis, there's a pattern called "late bl
       createTaskDetail({
         taskRunConfig: {
           ...createTaskDetail().taskRunConfig,
-          imageFinalModel: { id: "image.alt", label: "Gemini Runtime Image", provider: "openai-compatible" },
-          videoFinalModel: { id: "video.alt", label: "Veo Runtime Video", provider: "openai-compatible" },
+          imageModel: { id: "image.alt", label: "Gemini Runtime Image", provider: "openai-compatible" },
+          videoModel: { id: "video.alt", label: "Veo Runtime Video", provider: "openai-compatible" },
         },
       }),
     )
@@ -480,14 +479,14 @@ Here's the thing. In Chinese destiny analysis, there's a pattern called "late bl
     const detail = createTaskDetail({
       taskRunConfig: {
         ...createTaskDetail().taskRunConfig,
-        imageFinalModel: {
+        imageModel: {
           id: "gemini-3.1-flash-image-77code",
           label: "Gemini 3.1 Flash Image (77Code)",
           provider: "openai-compatible",
         },
         slotSnapshots: [
           {
-            slotType: "imageFinalModel",
+            slotType: "imageModel",
             providerId: "provider_77code",
             providerKey: "77code-openai",
             providerType: "openai-compatible",
