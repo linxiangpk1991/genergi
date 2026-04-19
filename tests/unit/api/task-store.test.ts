@@ -198,6 +198,7 @@ describe("API task store", () => {
     })
 
     expect(created.taskRunConfig.slotSnapshots.find((item) => item.slotType === "textModel")?.displayName).toBe("Override Text")
+    expect(created.taskRunConfig.textModel.id).toBe("gpt-override")
 
     await registryStore.updateModelDefaultsDocument({
       globalDefaults: {
@@ -288,7 +289,7 @@ describe("API task store", () => {
       },
       {
         id: "legacy_image_model",
-        modelKey: "image.premium",
+        modelKey: "imageFinalModel-image-premium",
         providerId,
         slotType: "imageFinalModel",
         providerModelId: "image.premium",
@@ -302,7 +303,7 @@ describe("API task store", () => {
       },
       {
         id: "legacy_video_model",
-        modelKey: "video.hd",
+        modelKey: "videoFinalModel-video-hd",
         providerId,
         slotType: "videoFinalModel",
         providerModelId: "video.hd",
@@ -345,6 +346,9 @@ describe("API task store", () => {
       generationMode: "system_enhanced",
     })
 
+    expect(created.taskRunConfig.textModel.id).toBe("text.default")
+    expect(created.taskRunConfig.imageModel.id).toBe("image.premium")
+    expect(created.taskRunConfig.videoModel.id).toBe("video.hd")
     expect(created.taskRunConfig.imageModel.label).toBe("Legacy Premium Image")
     expect(created.taskRunConfig.videoModel.label).toBe("Legacy HD Video")
     expect(created.taskRunConfig.slotSnapshots.find((item) => item.slotType === "imageModel")?.modelId).toBe("legacy_image_model")

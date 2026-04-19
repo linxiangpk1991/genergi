@@ -396,13 +396,13 @@ function mapResolvedSlotsToTaskConfig(
   return {
     ...taskRunConfig,
     textModel: textModel
-      ? { id: textModel.modelKey, label: textModel.displayName, provider: textModel.providerType }
+      ? { id: textModel.providerModelId, label: textModel.displayName, provider: textModel.providerType }
       : taskRunConfig.textModel,
     imageModel: imageModel
-      ? { id: imageModel.modelKey, label: imageModel.displayName, provider: imageModel.providerType }
+      ? { id: imageModel.providerModelId, label: imageModel.displayName, provider: imageModel.providerType }
       : taskRunConfig.imageModel,
     videoModel: videoModel
-      ? { id: videoModel.modelKey, label: videoModel.displayName, provider: videoModel.providerType }
+      ? { id: videoModel.providerModelId, label: videoModel.displayName, provider: videoModel.providerType }
       : taskRunConfig.videoModel,
     ttsProvider: ttsProvider?.providerModelId ?? taskRunConfig.ttsProvider,
     slotSnapshots,
