@@ -69,9 +69,20 @@ export async function assertQueueAvailable() {
   await withQueue(async () => undefined)
 }
 
-export async function enqueueTask(taskId: string) {
+export async function enqueueTask(
+  taskId: string,
+  options: {
+    resumeFrom?: string
+  } = {},
+) {
   return withQueue(async (queue) => {
-    await queue.add("process-task", { taskId })
-    return { queued: true as const }
+    await queue.add("process-task", {
+      taskId,
+      resumeFrom: options.resumeFrom ?? null,
+    })
+    return {
+      queued: true as const,
+      resumeFrom: options.resumeFrom ?? null,
+    }
   })
 }

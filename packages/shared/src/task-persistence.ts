@@ -643,9 +643,6 @@ export async function readTaskSummaries(): Promise<TaskSummary[]> {
       }
     >
     const normalized = tasks.map((task) => normalizeTaskSummaryRecord(task))
-    if (JSON.stringify(tasks) !== JSON.stringify(normalized)) {
-      await writeTaskSummaries(normalized)
-    }
     return normalized
   } catch {
     const tasks = seedTaskSummaries()
@@ -683,10 +680,6 @@ export async function readTaskDetails(): Promise<Record<string, TaskDetail>> {
     const normalized = Object.fromEntries(
       Object.entries(parsed).map(([taskId, detail]) => [taskId, normalizeTaskDetailRecord(detail)]),
     ) as Record<string, TaskDetail>
-    if (JSON.stringify(parsed) !== JSON.stringify(normalized)) {
-      await writeTaskDetails(normalized)
-    }
-
     return normalized
   } catch {
     return {}

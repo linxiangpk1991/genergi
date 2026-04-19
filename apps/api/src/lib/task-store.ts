@@ -25,7 +25,9 @@ import type {
   TaskSummary,
   TaskStatus,
 } from "@genergi/shared"
+import { createInitialTaskBlueprintRecord } from "./blueprint-store.js"
 import { resolveEffectiveSlots } from "./model-control/resolver.js"
+import { getProjectById } from "./project-store.js"
 
 function now() {
   return new Date().toISOString()
@@ -458,6 +460,10 @@ export async function getTaskDetail(taskId: string) {
     task.channelId,
     task.targetDurationSec,
     task.generationMode,
+    {
+      projectId: task.projectId,
+      terminalPresetId: task.terminalPresetId,
+    },
   )
   if (existing) {
     const normalizedExisting = normalizeTaskDetailRecord(existing)
@@ -521,9 +527,12 @@ export async function getTaskDetail(taskId: string) {
   const synthesized = applyDerivedReviewState(
     {
       taskId: task.id,
+      projectId: task.projectId,
       title: task.title,
       script,
       taskRunConfig,
+      blueprintVersion: task.blueprintVersion,
+      blueprintStatus: task.blueprintStatus,
       actualDurationSec: task.actualDurationSec,
       scenes: buildStoryboardScenes({
         script,
@@ -554,6 +563,10 @@ export async function getTaskAsset(taskId: string, assetId: string) {
 }
 
 export async function createTask(input: CreateTaskInput): Promise<{ task: TaskSummary; taskRunConfig: unknown }> {
+  const project = await getProjectById(input.projectId)
+  if (!project) {
+    throw new Error("PROJECT_NOT_FOUND")
+  }
   const tasks = await listTasks()
   const estimate = estimateCost(input.modeId)
   const timestamp = now()
@@ -562,6 +575,10 @@ export async function createTask(input: CreateTaskInput): Promise<{ task: TaskSu
     input.channelId,
     input.targetDurationSec,
     input.generationMode,
+    {
+      projectId: input.projectId,
+      terminalPresetId: input.terminalPresetId,
+    },
   )
   const resolvedSlots = await resolveEffectiveSlots({
     modeId: input.modeId,
@@ -578,9 +595,12 @@ export async function createTask(input: CreateTaskInput): Promise<{ task: TaskSu
   const detail = applyDerivedReviewState(
     {
       taskId,
+      projectId: input.projectId,
       title: input.title,
       script: input.script,
       taskRunConfig,
+      blueprintVersion: 1,
+      blueprintStatus: "pending_generation",
       actualDurationSec: null,
       scenes: buildStoryboardScenes({
         script: input.script,
@@ -596,14 +616,20 @@ export async function createTask(input: CreateTaskInput): Promise<{ task: TaskSu
   ).detail
   const task: TaskSummary = {
     id: taskId,
+    projectId: input.projectId,
     title: input.title,
     modeId: input.modeId,
+    executionMode: taskRunConfig.executionMode,
     channelId: input.channelId,
+    terminalPresetId: taskRunConfig.terminalPresetId,
+    renderSpecJson: taskRunConfig.renderSpecJson,
     targetDurationSec: input.targetDurationSec,
     generationMode: input.generationMode,
     generationRoute: taskRunConfig.generationRoute,
     routeReason: taskRunConfig.routeReason,
     planningVersion: taskRunConfig.planningVersion,
+    blueprintVersion: detail.blueprintVersion,
+    blueprintStatus: detail.blueprintStatus,
     actualDurationSec: null,
     status: resolveTaskStatusForReview("queued", detail.reviewStage ?? null),
     progressPct: 0,
@@ -619,6 +645,7 @@ export async function createTask(input: CreateTaskInput): Promise<{ task: TaskSu
   tasks.unshift(task)
   await writeTaskSummaries(tasks)
   await upsertTaskDetail(detail)
+  await createInitialTaskBlueprintRecord(detail)
 
   return {
     task,

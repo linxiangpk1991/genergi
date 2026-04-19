@@ -162,9 +162,11 @@ export const MODE_MODELS: Record<ProductionModeId, {
   },
 }
 
-export function resolveRenderSpec(terminalPresetId: TerminalPresetId): RenderSpec {
+export function buildRenderSpec(terminalPresetId: TerminalPresetId): RenderSpec {
   return TERMINAL_PRESETS[terminalPresetId]
 }
+
+export const resolveRenderSpec = buildRenderSpec
 
 export function resolveVideoModelCapability(modelId: string): VideoModelCapability {
   return VIDEO_MODEL_CAPABILITIES[modelId] ?? {
@@ -188,7 +190,7 @@ export function buildDefaultTaskRunConfig(
 ): TaskRunConfig {
   const mode = MODE_MODELS[modeId]
   const terminalPresetId = options.terminalPresetId ?? CHANNEL_DEFAULT_TERMINAL_PRESETS[channelId]
-  const renderSpec = resolveRenderSpec(terminalPresetId)
+  const renderSpec = buildRenderSpec(terminalPresetId)
   const enhancementMode = generationMode === "system_enhanced" ? "system_enhanced" : "user_locked"
   const routeDecision = resolveGenerationRoute({
     targetDurationSec,

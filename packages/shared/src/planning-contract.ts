@@ -7,6 +7,7 @@ import {
 } from "./generation-route.js"
 import {
   executionModeSchema,
+  plannedExecutionBlueprintSchema,
   renderSpecSchema,
   terminalPresetIdSchema,
 } from "./video-blueprint.js"
@@ -50,14 +51,7 @@ export const planningSceneSchema = z.object({
 })
 export type PlanningScene = z.infer<typeof planningSceneSchema>
 
-export const planningBlueprintSchema = z.object({
-  globalTheme: z.string().min(1),
-  visualStyleGuide: z.string().min(1),
-  subjectProfile: z.string().min(1),
-  productProfile: z.string().min(1),
-  backgroundConstraints: z.array(z.string().min(1)).default([]),
-  negativeConstraints: z.array(z.string().min(1)).default([]),
-  totalVoiceoverScript: z.string().min(1),
+export const planningBlueprintSchema = plannedExecutionBlueprintSchema.extend({
   sceneContracts: z.array(planningSceneSchema).min(1),
 })
 export type PlanningBlueprint = z.infer<typeof planningBlueprintSchema>

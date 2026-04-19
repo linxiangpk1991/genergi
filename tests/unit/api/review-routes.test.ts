@@ -38,11 +38,13 @@ describe("API review routes", () => {
     ])
 
     const created = await store.createTask({
+      projectId: "project_default",
       title: "Review route test",
       script:
         "Hook with a strong product opener. Show the feature close-up. Demonstrate social proof. Close with the CTA.",
       modeId: "high_quality",
       channelId: "reels",
+      terminalPresetId: "phone_portrait",
       aspectRatio: "9:16",
       targetDurationSec: 30,
       generationMode: "system_enhanced",

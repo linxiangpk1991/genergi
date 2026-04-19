@@ -75,6 +75,14 @@ export const executionBlueprintSchema = z.object({
 })
 export type ExecutionBlueprint = z.infer<typeof executionBlueprintSchema>
 
+export const plannedExecutionBlueprintSchema = executionBlueprintSchema.omit({
+  taskId: true,
+  projectId: true,
+  version: true,
+  createdAt: true,
+})
+export type PlannedExecutionBlueprint = z.infer<typeof plannedExecutionBlueprintSchema>
+
 export const taskBlueprintRecordSchema = z.object({
   taskId: z.string().min(1),
   version: z.number().int().positive(),

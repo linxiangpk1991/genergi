@@ -15,6 +15,7 @@ import {
   resolveVideoModelCapability,
 } from "@genergi/config"
 import {
+  blueprintReviewDecisionSchema,
   createTaskInputSchema,
   createUserInputSchema,
   normalizeImageProviderModelId,
@@ -36,6 +37,14 @@ import { clearSession, getAuthStatus, getSessionUser, loginWithPassword, require
 import { assertQueueAvailable, enqueueTask, QueueUnavailableError } from "./lib/queue/enqueue.js"
 import { applySceneReviewDecision, createTask, deleteTask, getTaskAsset, getTaskAssets, getTaskDetail, listTasks } from "./lib/task-store.js"
 import {
+  approveTaskBlueprint,
+  getCurrentTaskBlueprint,
+  listTaskBlueprints,
+  recordTaskBlueprintReview,
+  rejectTaskBlueprint,
+} from "./lib/blueprint-store.js"
+import { createProject, listProjectApprovedBlueprints, listProjects } from "./lib/project-store.js"
+import {
   createStoredUser,
   getEnvFallbackUser,
   findStoredUserById,
@@ -50,6 +59,17 @@ app.use("*", cors())
 const loginSchema = z.object({
   username: z.string().min(1),
   password: z.string().min(1),
+})
+const createProjectInputSchema = z.object({
+  name: z.string().trim().min(1),
+  description: z.string().trim().optional(),
+  brandDirection: z.string().trim().optional(),
+  defaultChannelIds: z.array(z.string().trim().min(1)).optional(),
+  reusableStyleConstraints: z.array(z.string().trim().min(1)).optional(),
+})
+const blueprintReviewBodySchema = z.object({
+  decision: blueprintReviewDecisionSchema,
+  note: z.string().trim().min(1).optional(),
 })
 
 type TaskPlanningSnapshot = {
@@ -1098,8 +1118,27 @@ app.get("/api/bootstrap", (c) => {
           : "侧重品牌表现、审阅质量与最终画面效果",
       budgetLimitCny: mode.budgetLimitCny,
       maxSingleShotSec: resolveVideoModelCapability(mode.videoModel.id).maxSingleShotSec,
+      executionMode: mode.executionMode,
     })),
   })
+})
+
+app.use("/api/projects", requireAuth())
+
+app.get("/api/projects", async (c) => {
+  const projects = await listProjects()
+  return c.json({ projects })
+})
+
+app.post("/api/projects", zValidator("json", createProjectInputSchema), async (c) => {
+  const payload = c.req.valid("json")
+  const project = await createProject(payload)
+  return c.json({ project }, 201)
+})
+
+app.get("/api/projects/:projectId/library", async (c) => {
+  const entries = await listProjectApprovedBlueprints(c.req.param("projectId"))
+  return c.json({ entries })
 })
 
 app.use("/api/model-control", requireAuth())
@@ -1480,6 +1519,20 @@ app.get("/api/tasks/:taskId", async (c) => {
   return c.json({ detail: enrichDetail(detail) })
 })
 
+app.get("/api/tasks/:taskId/blueprints", async (c) => {
+  const blueprints = await listTaskBlueprints(c.req.param("taskId"))
+  return c.json({ blueprints })
+})
+
+app.get("/api/tasks/:taskId/blueprints/current", async (c) => {
+  const blueprint = await getCurrentTaskBlueprint(c.req.param("taskId"))
+  if (!blueprint) {
+    return c.json({ message: "TASK_BLUEPRINT_NOT_FOUND" }, 404)
+  }
+
+  return c.json({ blueprint })
+})
+
 app.get("/api/tasks/:taskId/assets", async (c) => {
   const assets = await getTaskAssets(c.req.param("taskId"))
   return c.json({ assets })
@@ -1607,6 +1660,52 @@ app.post(
   },
 )
 
+app.post(
+  "/api/tasks/:taskId/blueprints/:version/review",
+  requireAuth(),
+  zValidator("json", blueprintReviewBodySchema),
+  async (c) => {
+    const taskId = c.req.param("taskId")
+    const version = Number(c.req.param("version"))
+    if (!Number.isInteger(version) || version <= 0) {
+      return c.json({ message: "INVALID_BLUEPRINT_VERSION" }, 400)
+    }
+
+    const current = await getCurrentTaskBlueprint(taskId)
+    if (!current) {
+      return c.json({ message: "TASK_BLUEPRINT_NOT_FOUND" }, 404)
+    }
+
+    if (current.version !== version) {
+      return c.json({ message: "BLUEPRINT_VERSION_MISMATCH" }, 409)
+    }
+
+    const payload = c.req.valid("json")
+    const review = await recordTaskBlueprintReview({
+      taskId,
+      blueprintVersion: version,
+      decision: payload.decision,
+      note: payload.note,
+    })
+
+    if (payload.decision === "approved") {
+      const approvedEntry = await approveTaskBlueprint({
+        taskId,
+        projectId: current.blueprint.projectId,
+        blueprintVersion: version,
+      })
+      const queue = await enqueueTask(taskId, { resumeFrom: "blueprint_approved" })
+      return c.json({ review, blueprint: current, approvedEntry, queue })
+    }
+
+    const rejected = await rejectTaskBlueprint({
+      taskId,
+      blueprintVersion: version,
+    })
+    return c.json({ review, blueprint: rejected })
+  },
+)
+
 app.get("/api/tasks/:taskId/keyframes/:sceneId/preview", async (c) => {
   const taskId = c.req.param("taskId")
   const sceneId = c.req.param("sceneId")
@@ -1674,7 +1773,16 @@ app.post("/api/tasks", async (c) => {
     return toQueueUnavailableResponse(c, error)
   }
 
-  const result = await createTask(parsed.data)
+  let result
+  try {
+    result = await createTask(parsed.data)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "UNKNOWN_ERROR"
+    if (message === "PROJECT_NOT_FOUND") {
+      return c.json({ message }, 404)
+    }
+    throw error
+  }
   let queue
   try {
     queue = await enqueueTask(result.task.id)
