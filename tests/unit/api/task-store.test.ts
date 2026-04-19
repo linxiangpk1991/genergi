@@ -226,6 +226,131 @@ describe("API task store", () => {
     expect(ttsSnapshot?.providerId).toBe(ttsProvider.id)
   })
 
+  it("creates tasks from legacy media model records by normalizing them into unified runtime slots", async () => {
+    dataDir = await mkdtemp(path.join(os.tmpdir(), "genergi-task-store-"))
+    process.env.GENERGI_DATA_DIR = dataDir
+
+    const timestamp = "2026-04-20T02:10:00.000Z"
+    const providerId = "provider_openai"
+    const ttsProviderId = "provider_edge_tts"
+
+    await writeJsonFile(path.join(dataDir, "providers.json"), [
+      {
+        id: providerId,
+        providerKey: "openai-compatible",
+        providerType: "openai-compatible",
+        displayName: "OpenAI Compatible",
+        authType: "none",
+        endpointUrl: "https://example.com/v1",
+        encryptedEndpoint: null,
+        encryptedSecret: null,
+        endpointHint: "https://example.com/v1",
+        secretHint: null,
+        status: "available",
+        lastValidatedAt: timestamp,
+        lastValidationError: null,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+      {
+        id: ttsProviderId,
+        providerKey: "edge-tts",
+        providerType: "edge-tts",
+        displayName: "Edge TTS",
+        authType: "none",
+        endpointUrl: "",
+        encryptedEndpoint: null,
+        encryptedSecret: null,
+        endpointHint: null,
+        secretHint: null,
+        status: "available",
+        lastValidatedAt: timestamp,
+        lastValidationError: null,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+    ])
+
+    await writeJsonFile(path.join(dataDir, "models.json"), [
+      {
+        id: "legacy_text_model",
+        modelKey: "text.default",
+        providerId,
+        slotType: "textModel",
+        providerModelId: "text.default",
+        displayName: "Claude Opus 4.6",
+        capabilityJson: {},
+        lifecycleStatus: "available",
+        lastValidatedAt: timestamp,
+        lastValidationError: null,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+      {
+        id: "legacy_image_model",
+        modelKey: "image.premium",
+        providerId,
+        slotType: "imageFinalModel",
+        providerModelId: "image.premium",
+        displayName: "Legacy Premium Image",
+        capabilityJson: {},
+        lifecycleStatus: "available",
+        lastValidatedAt: timestamp,
+        lastValidationError: null,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+      {
+        id: "legacy_video_model",
+        modelKey: "video.hd",
+        providerId,
+        slotType: "videoFinalModel",
+        providerModelId: "video.hd",
+        displayName: "Legacy HD Video",
+        capabilityJson: {
+          maxSingleShotSec: 8,
+        },
+        lifecycleStatus: "available",
+        lastValidatedAt: timestamp,
+        lastValidationError: null,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+    ])
+
+    await writeJsonFile(path.join(dataDir, "model-defaults.json"), {
+      globalDefaults: {},
+      modeDefaults: [
+        {
+          modeId: "high_quality",
+          slots: {
+            textModel: { modelId: "legacy_text_model" },
+            imageModel: { modelId: "legacy_image_model" },
+            videoModel: { modelId: "legacy_video_model" },
+            ttsProvider: { providerId: ttsProviderId, modelId: ttsProviderId },
+          },
+        },
+      ],
+      updatedAt: timestamp,
+    })
+
+    const taskStore = await import("../../../apps/api/src/lib/task-store")
+    const created = await taskStore.createTask({
+      title: "Legacy migration task",
+      script: "Show the product. Explain the benefit. End with a CTA.",
+      modeId: "high_quality",
+      channelId: "reels",
+      aspectRatio: "9:16",
+      targetDurationSec: 30,
+      generationMode: "system_enhanced",
+    })
+
+    expect(created.taskRunConfig.imageModel.label).toBe("Legacy Premium Image")
+    expect(created.taskRunConfig.videoModel.label).toBe("Legacy HD Video")
+    expect(created.taskRunConfig.slotSnapshots.find((item) => item.slotType === "imageModel")?.modelId).toBe("legacy_image_model")
+    expect(created.taskRunConfig.slotSnapshots.find((item) => item.slotType === "videoModel")?.modelId).toBe("legacy_video_model")
+  })
+
   it("persists storyboard and keyframe review decisions with truthful task review summaries", async () => {
     dataDir = await mkdtemp(path.join(os.tmpdir(), "genergi-task-store-"))
     process.env.GENERGI_DATA_DIR = dataDir

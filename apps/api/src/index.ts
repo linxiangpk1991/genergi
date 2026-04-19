@@ -371,13 +371,31 @@ function normalizeProviderRecord(raw: unknown): ModelControlProviderRecord | nul
   }
 }
 
+function normalizeModelSlotType(rawSlotType: unknown): ModelControlSlot | null {
+  switch (rawSlotType) {
+    case "textModel":
+    case "imageModel":
+    case "videoModel":
+    case "ttsProvider":
+      return rawSlotType
+    case "imageDraftModel":
+    case "imageFinalModel":
+      return "imageModel"
+    case "videoDraftModel":
+    case "videoFinalModel":
+      return "videoModel"
+    default:
+      return null
+  }
+}
+
 function normalizeModelRecord(raw: unknown): ModelControlModelRecord | null {
   if (!raw || typeof raw !== "object") {
     return null
   }
 
   const record = raw as Partial<ModelControlModelRecord>
-  const slotType = modelControlSlotSchema.safeParse(record.slotType).success ? record.slotType : null
+  const slotType = normalizeModelSlotType(record.slotType)
   if (!slotType) {
     return null
   }

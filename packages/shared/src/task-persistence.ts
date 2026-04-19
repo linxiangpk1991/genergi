@@ -144,9 +144,33 @@ function normalizeProviderRecord(record: ProviderRecord): ProviderRecord {
   }
 }
 
-function normalizeModelRecord(record: ModelRecord): ModelRecord {
+function normalizeModelSlotType(value: unknown): ModelRecord["slotType"] | null {
+  switch (value) {
+    case "textModel":
+    case "imageModel":
+    case "videoModel":
+    case "ttsProvider":
+      return value
+    case "imageDraftModel":
+    case "imageFinalModel":
+      return "imageModel"
+    case "videoDraftModel":
+    case "videoFinalModel":
+      return "videoModel"
+    default:
+      return null
+  }
+}
+
+function normalizeModelRecord(record: ModelRecord): ModelRecord | null {
+  const slotType = normalizeModelSlotType((record as { slotType?: unknown }).slotType)
+  if (!slotType) {
+    return null
+  }
+
   return {
     ...record,
+    slotType,
     capabilityJson: normalizeCapabilityJson(record.capabilityJson),
     lifecycleStatus: normalizeControlStatus(record.lifecycleStatus),
     lastValidatedAt: normalizeNullableString(record.lastValidatedAt),
@@ -720,7 +744,9 @@ export async function readModelRecords(): Promise<ModelRecord[]> {
     }
 
     const parsed = JSON.parse(content) as ModelRecord[]
-    const normalized = parsed.map((record) => normalizeModelRecord(record))
+    const normalized = parsed
+      .map((record) => normalizeModelRecord(record))
+      .filter((record): record is ModelRecord => Boolean(record))
     if (JSON.stringify(parsed) !== JSON.stringify(normalized)) {
       await writeModelRecords(normalized)
     }

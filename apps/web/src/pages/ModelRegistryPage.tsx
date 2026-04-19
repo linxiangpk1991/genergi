@@ -241,7 +241,7 @@ export function ModelRegistryPage() {
             </p>
           </div>
           <div className="planning-summary-tags">
-            <span className="pill pill--sm">六槽位分治</span>
+            <span className="pill pill--sm">四槽位实链</span>
             <span className="pill pill--sm">能力元数据 JSON</span>
             <span className="pill pill--sm">真实校验后入池</span>
           </div>

@@ -43,6 +43,35 @@ describe("API model control registry routes", () => {
     }
   }
 
+  async function createAuthedAppWithData(seed: {
+    providers?: unknown
+    models?: unknown
+    defaults?: unknown
+  }) {
+    dataDir = await mkdtemp(path.join(os.tmpdir(), "genergi-model-control-registry-"))
+    process.env.GENERGI_DATA_DIR = dataDir
+
+    if (seed.providers !== undefined) {
+      await writeFile(path.join(dataDir, "providers.json"), JSON.stringify(seed.providers, null, 2), "utf8")
+    }
+    if (seed.models !== undefined) {
+      await writeFile(path.join(dataDir, "models.json"), JSON.stringify(seed.models, null, 2), "utf8")
+    }
+    if (seed.defaults !== undefined) {
+      await writeFile(path.join(dataDir, "model-defaults.json"), JSON.stringify(seed.defaults, null, 2), "utf8")
+    }
+
+    const [{ buildSessionValue }, { app }] = await Promise.all([
+      import("../../../apps/api/src/lib/auth"),
+      import("../../../apps/api/src/index"),
+    ])
+
+    return {
+      app,
+      cookie: `genergi_session=${buildSessionValue("admin", "test-secret")}`,
+    }
+  }
+
   it("exposes only four runtime slots and collapses legacy media defaults into unified image/video defaults", async () => {
     dataDir = await mkdtemp(path.join(os.tmpdir(), "genergi-model-control-registry-"))
     process.env.GENERGI_DATA_DIR = dataDir
@@ -179,6 +208,143 @@ describe("API model control registry routes", () => {
     expect(selectablePayload.effective.videoModel?.valueId).toBe(
       defaultsPayload.defaults.modes.high_quality.videoModel,
     )
+  })
+
+  it("maps legacy media slot records into image/video registry and selectable pools", async () => {
+    const timestamp = "2026-04-20T02:00:00.000Z"
+    const providerId = "provider_openai"
+    const imageModelId = "legacy_image_final_model"
+    const videoModelId = "legacy_video_final_model"
+    const ttsProviderId = "provider_edge_tts"
+
+    const { app, cookie } = await createAuthedAppWithData({
+      providers: [
+        {
+          id: providerId,
+          providerKey: "openai-compatible",
+          providerType: "openai-compatible",
+          displayName: "OpenAI Compatible",
+          authType: "none",
+          endpointUrl: "https://example.com/v1",
+          encryptedEndpoint: null,
+          encryptedSecret: null,
+          endpointHint: "https://example.com/v1",
+          secretHint: null,
+          status: "available",
+          lastValidatedAt: timestamp,
+          lastValidationError: null,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        },
+        {
+          id: ttsProviderId,
+          providerKey: "edge-tts",
+          providerType: "edge-tts",
+          displayName: "Edge TTS",
+          authType: "none",
+          endpointUrl: "",
+          encryptedEndpoint: null,
+          encryptedSecret: null,
+          endpointHint: null,
+          secretHint: null,
+          status: "available",
+          lastValidatedAt: timestamp,
+          lastValidationError: null,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        },
+      ],
+      models: [
+        {
+          id: "legacy_text_model",
+          modelKey: "text.default",
+          providerId,
+          slotType: "textModel",
+          providerModelId: "text.default",
+          displayName: "Claude Opus 4.6",
+          capabilityJson: {},
+          lifecycleStatus: "available",
+          lastValidatedAt: timestamp,
+          lastValidationError: null,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        },
+        {
+          id: imageModelId,
+          modelKey: "image.premium",
+          providerId,
+          slotType: "imageFinalModel",
+          providerModelId: "image.premium",
+          displayName: "Gemini Legacy Premium Image",
+          capabilityJson: {
+            qualityTier: "premium",
+          },
+          lifecycleStatus: "available",
+          lastValidatedAt: timestamp,
+          lastValidationError: null,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        },
+        {
+          id: videoModelId,
+          modelKey: "video.hd",
+          providerId,
+          slotType: "videoFinalModel",
+          providerModelId: "video.hd",
+          displayName: "Veo Legacy HD",
+          capabilityJson: {
+            maxSingleShotSec: 8,
+          },
+          lifecycleStatus: "available",
+          lastValidatedAt: timestamp,
+          lastValidationError: null,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        },
+      ],
+      defaults: {
+        globalDefaults: {},
+        modeDefaults: [
+          {
+            modeId: "high_quality",
+            slots: {
+              textModel: { modelId: "legacy_text_model" },
+              imageModel: { modelId: imageModelId },
+              videoModel: { modelId: videoModelId },
+              ttsProvider: { providerId: ttsProviderId, modelId: ttsProviderId },
+            },
+          },
+        ],
+        updatedAt: timestamp,
+      },
+    })
+
+    const [modelsResponse, selectableResponse] = await Promise.all([
+      app.request("/api/model-control/models", {
+        headers: { Cookie: cookie },
+      }),
+      app.request("/api/model-control/selectable?modeId=high_quality", {
+        headers: { Cookie: cookie },
+      }),
+    ])
+
+    expect(modelsResponse.status).toBe(200)
+    expect(selectableResponse.status).toBe(200)
+
+    const modelsPayload = (await modelsResponse.json()) as {
+      models: Array<{ id: string; slotType: string }>
+    }
+    const selectablePayload = (await selectableResponse.json()) as {
+      slots: Record<string, Array<{ valueId: string }>>
+      effective: Record<string, { valueId: string } | null>
+    }
+
+    expect(modelsPayload.models.find((model) => model.id === imageModelId)?.slotType).toBe("imageModel")
+    expect(modelsPayload.models.find((model) => model.id === videoModelId)?.slotType).toBe("videoModel")
+    expect(selectablePayload.slots.imageModel.some((item) => item.valueId === imageModelId)).toBe(true)
+    expect(selectablePayload.slots.videoModel.some((item) => item.valueId === videoModelId)).toBe(true)
+    expect(selectablePayload.effective.imageModel?.valueId).toBe(imageModelId)
+    expect(selectablePayload.effective.videoModel?.valueId).toBe(videoModelId)
   })
 
   it("keeps unvalidated providers and models out of selectable pools until validation succeeds", async () => {
