@@ -1,6 +1,7 @@
 import { mkdirSync, writeFileSync } from "node:fs"
 import fs from "node:fs/promises"
 import path from "node:path"
+import { createDecipheriv, createHash } from "node:crypto"
 
 import axios from "axios"
 
@@ -10,6 +11,7 @@ import {
   planningSceneSchema,
   resolveSceneCountForDurationWithLimit,
   resolveSceneReviewDefaults,
+  readProviderRecords,
   textPlanningOutputSchema,
   type StoryboardScene,
   type TaskDetail,
@@ -37,6 +39,35 @@ function buildGatewayHeaders() {
     Authorization: `Bearer ${gatewayApiKey}`,
     "Content-Type": "application/json",
   }
+}
+
+function getModelControlMasterKey() {
+  const source = process.env.GENERGI_MODEL_CONTROL_MASTER_KEY ?? "genergi-model-control-dev-key"
+  return createHash("sha256").update(source).digest()
+}
+
+function decryptControlPlaneSecret(ciphertext: string) {
+  const [prefix, ivEncoded, tagEncoded, payloadEncoded] = ciphertext.split(":")
+  if (ciphertext && prefix !== "enc") {
+    return ciphertext
+  }
+  if (prefix !== "enc" || !ivEncoded || !tagEncoded || !payloadEncoded) {
+    throw new Error("MODEL_CONTROL_SECRET_FORMAT_INVALID")
+  }
+
+  const decipher = createDecipheriv(
+    "aes-256-gcm",
+    getModelControlMasterKey(),
+    Buffer.from(ivEncoded, "base64url"),
+  )
+  decipher.setAuthTag(Buffer.from(tagEncoded, "base64url"))
+
+  const decrypted = Buffer.concat([
+    decipher.update(Buffer.from(payloadEncoded, "base64url")),
+    decipher.final(),
+  ])
+
+  return decrypted.toString("utf8")
 }
 
 function isRetryableGatewayStatus(status?: number | null) {
@@ -68,6 +99,29 @@ function normalizeImageModel(model: string) {
   }
 
   return lower
+}
+
+function resolveGeminiBaseUrl(baseUrl: string) {
+  const trimmed = baseUrl.trim().replace(/\/+$/, "")
+  return trimmed.replace(/\/v1$/i, "")
+}
+
+function extractGeminiInlineImageReference(payload: any) {
+  const parts = Array.isArray(payload?.candidates?.[0]?.content?.parts)
+    ? payload.candidates[0].content.parts
+    : []
+  const inline = parts.find((part: any) => part?.inlineData?.data)
+  if (!inline?.inlineData?.data) {
+    return null
+  }
+
+  return {
+    b64Json: inline.inlineData.data,
+    mimeType:
+      typeof inline.inlineData.mimeType === "string" && inline.inlineData.mimeType.trim()
+        ? inline.inlineData.mimeType
+        : "image/png",
+  }
 }
 
 function getProviderLabel(provider: string) {
@@ -399,6 +453,103 @@ async function createGatewayImageArtifact(input: { model: string; prompt: string
   return {
     ...await resolveImageBytes(reference),
     generationId,
+  }
+}
+
+type GeminiNativeImageRuntime = {
+  kind: "gemini-native"
+  baseUrl: string
+  apiKey: string
+  providerId: string
+  providerKey: string
+  providerModelId: string
+  model: string
+}
+
+type GatewayImageRuntime = {
+  kind: "gateway"
+  model: string
+}
+
+export async function resolveImageGenerationRuntime(detail: TaskDetail, model: string): Promise<GeminiNativeImageRuntime | GatewayImageRuntime> {
+  const slotSnapshots = detail.taskRunConfig.slotSnapshots ?? []
+  const imageSnapshot =
+    slotSnapshots.find((slot) => slot.slotType === "imageFinalModel" && (slot.modelKey === model || slot.modelId === model || slot.providerModelId === model)) ??
+    slotSnapshots.find((slot) => slot.slotType === "imageFinalModel")
+
+  const transport = `${imageSnapshot?.capabilityJson?.imageTransport ?? ""}`.trim().toLowerCase()
+  if (imageSnapshot && transport === "gemini-generate-content") {
+    const providers = await readProviderRecords()
+    const provider = providers.find((item) => item.id === imageSnapshot.providerId)
+    const endpointUrl = `${provider?.endpointUrl ?? ""}`.trim()
+    const encryptedSecret = `${provider?.encryptedSecret ?? ""}`.trim()
+    if (!provider || !endpointUrl || !encryptedSecret) {
+      throw new Error(`Gemini-native image provider is incomplete for ${imageSnapshot.providerKey}`)
+    }
+
+    return {
+      kind: "gemini-native",
+      baseUrl: resolveGeminiBaseUrl(endpointUrl),
+      apiKey: decryptControlPlaneSecret(encryptedSecret),
+      providerId: provider.id,
+      providerKey: provider.providerKey,
+      providerModelId: imageSnapshot.providerModelId,
+      model: imageSnapshot.modelKey,
+    }
+  }
+
+  return {
+    kind: "gateway",
+    model: normalizeImageModel(model),
+  }
+}
+
+export async function createGeminiNativeImageArtifact(
+  input: {
+    baseUrl: string
+    apiKey: string
+    model: string
+    prompt: string
+  },
+  deps: {
+    postJson?: (url: string, body: Record<string, unknown>) => Promise<any>
+  } = {},
+) {
+  const url = `${resolveGeminiBaseUrl(input.baseUrl)}/v1beta/models/${input.model}:generateContent?key=${input.apiKey}`
+  const body = {
+    contents: [
+      {
+        parts: [{ text: input.prompt }],
+      },
+    ],
+    generationConfig: {
+      responseModalities: ["TEXT", "IMAGE"],
+    },
+  }
+
+  const responseData = deps.postJson
+    ? await deps.postJson(url, body)
+    : (
+      await axios.post(url, body, {
+        headers: {
+          "Content-Type": "application/json",
+        },
+        timeout: 300000,
+      })
+    ).data
+
+  const reference = extractGeminiInlineImageReference(responseData)
+  if (!reference) {
+    throw new Error(`Gemini native image response did not include inline image data: ${JSON.stringify(responseData)}`)
+  }
+
+  return {
+    ...await resolveImageBytes({
+      url: null,
+      b64Json: reference.b64Json,
+      mimeType: reference.mimeType,
+    }),
+    generationId: null,
   }
 }
 
@@ -1173,13 +1324,22 @@ export async function createKeyframeBundle(input: {
     model: string
     remoteTaskId: string | null
   }> = []
+  const imageRuntime = await resolveImageGenerationRuntime(input.detail, input.model)
   for (const scene of input.detail.scenes) {
     const prompt = buildKeyframePrompt(scene, aspectRatio)
-    const generated = await createGatewayImageArtifact({
-      model: normalizeImageModel(input.model),
-      prompt,
-      size: "1024x1024",
-    })
+    const generated =
+      imageRuntime.kind === "gemini-native"
+        ? await createGeminiNativeImageArtifact({
+            baseUrl: imageRuntime.baseUrl,
+            apiKey: imageRuntime.apiKey,
+            model: imageRuntime.providerModelId,
+            prompt,
+          })
+        : await createGatewayImageArtifact({
+            model: imageRuntime.model,
+            prompt,
+            size: "1024x1024",
+          })
 
     const fileName = `scene-${String(scene.index + 1).padStart(2, "0")}.${generated.extension}`
     const filePath = path.join(keyframeDir, fileName)
@@ -1200,7 +1360,7 @@ export async function createKeyframeBundle(input: {
   const manifest = {
     taskId: input.taskId,
     createdAt,
-    model: normalizeImageModel(input.model),
+    model: imageRuntime.kind === "gemini-native" ? imageRuntime.providerModelId : imageRuntime.model,
     aspectRatio,
     sceneCount: frames.length,
     frames,

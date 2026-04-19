@@ -47,6 +47,7 @@ export const providerRecordSchema = z.object({
   providerType: providerTypeSchema,
   displayName: z.string().min(1),
   authType: providerAuthTypeSchema,
+  endpointUrl: z.string().nullable().optional(),
   encryptedEndpoint: z.string().nullable(),
   encryptedSecret: z.string().nullable(),
   endpointHint: z.string().nullable(),

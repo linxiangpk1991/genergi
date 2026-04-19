@@ -133,6 +133,7 @@ function normalizeCapabilityJson(value: unknown) {
 function normalizeProviderRecord(record: ProviderRecord): ProviderRecord {
   return {
     ...record,
+    endpointUrl: normalizeNullableString(record.endpointUrl),
     encryptedEndpoint: normalizeNullableString(record.encryptedEndpoint),
     encryptedSecret: normalizeNullableString(record.encryptedSecret),
     endpointHint: normalizeNullableString(record.endpointHint),
@@ -644,7 +645,7 @@ export async function readProviderRegistryRecords(): Promise<ProviderRegistryRec
     providerKey: record.providerKey,
     providerType: record.providerType,
     displayName: record.displayName,
-    endpointUrl: record.endpointHint ?? "",
+    endpointUrl: record.endpointUrl ?? record.endpointHint ?? "",
     authType: record.authType,
     authHeaderName: null,
     encryptedSecret: record.encryptedSecret,

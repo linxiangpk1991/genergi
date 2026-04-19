@@ -1,8 +1,8 @@
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { afterEach, describe, expect, it } from "vitest"
-import { mergeSceneReviewMetadata, type TaskDetail } from "@genergi/shared"
+import { afterEach, describe, expect, it, vi } from "vitest"
+import { mergeSceneReviewMetadata, replaceProviderRecords, type TaskDetail } from "@genergi/shared"
 
 describe("worker provider helpers", () => {
   let tempDir = ""
@@ -41,6 +41,7 @@ describe("worker provider helpers", () => {
   }
 
   afterEach(async () => {
+    vi.restoreAllMocks()
     if (tempDir) {
       await rm(tempDir, { recursive: true, force: true })
       tempDir = ""
@@ -446,5 +447,130 @@ Here's the thing. In Chinese destiny analysis, there's a pattern called "late bl
     expect(manifest.frames).toHaveLength(2)
     expect(manifest.frames[0].sceneIndex).toBe(0)
     expect(manifest.frames[1].sceneIndex).toBe(1)
+  })
+
+  it("uses Gemini native image generation for flash-image models that declare gemini transport", async () => {
+    const providers = await import("../../../apps/worker/src/lib/providers")
+    const { encryptControlPlaneSecret } = await import("../../../apps/api/src/lib/model-control/crypto")
+
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "genergi-gemini-native-image-"))
+    process.env.GENERGI_DATA_DIR = tempDir
+    process.env.GENERGI_MODEL_CONTROL_MASTER_KEY = "0123456789abcdef0123456789abcdef"
+
+    await replaceProviderRecords([
+      {
+        id: "provider_77code",
+        providerKey: "77code-openai",
+        providerType: "openai-compatible",
+        displayName: "77Code OpenAI Gateway",
+        authType: "bearer_token",
+        endpointUrl: "https://code.77code.fun/v1",
+        encryptedEndpoint: null,
+        encryptedSecret: encryptControlPlaneSecret("77code-secret"),
+        endpointHint: "https://code.77code.fun/v1",
+        secretHint: "****cret",
+        status: "available",
+        lastValidatedAt: "2026-04-19T00:00:00.000Z",
+        lastValidationError: null,
+        createdAt: "2026-04-19T00:00:00.000Z",
+        updatedAt: "2026-04-19T00:00:00.000Z",
+      },
+    ] as any)
+
+    const detail = createTaskDetail({
+      taskRunConfig: {
+        ...createTaskDetail().taskRunConfig,
+        imageFinalModel: {
+          id: "gemini-3.1-flash-image-77code",
+          label: "Gemini 3.1 Flash Image (77Code)",
+          provider: "openai-compatible",
+        },
+        slotSnapshots: [
+          {
+            slotType: "imageFinalModel",
+            providerId: "provider_77code",
+            providerKey: "77code-openai",
+            providerType: "openai-compatible",
+            modelId: "model_flash_image_77code",
+            modelKey: "gemini-3.1-flash-image-77code",
+            providerModelId: "gemini-3.1-flash-image",
+            displayName: "Gemini 3.1 Flash Image (77Code)",
+            capabilityJson: {
+              imageTransport: "gemini-generate-content",
+            },
+            validatedAt: "2026-04-19T00:00:00.000Z",
+          },
+        ],
+      },
+      scenes: [
+        {
+          id: "scene_1",
+          index: 0,
+          title: "Hero shot",
+          script: "Show a red cube.",
+          imagePrompt: "A simple red cube on a white background.",
+          videoPrompt: "A simple red cube on a white background.",
+          durationSec: 8,
+          startLabel: "00:00",
+          endLabel: "00:08",
+          reviewStatus: "pending",
+          keyframeStatus: "pending",
+          reviewNote: null,
+          reviewedAt: null,
+          keyframeReviewNote: null,
+          keyframeReviewedAt: null,
+        },
+      ],
+    })
+
+    const requests: Array<{ url: string; body: Record<string, unknown> }> = []
+    const artifact = await providers.createGeminiNativeImageArtifact(
+      {
+        baseUrl: "https://code.77code.fun/v1",
+        apiKey: "77code-secret",
+        model: "gemini-3.1-flash-image",
+        prompt: "A simple red cube on a white background.",
+      },
+      {
+        postJson: async (url: string, body: Record<string, unknown>) => {
+          requests.push({ url, body })
+          return {
+            candidates: [
+              {
+                content: {
+                  parts: [
+                    {
+                      inlineData: {
+                        data: Buffer.from("gemini-image-bytes").toString("base64"),
+                        mimeType: "image/png",
+                      },
+                    },
+                  ],
+                },
+              },
+            ],
+          }
+        },
+      },
+    )
+
+    const runtime = await providers.resolveImageGenerationRuntime(detail, "gemini-3.1-flash-image-77code")
+
+    expect(runtime.kind).toBe("gemini-native")
+    expect(artifact.extension).toBe("png")
+    expect(artifact.bytes.toString()).toBe("gemini-image-bytes")
+    expect(requests).toHaveLength(1)
+    expect(requests[0]?.url).toContain("/v1beta/models/gemini-3.1-flash-image:generateContent")
+    expect(requests[0]?.body?.generationConfig).toEqual({ responseModalities: ["TEXT", "IMAGE"] })
+  })
+
+  it("keeps using the existing gateway image path for legacy image models", async () => {
+    const providers = await import("../../../apps/worker/src/lib/providers")
+
+    const detail = createTaskDetail()
+    const runtime = await providers.resolveImageGenerationRuntime(detail, "image.premium")
+
+    expect(runtime.kind).toBe("gateway")
+    expect(runtime.model).toBe("gemini-3-pro-image-preview-2k")
   })
 })
