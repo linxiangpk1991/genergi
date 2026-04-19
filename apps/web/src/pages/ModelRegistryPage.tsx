@@ -265,99 +265,120 @@ export function ModelRegistryPage() {
           </div>
 
           <div className="modal-form">
-            <label>
-              <span className="field-label">内部 Key</span>
-              <input
-                className="input"
-                value={form.modelKey}
-                onChange={(event) => setForm((current) => ({ ...current, modelKey: event.target.value }))}
-                placeholder="例如：veo-3-1-fast-prod"
-              />
-            </label>
+            <div className="form-section">
+              <div className="form-section__title">
+                <strong>模型身份</strong>
+                <span>先定义内部 key 和运营名称，让默认值中心和任务快照都能稳定引用。</span>
+              </div>
 
-            <label>
-              <span className="field-label">显示名称</span>
-              <input
-                className="input"
-                value={form.displayName}
-                onChange={(event) => setForm((current) => ({ ...current, displayName: event.target.value }))}
-                placeholder="例如：Veo 3.1 Fast"
-              />
-            </label>
-
-            <div className="modal-grid">
               <label>
-                <span className="field-label">槽位</span>
-                <select
+                <span className="field-label">内部 Key</span>
+                <input
                   className="input"
-                  value={form.slotType}
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      slotType: event.target.value as CreateModelRegistryEntryPayload["slotType"],
-                    }))
-                  }
-                >
-                  {MODEL_CONTROL_SLOT_ORDER.map((slot) => (
-                    <option key={slot} value={slot}>
-                      {MODEL_CONTROL_SLOT_LABELS[slot]}
-                    </option>
-                  ))}
-                </select>
+                  value={form.modelKey}
+                  onChange={(event) => setForm((current) => ({ ...current, modelKey: event.target.value }))}
+                  placeholder="例如：veo-3-1-fast-prod"
+                />
               </label>
 
               <label>
-                <span className="field-label">绑定 Provider</span>
-                <select
+                <span className="field-label">显示名称</span>
+                <input
                   className="input"
-                  value={form.providerId}
-                  onChange={(event) => setForm((current) => ({ ...current, providerId: event.target.value }))}
-                >
-                  {availableProviders.map((provider) => (
-                    <option key={provider.id} value={provider.id}>
-                      {provider.displayName} ({provider.status})
-                    </option>
-                  ))}
-                </select>
+                  value={form.displayName}
+                  onChange={(event) => setForm((current) => ({ ...current, displayName: event.target.value }))}
+                  placeholder="例如：Veo 3.1 Fast"
+                />
               </label>
             </div>
 
-            <label>
-              <span className="field-label">上游模型 ID</span>
-              <input
-                className="input mono"
-                value={form.providerModelId}
-                onChange={(event) => setForm((current) => ({ ...current, providerModelId: event.target.value }))}
-                placeholder="例如：veo-3.1-fast"
-              />
-            </label>
+            <div className="form-section">
+              <div className="form-section__title">
+                <strong>绑定关系</strong>
+                <span>每条模型记录都必须明确归属到一个槽位，并绑定一个已可用的 Provider。</span>
+              </div>
 
-            <label>
-              <span className="field-label">初始状态</span>
-              <select
-                className="input"
-                value={form.lifecycleStatus}
-                onChange={(event) =>
-                  setForm((current) => ({
-                    ...current,
-                    lifecycleStatus: event.target.value as ModelControlLifecycleStatus,
-                  }))
-                }
-              >
-                <option value="draft">draft</option>
-                <option value="disabled">disabled</option>
-              </select>
-            </label>
+              <div className="modal-grid">
+                <label>
+                  <span className="field-label">槽位</span>
+                  <select
+                    className="input"
+                    value={form.slotType}
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        slotType: event.target.value as CreateModelRegistryEntryPayload["slotType"],
+                      }))
+                    }
+                  >
+                    {MODEL_CONTROL_SLOT_ORDER.map((slot) => (
+                      <option key={slot} value={slot}>
+                        {MODEL_CONTROL_SLOT_LABELS[slot]}
+                      </option>
+                    ))}
+                  </select>
+                </label>
 
-            <label>
-              <span className="field-label">能力元数据 JSON</span>
-              <textarea
-                className="textarea textarea--mono"
-                value={capabilityText}
-                onChange={(event) => setCapabilityText(event.target.value)}
-                placeholder={`{\n  "maxSingleShotSec": 8,\n  "qualityTier": "fast"\n}`}
-              />
-            </label>
+                <label>
+                  <span className="field-label">绑定 Provider</span>
+                  <select
+                    className="input"
+                    value={form.providerId}
+                    onChange={(event) => setForm((current) => ({ ...current, providerId: event.target.value }))}
+                  >
+                    {availableProviders.map((provider) => (
+                      <option key={provider.id} value={provider.id}>
+                        {provider.displayName} ({provider.status})
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+
+              <label>
+                <span className="field-label">上游模型 ID</span>
+                <input
+                  className="input mono"
+                  value={form.providerModelId}
+                  onChange={(event) => setForm((current) => ({ ...current, providerModelId: event.target.value }))}
+                  placeholder="例如：veo-3.1-fast"
+                />
+              </label>
+            </div>
+
+            <div className="form-section">
+              <div className="form-section__title">
+                <strong>能力与生命周期</strong>
+                <span>能力元数据会直接影响后端校验和运行时摘要，所以这里要像正式配置一样认真填写。</span>
+              </div>
+
+              <label>
+                <span className="field-label">初始状态</span>
+                <select
+                  className="input"
+                  value={form.lifecycleStatus}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      lifecycleStatus: event.target.value as ModelControlLifecycleStatus,
+                    }))
+                  }
+                >
+                  <option value="draft">draft</option>
+                  <option value="disabled">disabled</option>
+                </select>
+              </label>
+
+              <label>
+                <span className="field-label">能力元数据 JSON</span>
+                <textarea
+                  className="textarea textarea--mono"
+                  value={capabilityText}
+                  onChange={(event) => setCapabilityText(event.target.value)}
+                  placeholder={`{\n  "maxSingleShotSec": 8,\n  "qualityTier": "fast"\n}`}
+                />
+              </label>
+            </div>
 
             <div className="form-note">
               说明：能力元数据直接参与后端校验与最终冻结摘要，所以这里必须是合法 JSON，不能做“看起来像对的”假字段。

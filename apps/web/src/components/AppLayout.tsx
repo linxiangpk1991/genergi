@@ -2,15 +2,25 @@ import type { PropsWithChildren } from "react"
 import { Link, useLocation } from "react-router-dom"
 import { api } from "../api"
 
-const navItems = [
-  { to: "/", label: "任务启动" },
-  { to: "/storyboard-review", label: "分镜审阅" },
-  { to: "/keyframe-review", label: "关键帧审阅" },
-  { to: "/batch-dashboard", label: "生产看板" },
-  { to: "/asset-center", label: "交付资产" },
-  { to: "/model-control-center", label: "模型控制中心" },
-  { to: "/user-center", label: "用户中心" },
-]
+const navGroups = [
+  {
+    label: "生产工作区",
+    items: [
+      { to: "/", label: "任务启动" },
+      { to: "/storyboard-review", label: "分镜审阅" },
+      { to: "/keyframe-review", label: "关键帧审阅" },
+      { to: "/batch-dashboard", label: "生产看板" },
+      { to: "/asset-center", label: "交付资产" },
+    ],
+  },
+  {
+    label: "系统管理",
+    items: [
+      { to: "/model-control-center", label: "模型控制中心" },
+      { to: "/user-center", label: "用户中心" },
+    ],
+  },
+] as const
 
 type AppLayoutProps = PropsWithChildren<{
   operator: string
@@ -78,7 +88,7 @@ export function AppLayout({ children, operator }: AppLayoutProps) {
   return (
     <div className="page-shell">
       <aside className="sidebar">
-        <div>
+        <div className="sidebar-main">
           <div className="brand-panel">
             <div className="brand-mark">G</div>
             <div>
@@ -86,32 +96,48 @@ export function AppLayout({ children, operator }: AppLayoutProps) {
               <div className="brand-subtitle">自动化视频平台</div>
             </div>
           </div>
+
+          <div className="sidebar-copy">
+            <strong>内容生产控制台</strong>
+            <span>让高频入口固定靠上，减少导航搜索成本。</span>
+          </div>
+
+          <div className="sidebar-nav-groups">
+            {navGroups.map((group) => (
+              <div key={group.label} className="nav-group">
+                <div className="nav-group__label">{group.label}</div>
+                <nav className="nav-list">
+                  {group.items.map((item) => (
+                    <Link
+                      key={item.to}
+                      className={location.pathname === item.to || (item.to !== "/" && location.pathname.startsWith(item.to))
+                        ? "nav-item nav-item--active"
+                        : "nav-item"}
+                      to={item.to}
+                    >
+                      {item.label}
+                    </Link>
+                  ))}
+                </nav>
+              </div>
+            ))}
+          </div>
         </div>
-        <nav className="nav-list">
-          {navItems.map((item) => (
-            <Link
-              key={item.to}
-              className={location.pathname === item.to || (item.to !== "/" && location.pathname.startsWith(item.to))
-                ? "nav-item nav-item--active"
-                : "nav-item"}
-              to={item.to}
-            >
-              {item.label}
-            </Link>
-          ))}
-        </nav>
-        <Link className="primary-button primary-button--sidebar" to="/">
-          {isHome ? "停留在任务入口" : "返回任务入口"}
-        </Link>
+
+        <div className="sidebar-footer">
+          <span>中文运营 · 英文输出</span>
+          <span>模型与任务都走真实链路，不做假入口。</span>
+        </div>
       </aside>
       <main className="workspace">
         <div className="workspace-toolbar">
           <div className="workspace-toolbar-copy">
+            <span className="workspace-toolbar-kicker">{isHome ? "工作入口" : "当前工作区"}</span>
             <strong>{workspaceMeta.title}</strong>
             <span>{workspaceMeta.description}</span>
           </div>
           <div className="workspace-toolbar-actions">
-            {!isHome ? <Link className="ghost-button" to="/">新建任务</Link> : null}
+            {!isHome ? <Link className="ghost-button" to="/">返回任务入口</Link> : null}
             <span className="pill pill--accent">English Output</span>
             <span className="operator-badge">管理员：{operator}</span>
             <button className="ghost-button" onClick={() => void handleLogout()}>

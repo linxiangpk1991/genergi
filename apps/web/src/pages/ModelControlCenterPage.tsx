@@ -156,6 +156,31 @@ export function ModelControlCenterPage() {
           </div>
         ) : null}
 
+        <div className="model-control-hero">
+          <div className="model-control-hero__copy">
+            <span className="eyebrow">唯一控制面</span>
+            <h3>把 Provider、Model、默认值和任务覆盖统一到同一条真实链路里。</h3>
+            <p>
+              运营看到的是可操作的控制台，工程拿到的是可验证、可冻结、可追溯的运行配置。
+            </p>
+          </div>
+          <div className="model-control-hero__rail">
+            <div className="hero-rail-card">
+              <strong>先校验，再入池</strong>
+              <span>草稿和失效项不会进入任务级高级覆盖。</span>
+            </div>
+            <div className="hero-rail-card">
+              <strong>创建后即冻结</strong>
+              <span>历史任务不会被后续默认值变化反向污染。</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="model-control-section-label">
+          <strong>控制面健康</strong>
+          <span>先看当前可用能力，再进入具体配置页面。</span>
+        </div>
+
         <div className="model-control-metrics">
           <div className="stat-card">
             <span>可用 Provider</span>
@@ -180,6 +205,10 @@ export function ModelControlCenterPage() {
         </div>
       </section>
 
+      <div className="model-control-section-label">
+        <strong>常用操作路径</strong>
+        <span>按运营顺序进入具体配置，而不是先翻一整页信息。</span>
+      </div>
       <section className="model-control-link-grid">
         <Link className="card model-control-link-card" to="/model-control-center/providers">
           <div className="eyebrow">Step 1</div>
@@ -268,6 +297,10 @@ export function ModelControlCenterPage() {
         </div>
       </section>
 
+      <div className="model-control-section-label">
+        <strong>最近变更窗口</strong>
+        <span>用来确认谁是最近被校验、最近被调整的记录。</span>
+      </div>
       <section className="model-control-link-grid">
         <div className="card">
           <div className="section-header">

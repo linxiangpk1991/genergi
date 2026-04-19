@@ -234,95 +234,116 @@ export function ModelProvidersPage() {
           </div>
 
           <div className="modal-form">
-            <label>
-              <span className="field-label">内部 Key</span>
-              <input
-                className="input"
-                value={form.providerKey}
-                onChange={(event) => setForm((current) => ({ ...current, providerKey: event.target.value }))}
-                placeholder="例如：openai-prod-01"
-              />
-            </label>
+            <div className="form-section">
+              <div className="form-section__title">
+                <strong>身份标识</strong>
+                <span>先定义内部 key 和运营可读名称，后续所有默认值和任务快照都基于这里的标识。</span>
+              </div>
 
-            <label>
-              <span className="field-label">显示名称</span>
-              <input
-                className="input"
-                value={form.displayName}
-                onChange={(event) => setForm((current) => ({ ...current, displayName: event.target.value }))}
-                placeholder="例如：OpenAI Production"
-              />
-            </label>
-
-            <div className="modal-grid">
               <label>
-                <span className="field-label">Provider 类型</span>
-                <select
+                <span className="field-label">内部 Key</span>
+                <input
                   className="input"
-                  value={form.providerType}
-                  onChange={(event) => setForm((current) => ({ ...current, providerType: event.target.value }))}
-                >
-                  <option value="openai-compatible">openai-compatible</option>
-                  <option value="anthropic-compatible">anthropic-compatible</option>
-                  <option value="edge-tts">edge-tts</option>
-                  <option value="azure-tts">azure-tts</option>
-                  <option value="custom">custom</option>
-                </select>
+                  value={form.providerKey}
+                  onChange={(event) => setForm((current) => ({ ...current, providerKey: event.target.value }))}
+                  placeholder="例如：openai-prod-01"
+                />
               </label>
 
               <label>
-                <span className="field-label">鉴权方式</span>
-                <select
+                <span className="field-label">显示名称</span>
+                <input
                   className="input"
-                  value={form.authType}
-                  onChange={(event) => setForm((current) => ({ ...current, authType: event.target.value }))}
-                >
-                  <option value="bearer_token">bearer_token</option>
-                  <option value="api_key_header">api_key_header</option>
-                  <option value="x_api_key">x_api_key</option>
-                  <option value="custom_header">custom_header</option>
-                  <option value="none">none</option>
-                </select>
+                  value={form.displayName}
+                  onChange={(event) => setForm((current) => ({ ...current, displayName: event.target.value }))}
+                  placeholder="例如：OpenAI Production"
+                />
               </label>
             </div>
 
-            <label>
-              <span className="field-label">Endpoint URL</span>
-              <input
-                className="input"
-                value={form.endpointUrl}
-                onChange={(event) => setForm((current) => ({ ...current, endpointUrl: event.target.value }))}
-                placeholder="例如：https://api.example.com/v1"
-              />
-            </label>
+            <div className="form-section">
+              <div className="form-section__title">
+                <strong>连接方式</strong>
+                <span>这里决定 Provider 的协议族、鉴权方法和实际接入目标。</span>
+              </div>
 
-            <label>
-              <span className="field-label">{editingProviderId ? "更新密钥（留空表示保持现状）" : "密钥 / Token"}</span>
-              <input
-                className="input mono"
-                type="password"
-                value={form.secret}
-                onChange={(event) => setForm((current) => ({ ...current, secret: event.target.value }))}
-                placeholder="仅在提交时传给后端，不会回显"
-              />
-            </label>
+              <div className="modal-grid">
+                <label>
+                  <span className="field-label">Provider 类型</span>
+                  <select
+                    className="input"
+                    value={form.providerType}
+                    onChange={(event) => setForm((current) => ({ ...current, providerType: event.target.value }))}
+                  >
+                    <option value="openai-compatible">openai-compatible</option>
+                    <option value="anthropic-compatible">anthropic-compatible</option>
+                    <option value="edge-tts">edge-tts</option>
+                    <option value="azure-tts">azure-tts</option>
+                    <option value="custom">custom</option>
+                  </select>
+                </label>
 
-            <label>
-              <span className="field-label">初始状态</span>
-              <select
-                className="input"
-                value={form.status}
-                onChange={(event) =>
-                  setForm((current) => ({
-                    ...current,
-                    status: event.target.value as ModelControlLifecycleStatus,
-                  }))
-                }
-              >
-                <option value="draft">draft</option>
-                <option value="disabled">disabled</option>
-              </select>
-            </label>
+                <label>
+                  <span className="field-label">鉴权方式</span>
+                  <select
+                    className="input"
+                    value={form.authType}
+                    onChange={(event) => setForm((current) => ({ ...current, authType: event.target.value }))}
+                  >
+                    <option value="bearer_token">bearer_token</option>
+                    <option value="api_key_header">api_key_header</option>
+                    <option value="x_api_key">x_api_key</option>
+                    <option value="custom_header">custom_header</option>
+                    <option value="none">none</option>
+                  </select>
+                </label>
+              </div>
+
+              <label>
+                <span className="field-label">Endpoint URL</span>
+                <input
+                  className="input"
+                  value={form.endpointUrl}
+                  onChange={(event) => setForm((current) => ({ ...current, endpointUrl: event.target.value }))}
+                  placeholder="例如：https://api.example.com/v1"
+                />
+              </label>
+            </div>
+
+            <div className="form-section">
+              <div className="form-section__title">
+                <strong>密钥与生命周期</strong>
+                <span>密钥只在提交时传给后端保存；状态只决定是否允许后续进入校验或被停用。</span>
+              </div>
+
+              <label>
+                <span className="field-label">{editingProviderId ? "更新密钥（留空表示保持现状）" : "密钥 / Token"}</span>
+                <input
+                  className="input mono"
+                  type="password"
+                  value={form.secret}
+                  onChange={(event) => setForm((current) => ({ ...current, secret: event.target.value }))}
+                  placeholder="仅在提交时传给后端，不会回显"
+                />
+              </label>
+
+              <label>
+                <span className="field-label">初始状态</span>
+                <select
+                  className="input"
+                  value={form.status}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      status: event.target.value as ModelControlLifecycleStatus,
+                    }))
+                  }
+                >
+                  <option value="draft">draft</option>
+                  <option value="disabled">disabled</option>
+                </select>
+              </label>
+            </div>
 
             <div className="form-note">
               说明：保存只会调用真实 API。接口还没就绪时，这里会直接报错，不会伪造“保存成功”。
