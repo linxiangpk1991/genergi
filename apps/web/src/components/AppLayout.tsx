@@ -98,11 +98,7 @@ export function AppLayout({ children, operator }: AppLayoutProps) {
       <aside className="sidebar">
         <div className="sidebar-main">
           <div className="brand-panel">
-            <div className="brand-mark">G</div>
-            <div>
-              <div className="brand-name">GENERGI</div>
-              <div className="brand-subtitle">自动化视频平台</div>
-            </div>
+            <img src="/assets/logo.png" alt="GENERGI Logo" className="brand-logo" />
           </div>
 
           <div className="sidebar-nav-groups">

@@ -77,7 +77,9 @@ export function LoginPage({ onLoggedIn }: LoginPageProps) {
   return (
     <div className="login-shell">
       <div className="login-card">
-        <div className="eyebrow">GENERGI Control Console</div>
+        <div className="login-logo-container">
+          <img src="/assets/logo.png" alt="GENERGI Logo" className="login-logo" />
+        </div>
         <h1>管理员登录</h1>
         <p>登录中文工作台，继续管理面向海外英语市场的视频生产任务。</p>
         <form className="login-form" onSubmit={handleSubmit}>

@@ -68,38 +68,15 @@ select {
 
 .brand-panel {
   display: flex;
-  gap: 12px;
   align-items: center;
+  justify-content: center;
+  padding: 12px 0 8px;
 }
 
-.brand-mark {
-  width: 44px;
-  height: 44px;
-  display: grid;
-  place-items: center;
-  border-radius: 14px;
-  background: linear-gradient(
-    135deg,
-    var(--genergi-primary-deep),
-    var(--genergi-primary)
-  );
-  color: white;
-  font-family: var(--font-latin);
-  font-size: 20px;
-  font-weight: 800;
-}
-
-.brand-name {
-  font-family: var(--font-latin);
-  font-size: 20px;
-  font-weight: 800;
-  color: var(--genergi-primary-deep);
-}
-
-.brand-subtitle {
-  margin-top: 2px;
-  color: var(--genergi-muted);
-  font-size: 14px;
+.brand-logo {
+  height: 48px;
+  width: auto;
+  object-fit: contain;
 }
 
 .sidebar-copy {
@@ -826,11 +803,23 @@ select.input {
   border: 1px solid rgba(0, 71, 171, 0.08);
   border-radius: 22px;
   box-shadow: var(--genergi-shadow);
-  padding: 28px;
+  padding: 32px 28px 28px;
+}
+
+.login-logo-container {
+  display: flex;
+  justify-content: flex-start;
+  margin-bottom: 24px;
+}
+
+.login-logo {
+  height: 48px;
+  width: auto;
+  object-fit: contain;
 }
 
 .login-card h1 {
-  margin: 8px 0 12px;
+  margin: 0 0 12px;
   color: var(--genergi-primary-deep);
 }
 
