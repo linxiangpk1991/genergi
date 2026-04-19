@@ -72,16 +72,34 @@ export async function assertQueueAvailable() {
 export async function enqueueTask(
   taskId: string,
   options: {
+    reason?: string
+    continueExecution?: boolean
+    blueprintVersion?: number
+    stage?: string
     resumeFrom?: string
   } = {},
 ) {
   return withQueue(async (queue) => {
+    const reason = options.reason ?? options.resumeFrom ?? "initial_create"
+    const jobId = `${taskId}:${reason}:${Date.now()}`
     await queue.add("process-task", {
       taskId,
+      reason,
+      continueExecution: options.continueExecution ?? false,
+      blueprintVersion: options.blueprintVersion ?? null,
+      stage: options.stage ?? null,
       resumeFrom: options.resumeFrom ?? null,
+      enqueuedAt: new Date().toISOString(),
+    }, {
+      jobId,
     })
     return {
       queued: true as const,
+      jobId,
+      reason,
+      continueExecution: options.continueExecution ?? false,
+      blueprintVersion: options.blueprintVersion ?? null,
+      stage: options.stage ?? null,
       resumeFrom: options.resumeFrom ?? null,
     }
   })

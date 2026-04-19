@@ -1,17 +1,23 @@
 import {
   readProjectApprovedBlueprintLibrary,
+  readTaskDetail,
   readTaskBlueprintRecords,
   readTaskBlueprintReviewRecords,
+  readTaskSummaries,
+  upsertTaskDetail,
   writeProjectApprovedBlueprintLibrary,
   writeTaskBlueprintRecords,
   writeTaskBlueprintReviewRecords,
+  writeTaskSummaries,
   type BlueprintReviewDecision,
   type ExecutionBlueprint,
+  type PlannedExecutionBlueprint,
   type ProjectApprovedBlueprintRecord,
   type StoryboardScene,
   type TaskBlueprintRecord,
   type TaskBlueprintReviewRecord,
   type TaskDetail,
+  type TaskSummary,
 } from "@genergi/shared"
 
 function now() {
@@ -60,9 +66,73 @@ export async function listTaskBlueprints(taskId: string): Promise<TaskBlueprintR
   return (records[taskId] ?? []).slice().sort((left, right) => left.version - right.version)
 }
 
+export async function getTaskBlueprintByVersion(taskId: string, version: number): Promise<TaskBlueprintRecord | null> {
+  const records = await listTaskBlueprints(taskId)
+  return records.find((record) => record.version === version) ?? null
+}
+
 export async function getCurrentTaskBlueprint(taskId: string): Promise<TaskBlueprintRecord | null> {
   const records = await listTaskBlueprints(taskId)
   return records.at(-1) ?? null
+}
+
+export async function listTaskBlueprintReviews(taskId: string): Promise<TaskBlueprintReviewRecord[]> {
+  const records = await readTaskBlueprintReviewRecords()
+  return (records[taskId] ?? []).slice().sort((left, right) => left.decidedAt.localeCompare(right.decidedAt))
+}
+
+export async function getLatestTaskBlueprintReview(
+  taskId: string,
+  blueprintVersion: number,
+): Promise<TaskBlueprintReviewRecord | null> {
+  const reviews = await listTaskBlueprintReviews(taskId)
+  return reviews.filter((review) => review.blueprintVersion === blueprintVersion).at(-1) ?? null
+}
+
+async function syncTaskBlueprintSnapshot(
+  taskId: string,
+  version: number,
+  status: TaskBlueprintRecord["status"],
+  updatedAt: string,
+) {
+  const tasks = await readTaskSummaries()
+  let nextTask: TaskSummary | null = null
+  const nextTasks = tasks.map((task) => {
+    if (task.id !== taskId) {
+      return task
+    }
+
+    nextTask = {
+      ...task,
+      blueprintVersion: version,
+      blueprintStatus: status,
+      updatedAt,
+    }
+    return nextTask
+  })
+
+  if (nextTask) {
+    await writeTaskSummaries(nextTasks)
+  }
+
+  const detail = await readTaskDetail(taskId)
+  if (!detail) {
+    return nextTask
+  }
+
+  await upsertTaskDetail({
+    ...detail,
+    blueprintVersion: version,
+    blueprintStatus: status,
+    taskRunConfig: {
+      ...detail.taskRunConfig,
+      blueprintVersion: version,
+      blueprintStatus: status,
+    },
+    updatedAt,
+  })
+
+  return nextTask
 }
 
 export async function upsertTaskBlueprintRecord(record: TaskBlueprintRecord): Promise<TaskBlueprintRecord> {
@@ -72,10 +142,16 @@ export async function upsertTaskBlueprintRecord(record: TaskBlueprintRecord): Pr
   next.push(record)
   records[record.taskId] = next.sort((left, right) => left.version - right.version)
   await writeTaskBlueprintRecords(records)
+  await syncTaskBlueprintSnapshot(record.taskId, record.version, record.status, record.updatedAt)
   return record
 }
 
 export async function createInitialTaskBlueprintRecord(detail: TaskDetail): Promise<TaskBlueprintRecord> {
+  const existing = await getCurrentTaskBlueprint(detail.taskId)
+  if (existing) {
+    return existing
+  }
+
   const createdAt = now()
   const blueprint = buildInitialBlueprintFromTaskDetail(detail)
   const record: TaskBlueprintRecord = {
@@ -87,6 +163,42 @@ export async function createInitialTaskBlueprintRecord(detail: TaskDetail): Prom
     blueprint,
     keyframeManifestPath: null,
   }
+  return upsertTaskBlueprintRecord(record)
+}
+
+export async function createTaskBlueprintVersion(input: {
+  taskId: string
+  blueprint: Omit<PlannedExecutionBlueprint, "executionMode" | "renderSpec">
+  status?: TaskBlueprintRecord["status"]
+  keyframeManifestPath?: string | null
+}): Promise<TaskBlueprintRecord | null> {
+  const tasks = await readTaskSummaries()
+  const task = tasks.find((item) => item.id === input.taskId)
+  if (!task) {
+    return null
+  }
+
+  const current = await getCurrentTaskBlueprint(input.taskId)
+  const createdAt = now()
+  const version = Math.max(current?.version ?? 0, task.blueprintVersion ?? 0) + 1
+  const record: TaskBlueprintRecord = {
+    taskId: input.taskId,
+    version,
+    status: input.status ?? "ready_for_review",
+    createdAt,
+    updatedAt: createdAt,
+    blueprint: {
+      taskId: input.taskId,
+      projectId: task.projectId,
+      version,
+      createdAt,
+      executionMode: task.executionMode,
+      renderSpec: task.renderSpecJson,
+      ...input.blueprint,
+    },
+    keyframeManifestPath: input.keyframeManifestPath ?? null,
+  }
+
   return upsertTaskBlueprintRecord(record)
 }
 
@@ -122,7 +234,11 @@ export async function updateTaskBlueprintStatus(taskId: string, version: number,
   )
   records[taskId] = next
   await writeTaskBlueprintRecords(records)
-  return next.find((record) => record.version === version) ?? null
+  const updated = next.find((record) => record.version === version) ?? null
+  if (updated) {
+    await syncTaskBlueprintSnapshot(taskId, updated.version, updated.status, updated.updatedAt)
+  }
+  return updated
 }
 
 export async function approveTaskBlueprint(input: {
@@ -130,22 +246,30 @@ export async function approveTaskBlueprint(input: {
   projectId: string
   blueprintVersion: number
 }): Promise<ProjectApprovedBlueprintRecord | null> {
-  const current = await getCurrentTaskBlueprint(input.taskId)
-  if (!current || current.version !== input.blueprintVersion) {
+  const current = await getTaskBlueprintByVersion(input.taskId, input.blueprintVersion)
+  if (!current) {
     return null
   }
 
-  await updateTaskBlueprintStatus(input.taskId, input.blueprintVersion, "approved")
+  const approved = await updateTaskBlueprintStatus(input.taskId, input.blueprintVersion, "approved")
+  if (!approved) {
+    return null
+  }
 
   const library = await readProjectApprovedBlueprintLibrary()
   const entry: ProjectApprovedBlueprintRecord = {
     projectId: input.projectId,
     taskId: input.taskId,
     blueprintVersion: input.blueprintVersion,
-    approvedAt: now(),
-    blueprint: current.blueprint,
+    approvedAt: approved.updatedAt,
+    blueprint: approved.blueprint,
   }
-  library[input.projectId] = [...(library[input.projectId] ?? []), entry]
+  library[input.projectId] = [
+    ...(library[input.projectId] ?? []).filter(
+      (record) => !(record.taskId === input.taskId && record.blueprintVersion === input.blueprintVersion),
+    ),
+    entry,
+  ]
   await writeProjectApprovedBlueprintLibrary(library)
   return entry
 }
@@ -155,4 +279,11 @@ export async function rejectTaskBlueprint(input: {
   blueprintVersion: number
 }): Promise<TaskBlueprintRecord | null> {
   return updateTaskBlueprintStatus(input.taskId, input.blueprintVersion, "rejected")
+}
+
+export async function queueTaskBlueprintForVideo(input: {
+  taskId: string
+  blueprintVersion: number
+}): Promise<TaskBlueprintRecord | null> {
+  return updateTaskBlueprintStatus(input.taskId, input.blueprintVersion, "queued_for_video")
 }

@@ -465,6 +465,11 @@ export async function getTaskDetail(taskId: string) {
       terminalPresetId: task.terminalPresetId,
     },
   )
+  taskRunConfig.executionMode = task.executionMode
+  taskRunConfig.renderSpecJson = task.renderSpecJson
+  taskRunConfig.aspectRatio = task.renderSpecJson.aspectRatio
+  taskRunConfig.blueprintVersion = task.blueprintVersion
+  taskRunConfig.blueprintStatus = task.blueprintStatus
   if (existing) {
     const normalizedExisting = normalizeTaskDetailRecord(existing)
     const totalSceneDuration = normalizedExisting.scenes.reduce((total, scene) => total + scene.durationSec, 0)
@@ -587,6 +592,8 @@ export async function createTask(input: CreateTaskInput): Promise<{ task: TaskSu
   taskRunConfig = mapResolvedSlotsToTaskConfig(
     {
       ...taskRunConfig,
+      blueprintVersion: 1,
+      blueprintStatus: "pending_generation",
       modelOverrides: input.modelOverrides,
     },
     resolvedSlots,

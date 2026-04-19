@@ -16,6 +16,7 @@ import {
 } from "@genergi/config"
 import {
   blueprintReviewDecisionSchema,
+  plannedExecutionBlueprintSchema,
   createTaskInputSchema,
   createUserInputSchema,
   normalizeImageProviderModelId,
@@ -38,9 +39,13 @@ import { assertQueueAvailable, enqueueTask, QueueUnavailableError } from "./lib/
 import { applySceneReviewDecision, createTask, deleteTask, getTaskAsset, getTaskAssets, getTaskDetail, listTasks } from "./lib/task-store.js"
 import {
   approveTaskBlueprint,
+  createTaskBlueprintVersion,
   getCurrentTaskBlueprint,
+  getTaskBlueprintByVersion,
+  getLatestTaskBlueprintReview,
   listTaskBlueprints,
   recordTaskBlueprintReview,
+  queueTaskBlueprintForVideo,
   rejectTaskBlueprint,
 } from "./lib/blueprint-store.js"
 import { createProject, listProjectApprovedBlueprints, listProjects } from "./lib/project-store.js"
@@ -66,6 +71,13 @@ const createProjectInputSchema = z.object({
   brandDirection: z.string().trim().optional(),
   defaultChannelIds: z.array(z.string().trim().min(1)).optional(),
   reusableStyleConstraints: z.array(z.string().trim().min(1)).optional(),
+})
+const createBlueprintInputSchema = z.object({
+  blueprint: plannedExecutionBlueprintSchema.omit({
+    executionMode: true,
+    renderSpec: true,
+  }),
+  keyframeManifestPath: z.string().trim().min(1).optional(),
 })
 const blueprintReviewBodySchema = z.object({
   decision: blueprintReviewDecisionSchema,
@@ -1524,13 +1536,47 @@ app.get("/api/tasks/:taskId/blueprints", async (c) => {
   return c.json({ blueprints })
 })
 
+app.post(
+  "/api/tasks/:taskId/blueprints",
+  zValidator("json", createBlueprintInputSchema),
+  async (c) => {
+    const taskId = c.req.param("taskId")
+    const payload = c.req.valid("json")
+    const blueprint = await createTaskBlueprintVersion({
+      taskId,
+      blueprint: payload.blueprint,
+      keyframeManifestPath: payload.keyframeManifestPath ?? null,
+    })
+
+    if (!blueprint) {
+      return c.json({ message: "TASK_NOT_FOUND" }, 404)
+    }
+
+    return c.json(
+      {
+        blueprint,
+        review: null,
+        nextStage: buildBlueprintNextStage(taskId, blueprint.status),
+      },
+      201,
+    )
+  },
+)
+
 app.get("/api/tasks/:taskId/blueprints/current", async (c) => {
-  const blueprint = await getCurrentTaskBlueprint(c.req.param("taskId"))
+  const taskId = c.req.param("taskId")
+  const blueprint = await getCurrentTaskBlueprint(taskId)
   if (!blueprint) {
     return c.json({ message: "TASK_BLUEPRINT_NOT_FOUND" }, 404)
   }
 
-  return c.json({ blueprint })
+  const review = await getLatestTaskBlueprintReview(taskId, blueprint.version)
+
+  return c.json({
+    blueprint,
+    review,
+    nextStage: buildBlueprintNextStage(taskId, blueprint.status),
+  })
 })
 
 app.get("/api/tasks/:taskId/assets", async (c) => {
@@ -1592,6 +1638,15 @@ function toQueueUnavailableResponse(c: Context, error: unknown) {
     },
     503,
   )
+}
+
+function buildBlueprintNextStage(taskId: string, status: string) {
+  const canResumeExecution = status === "approved"
+  return {
+    stage: "video_generation",
+    canResumeExecution,
+    resumePath: canResumeExecution ? `/api/tasks/${taskId}/blueprints/current/resume` : null,
+  }
 }
 
 app.get("/api/tasks/:taskId/assets/:assetId/download", async (c) => {
@@ -1689,22 +1744,78 @@ app.post(
     })
 
     if (payload.decision === "approved") {
-      const approvedEntry = await approveTaskBlueprint({
+      const projectLibraryEntry = await approveTaskBlueprint({
         taskId,
         projectId: current.blueprint.projectId,
         blueprintVersion: version,
       })
-      const queue = await enqueueTask(taskId, { resumeFrom: "blueprint_approved" })
-      return c.json({ review, blueprint: current, approvedEntry, queue })
+      const approved = await getTaskBlueprintByVersion(taskId, version)
+      if (!approved) {
+        return c.json({ message: "TASK_BLUEPRINT_NOT_FOUND" }, 404)
+      }
+
+      return c.json({
+        review,
+        blueprint: approved,
+        projectLibraryEntry,
+        nextStage: buildBlueprintNextStage(taskId, approved.status),
+      })
     }
 
     const rejected = await rejectTaskBlueprint({
       taskId,
       blueprintVersion: version,
     })
-    return c.json({ review, blueprint: rejected })
+    return c.json({
+      review,
+      blueprint: rejected,
+      projectLibraryEntry: null,
+      nextStage: buildBlueprintNextStage(taskId, rejected?.status ?? "rejected"),
+    })
   },
 )
+
+app.post("/api/tasks/:taskId/blueprints/current/resume", async (c) => {
+  const taskId = c.req.param("taskId")
+  const blueprint = await getCurrentTaskBlueprint(taskId)
+  if (!blueprint) {
+    return c.json({ message: "TASK_BLUEPRINT_NOT_FOUND" }, 404)
+  }
+
+  if (blueprint.status !== "approved") {
+    return c.json({ message: "BLUEPRINT_NOT_READY_FOR_RESUME", blueprintStatus: blueprint.status }, 409)
+  }
+
+  let queue
+  try {
+    queue = await enqueueTask(taskId, {
+      reason: "resume_after_blueprint_approval",
+      continueExecution: true,
+      blueprintVersion: blueprint.version,
+      stage: "video_generation",
+    })
+  } catch (error) {
+    return toQueueUnavailableResponse(c, error)
+  }
+
+  const queuedBlueprint = await queueTaskBlueprintForVideo({
+    taskId,
+    blueprintVersion: blueprint.version,
+  })
+
+  if (!queuedBlueprint) {
+    return c.json({ message: "TASK_BLUEPRINT_NOT_FOUND" }, 404)
+  }
+
+  return c.json(
+    {
+      blueprint: queuedBlueprint,
+      queue,
+      nextStage: buildBlueprintNextStage(taskId, queuedBlueprint.status),
+    },
+    202,
+  )
+})
 
 app.get("/api/tasks/:taskId/keyframes/:sceneId/preview", async (c) => {
   const taskId = c.req.param("taskId")
@@ -1757,6 +1868,8 @@ app.post("/api/tasks", async (c) => {
     rawBody && typeof rawBody === "object"
       ? {
           ...rawBody,
+          projectId: (rawBody as Record<string, unknown>).projectId ?? "project_default",
+          terminalPresetId: (rawBody as Record<string, unknown>).terminalPresetId ?? "phone_portrait",
           generationMode:
             (rawBody as Record<string, unknown>).generationMode ??
             (rawBody as Record<string, unknown>).generationPreference,
@@ -1785,7 +1898,7 @@ app.post("/api/tasks", async (c) => {
   }
   let queue
   try {
-    queue = await enqueueTask(result.task.id)
+    queue = await enqueueTask(result.task.id, { reason: "initial_create" })
   } catch (error) {
     await deleteTask(result.task.id)
     return toQueueUnavailableResponse(c, error)

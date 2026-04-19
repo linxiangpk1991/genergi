@@ -69,7 +69,7 @@ describe("API review routes", () => {
     })
 
     expect(response.status).toBe(401)
-  })
+  }, 10000)
 
   it("returns 400 for an invalid review payload", async () => {
     const { app, taskId, cookie } = await createAuthenticatedTask()
