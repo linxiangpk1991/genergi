@@ -146,6 +146,8 @@ export function buildDefaultTaskRunConfig(
     requireKeyframeReview: mode.requireKeyframeReview,
     budgetLimitCny: mode.budgetLimitCny,
     aspectRatio: "9:16",
+    slotSnapshots: [],
+    modelOverrides: undefined,
   }
 }
 

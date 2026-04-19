@@ -70,6 +70,41 @@ function normalizeImageModel(model: string) {
   return lower
 }
 
+function getProviderLabel(provider: string) {
+  const normalized = provider.trim().toLowerCase()
+  if (normalized === "anthropic-compatible" || normalized === "anthropic-native") {
+    return "Anthropic Compatible"
+  }
+  if (normalized === "openai-compatible") {
+    return "OpenAI Compatible"
+  }
+  if (normalized === "edge-tts") {
+    return "Edge TTS"
+  }
+  if (normalized === "azure-tts") {
+    return "Azure TTS"
+  }
+
+  return provider
+}
+
+export type RuntimeGenerationConfig = {
+  textProvider: string
+  textProviderLabel: string
+  textModelId: string
+  textModelLabel: string
+  imageProvider: string
+  imageProviderLabel: string
+  imageModelId: string
+  imageModelLabel: string
+  videoProvider: string
+  videoProviderLabel: string
+  videoModelId: string
+  videoModelLabel: string
+  ttsProvider: string
+  ttsLabel: string
+}
+
 export function resolveRuntimeGenerationConfig(detail: Pick<TaskDetail, "taskRunConfig">) {
   const ttsProvider = detail.taskRunConfig.ttsProvider.trim().toLowerCase()
   if (ttsProvider !== "edge-tts") {
@@ -77,11 +112,59 @@ export function resolveRuntimeGenerationConfig(detail: Pick<TaskDetail, "taskRun
   }
 
   return {
+    textProvider: detail.taskRunConfig.textModel.provider,
+    textProviderLabel: getProviderLabel(detail.taskRunConfig.textModel.provider),
+    textModelId: detail.taskRunConfig.textModel.id,
+    textModelLabel: detail.taskRunConfig.textModel.label,
+    imageProvider: detail.taskRunConfig.imageFinalModel.provider,
+    imageProviderLabel: getProviderLabel(detail.taskRunConfig.imageFinalModel.provider),
     ttsProvider,
     ttsLabel: "Edge TTS",
+    imageModelLabel: detail.taskRunConfig.imageFinalModel.label,
     imageModelId: detail.taskRunConfig.imageFinalModel.id,
+    videoProvider: detail.taskRunConfig.videoFinalModel.provider,
+    videoProviderLabel: getProviderLabel(detail.taskRunConfig.videoFinalModel.provider),
+    videoModelLabel: detail.taskRunConfig.videoFinalModel.label,
     videoModelId: detail.taskRunConfig.videoFinalModel.id,
+  } satisfies RuntimeGenerationConfig
+}
+
+export function describeRuntimeGenerationConfig(runtime: RuntimeGenerationConfig) {
+  return [
+    `text=${runtime.textModelLabel} (${runtime.textModelId} via ${runtime.textProviderLabel})`,
+    `image=${runtime.imageModelLabel} (${runtime.imageModelId} via ${runtime.imageProviderLabel})`,
+    `video=${runtime.videoModelLabel} (${runtime.videoModelId} via ${runtime.videoProviderLabel})`,
+    `tts=${runtime.ttsLabel} (${runtime.ttsProvider})`,
+  ].join(" | ")
+}
+
+export function buildWorkerRuntimeLabels(
+  runtime: RuntimeGenerationConfig,
+  input: {
+    sceneCount: number
+    targetDurationSec: number
+    keyframeCount: number
+  },
+) {
+  return {
+    audio: `${runtime.ttsLabel} (${runtime.ttsProvider})`,
+    keyframes: `关键帧包 (${input.keyframeCount} 张 / ${runtime.imageModelLabel})`,
+    video: `真实视频输出 (${input.sceneCount} scenes / ${input.targetDurationSec}s / ${runtime.videoModelLabel})`,
   }
+}
+
+function resolvePlanningModelId(runtime: RuntimeGenerationConfig) {
+  const snapshotModelId = runtime.textModelId.trim()
+  if (snapshotModelId && !/^text\./i.test(snapshotModelId)) {
+    return snapshotModelId
+  }
+
+  const envModel = process.env.GENERGI_TEXT_MODEL?.trim()
+  if (envModel) {
+    return envModel
+  }
+
+  return snapshotModelId || "claude-opus-4.6"
 }
 
 function buildKeyframePrompt(scene: StoryboardScene, aspectRatio: string) {
@@ -751,10 +834,11 @@ function buildPlanningFallback(detail: TaskDetail): TextPlanningOutput {
 }
 
 async function requestStructuredPlanning(detail: TaskDetail): Promise<TextPlanningOutput | null> {
-  const provider = process.env.GENERGI_TEXT_PROVIDER ?? ""
+  const runtime = resolveRuntimeGenerationConfig(detail)
+  const provider = runtime.textProvider.trim().toLowerCase()
   const apiKey = process.env.GENERGI_TEXT_API_KEY ?? ""
   const baseUrl = (process.env.GENERGI_TEXT_BASE_URL ?? "").replace(/\/+$/, "")
-  const model = process.env.GENERGI_TEXT_MODEL ?? "claude-opus-4.6"
+  const model = resolvePlanningModelId(runtime)
 
   if (!provider || !apiKey || !baseUrl) {
     return null
@@ -784,7 +868,7 @@ async function requestStructuredPlanning(detail: TaskDetail): Promise<TextPlanni
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     let rawText = ""
 
-    if (provider === "anthropic-native") {
+    if (provider === "anthropic-compatible" || provider === "anthropic-native") {
       const response = await axios.post(
         `${baseUrl}/v1/messages`,
         {

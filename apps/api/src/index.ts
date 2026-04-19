@@ -1,5 +1,6 @@
 import fs from "node:fs/promises"
 import path from "node:path"
+import { createCipheriv, createHash, randomBytes, randomUUID } from "node:crypto"
 import { serve } from "@hono/node-server"
 import { zValidator } from "@hono/zod-validator"
 import { Hono, type Context } from "hono"
@@ -16,9 +17,15 @@ import {
 import {
   createTaskInputSchema,
   createUserInputSchema,
+  readModelDefaults,
+  readModelRecords,
+  readProviderRecords,
   reviewDecisionBodySchema,
   reviewDecisionInputSchema,
   readRuntimeStatus,
+  replaceModelDefaults,
+  replaceModelRecords,
+  replaceProviderRecords,
   resetUserPasswordInputSchema,
   updateRuntimeStatus,
   updateUserInputSchema,
@@ -148,6 +155,784 @@ function enrichDetail(detail: NonNullable<Awaited<ReturnType<typeof getTaskDetai
       detail.taskRunConfig.routeReason,
     )
   return { ...detail, planning }
+}
+
+const modelControlSlotSchema = z.enum([
+  "textModel",
+  "imageDraftModel",
+  "imageFinalModel",
+  "videoDraftModel",
+  "videoFinalModel",
+  "ttsProvider",
+])
+type ModelControlSlot = z.infer<typeof modelControlSlotSchema>
+
+const modelControlModeSchema = z.enum(["mass_production", "high_quality"])
+type ModelControlMode = z.infer<typeof modelControlModeSchema>
+
+const providerStatusSchema = z.enum([
+  "draft",
+  "validating",
+  "available",
+  "invalid",
+  "disabled",
+  "deprecated",
+])
+type ProviderStatus = z.infer<typeof providerStatusSchema>
+
+const providerAuthTypeSchema = z.enum(["bearer_token", "api_key_header", "x_api_key", "custom_header", "none"])
+type ProviderAuthType = z.infer<typeof providerAuthTypeSchema>
+
+const modelLifecycleStatusSchema = z.enum([
+  "draft",
+  "validating",
+  "available",
+  "invalid",
+  "disabled",
+  "deprecated",
+])
+type ModelLifecycleStatus = z.infer<typeof modelLifecycleStatusSchema>
+
+type SlotAssignments = Partial<Record<ModelControlSlot, string | null>>
+
+type ModelControlProviderRecord = {
+  id: string
+  providerKey: string
+  providerType: string
+  displayName: string
+  endpointUrl: string
+  authType: ProviderAuthType
+  encryptedSecret: string | null
+  secretPreview: string | null
+  status: ProviderStatus
+  lastValidatedAt: string | null
+  lastValidationError: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+type ModelControlModelRecord = {
+  id: string
+  modelKey: string
+  providerId: string
+  slotType: ModelControlSlot
+  providerModelId: string
+  displayName: string
+  capabilityJson: Record<string, unknown>
+  lifecycleStatus: ModelLifecycleStatus
+  lastValidatedAt: string | null
+  lastValidationError: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+type ModelControlDefaultsDocument = {
+  globalDefaults: SlotAssignments
+  modeDefaults: Partial<Record<ModelControlMode, SlotAssignments>>
+  updatedAt: string | null
+}
+
+const slotAssignmentsSchema = z.object({
+  textModel: z.string().trim().min(1).nullable().optional(),
+  imageDraftModel: z.string().trim().min(1).nullable().optional(),
+  imageFinalModel: z.string().trim().min(1).nullable().optional(),
+  videoDraftModel: z.string().trim().min(1).nullable().optional(),
+  videoFinalModel: z.string().trim().min(1).nullable().optional(),
+  ttsProvider: z.string().trim().min(1).nullable().optional(),
+})
+
+const modeAssignmentsSchema = z.object({
+  mass_production: slotAssignmentsSchema.optional(),
+  high_quality: slotAssignmentsSchema.optional(),
+})
+
+const createProviderInputSchema = z.object({
+  providerKey: z.string().trim().min(1),
+  providerType: z.string().trim().min(1),
+  displayName: z.string().trim().min(1),
+  endpointUrl: z.string().trim().optional().default(""),
+  authType: providerAuthTypeSchema,
+  secret: z.string().min(1).optional(),
+})
+
+const updateProviderInputSchema = z.object({
+  providerKey: z.string().trim().min(1).optional(),
+  providerType: z.string().trim().min(1).optional(),
+  displayName: z.string().trim().min(1).optional(),
+  endpointUrl: z.string().trim().optional(),
+  authType: providerAuthTypeSchema.optional(),
+  secret: z.string().min(1).optional(),
+  status: providerStatusSchema.optional(),
+})
+
+const createModelInputSchema = z.object({
+  modelKey: z.string().trim().min(1),
+  providerId: z.string().trim().min(1),
+  slotType: modelControlSlotSchema,
+  providerModelId: z.string().trim().min(1),
+  displayName: z.string().trim().min(1),
+  capabilityJson: z.record(z.string(), z.unknown()).optional().default({}),
+})
+
+const updateModelInputSchema = z.object({
+  modelKey: z.string().trim().min(1).optional(),
+  providerId: z.string().trim().min(1).optional(),
+  slotType: modelControlSlotSchema.optional(),
+  providerModelId: z.string().trim().min(1).optional(),
+  displayName: z.string().trim().min(1).optional(),
+  capabilityJson: z.record(z.string(), z.unknown()).optional(),
+  lifecycleStatus: modelLifecycleStatusSchema.optional(),
+})
+
+const updateDefaultsInputSchema = z.object({
+  global: slotAssignmentsSchema.optional(),
+  modes: modeAssignmentsSchema.optional(),
+})
+
+const MODEL_CONTROL_SLOTS = modelControlSlotSchema.options
+const MODEL_CONTROL_MODES = modelControlModeSchema.options
+const TTS_PROVIDER_TYPES = new Set(["edge-tts", "azure-tts"])
+
+function createEmptySlotAssignments(): Record<ModelControlSlot, string | null> {
+  return {
+    textModel: null,
+    imageDraftModel: null,
+    imageFinalModel: null,
+    videoDraftModel: null,
+    videoFinalModel: null,
+    ttsProvider: null,
+  }
+}
+
+function createEmptyModeDefaults(): Record<ModelControlMode, Record<ModelControlSlot, string | null>> {
+  return {
+    mass_production: createEmptySlotAssignments(),
+    high_quality: createEmptySlotAssignments(),
+  }
+}
+
+function slugifyModelControlValue(value: string) {
+  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "default"
+}
+
+function nowIso() {
+  return new Date().toISOString()
+}
+
+function maskSecretPreview(secret: string) {
+  const tail = secret.slice(-4)
+  return `${"*".repeat(Math.max(secret.length - tail.length, 4))}${tail}`
+}
+
+function getModelControlMasterKey() {
+  const source = process.env.GENERGI_MODEL_CONTROL_MASTER_KEY ?? "genergi-model-control-dev-key"
+  return createHash("sha256").update(source).digest()
+}
+
+function encryptSecret(secret: string) {
+  const iv = randomBytes(12)
+  const cipher = createCipheriv("aes-256-gcm", getModelControlMasterKey(), iv)
+  const encrypted = Buffer.concat([cipher.update(secret, "utf8"), cipher.final()])
+  const tag = cipher.getAuthTag()
+  return `enc:${iv.toString("base64url")}:${tag.toString("base64url")}:${encrypted.toString("base64url")}`
+}
+
+function normalizeProviderRecord(raw: unknown): ModelControlProviderRecord | null {
+  if (!raw || typeof raw !== "object") {
+    return null
+  }
+
+  const record = raw as Partial<ModelControlProviderRecord>
+  const now = nowIso()
+  const authType = providerAuthTypeSchema.safeParse(record.authType).success
+    ? providerAuthTypeSchema.parse(record.authType)
+    : "none"
+  const status = providerStatusSchema.safeParse(record.status).success
+    ? providerStatusSchema.parse(record.status)
+    : "draft"
+
+  return {
+    id: typeof record.id === "string" && record.id.trim() ? record.id : randomUUID(),
+    providerKey:
+      typeof record.providerKey === "string" && record.providerKey.trim()
+        ? record.providerKey.trim()
+        : `provider-${slugifyModelControlValue(String(record.providerType ?? "unknown"))}`,
+    providerType: typeof record.providerType === "string" && record.providerType.trim() ? record.providerType.trim() : "unknown",
+    displayName:
+      typeof record.displayName === "string" && record.displayName.trim()
+        ? record.displayName.trim()
+        : typeof record.providerType === "string" && record.providerType.trim()
+          ? record.providerType.trim()
+          : "Unknown Provider",
+    endpointUrl: typeof record.endpointUrl === "string" ? record.endpointUrl.trim() : "",
+    authType,
+    encryptedSecret: typeof record.encryptedSecret === "string" && record.encryptedSecret.trim() ? record.encryptedSecret : null,
+    secretPreview: typeof record.secretPreview === "string" && record.secretPreview.trim() ? record.secretPreview : null,
+    status,
+    lastValidatedAt: typeof record.lastValidatedAt === "string" && record.lastValidatedAt.trim() ? record.lastValidatedAt : null,
+    lastValidationError:
+      typeof record.lastValidationError === "string" && record.lastValidationError.trim() ? record.lastValidationError : null,
+    createdAt: typeof record.createdAt === "string" && record.createdAt.trim() ? record.createdAt : now,
+    updatedAt: typeof record.updatedAt === "string" && record.updatedAt.trim() ? record.updatedAt : now,
+  }
+}
+
+function normalizeModelRecord(raw: unknown): ModelControlModelRecord | null {
+  if (!raw || typeof raw !== "object") {
+    return null
+  }
+
+  const record = raw as Partial<ModelControlModelRecord>
+  const slotType = modelControlSlotSchema.safeParse(record.slotType).success ? record.slotType : null
+  if (!slotType) {
+    return null
+  }
+
+  const lifecycleStatus = modelLifecycleStatusSchema.safeParse(record.lifecycleStatus).success
+    ? modelLifecycleStatusSchema.parse(record.lifecycleStatus)
+    : "draft"
+  const now = nowIso()
+  return {
+    id: typeof record.id === "string" && record.id.trim() ? record.id : randomUUID(),
+    modelKey:
+      typeof record.modelKey === "string" && record.modelKey.trim()
+        ? record.modelKey.trim()
+        : `${slotType}-${slugifyModelControlValue(String(record.providerModelId ?? "model"))}`,
+    providerId: typeof record.providerId === "string" ? record.providerId.trim() : "",
+    slotType,
+    providerModelId: typeof record.providerModelId === "string" ? record.providerModelId.trim() : "",
+    displayName:
+      typeof record.displayName === "string" && record.displayName.trim()
+        ? record.displayName.trim()
+        : typeof record.providerModelId === "string" && record.providerModelId.trim()
+          ? record.providerModelId.trim()
+          : "Unknown Model",
+    capabilityJson:
+      record.capabilityJson && typeof record.capabilityJson === "object" && !Array.isArray(record.capabilityJson)
+        ? { ...(record.capabilityJson as Record<string, unknown>) }
+        : {},
+    lifecycleStatus,
+    lastValidatedAt: typeof record.lastValidatedAt === "string" && record.lastValidatedAt.trim() ? record.lastValidatedAt : null,
+    lastValidationError:
+      typeof record.lastValidationError === "string" && record.lastValidationError.trim() ? record.lastValidationError : null,
+    createdAt: typeof record.createdAt === "string" && record.createdAt.trim() ? record.createdAt : now,
+    updatedAt: typeof record.updatedAt === "string" && record.updatedAt.trim() ? record.updatedAt : now,
+  }
+}
+
+function normalizeSlotAssignments(raw: unknown): Record<ModelControlSlot, string | null> {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return createEmptySlotAssignments()
+  }
+
+  const normalized = createEmptySlotAssignments()
+  for (const slotType of MODEL_CONTROL_SLOTS) {
+    const value = (raw as Record<string, unknown>)[slotType]
+    if (typeof value === "string" && value.trim()) {
+      normalized[slotType] = value.trim()
+      continue
+    }
+
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      const modelId = (value as { modelId?: unknown }).modelId
+      if (typeof modelId === "string" && modelId.trim()) {
+        normalized[slotType] = modelId.trim()
+      }
+    }
+  }
+
+  return normalized
+}
+
+function normalizeDefaultsDocument(raw: unknown): ModelControlDefaultsDocument {
+  const record = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {}
+  const normalizedModeDefaults = createEmptyModeDefaults()
+
+  if (record.modeDefaults && typeof record.modeDefaults === "object" && !Array.isArray(record.modeDefaults)) {
+    for (const modeId of MODEL_CONTROL_MODES) {
+      normalizedModeDefaults[modeId] = normalizeSlotAssignments(
+        (record.modeDefaults as Record<string, unknown>)[modeId],
+      )
+    }
+  } else if (Array.isArray(record.modeDefaults)) {
+    for (const entry of record.modeDefaults) {
+      if (!entry || typeof entry !== "object") {
+        continue
+      }
+      const modeId = modelControlModeSchema.safeParse((entry as { modeId?: unknown }).modeId)
+      if (!modeId.success) {
+        continue
+      }
+      normalizedModeDefaults[modeId.data] = normalizeSlotAssignments((entry as { slots?: unknown }).slots ?? entry)
+    }
+  }
+
+  return {
+    globalDefaults: normalizeSlotAssignments(record.globalDefaults ?? record.global ?? {}),
+    modeDefaults: normalizedModeDefaults,
+    updatedAt: typeof record.updatedAt === "string" && record.updatedAt.trim() ? record.updatedAt : null,
+  }
+}
+
+function buildProviderSeedDisplayName(providerType: string) {
+  const normalized = providerType.trim().toLowerCase()
+  if (normalized === "anthropic-compatible") {
+    return "Anthropic Compatible Seed"
+  }
+  if (normalized === "openai-compatible") {
+    return "OpenAI Compatible Seed"
+  }
+  if (normalized === "edge-tts") {
+    return "Edge TTS Seed"
+  }
+  if (normalized === "azure-tts") {
+    return "Azure TTS Seed"
+  }
+
+  return providerType
+}
+
+function buildModelControlSeedState(): {
+  providers: ModelControlProviderRecord[]
+  models: ModelControlModelRecord[]
+  defaults: ModelControlDefaultsDocument
+} {
+  const now = nowIso()
+  const providerMap = new Map<string, ModelControlProviderRecord>()
+
+  const ensureProvider = (providerType: string) => {
+    const normalizedType = providerType.trim()
+    const existing = providerMap.get(normalizedType)
+    if (existing) {
+      return existing
+    }
+
+    const record: ModelControlProviderRecord = {
+      id: `seed-provider-${slugifyModelControlValue(normalizedType)}`,
+      providerKey: `seed-${slugifyModelControlValue(normalizedType)}`,
+      providerType: normalizedType,
+      displayName: buildProviderSeedDisplayName(normalizedType),
+      endpointUrl: "",
+      authType: TTS_PROVIDER_TYPES.has(normalizedType.toLowerCase()) ? "none" : "bearer_token",
+      encryptedSecret: null,
+      secretPreview: null,
+      status: "available",
+      lastValidatedAt: now,
+      lastValidationError: null,
+      createdAt: now,
+      updatedAt: now,
+    }
+    providerMap.set(normalizedType, record)
+    return record
+  }
+
+  const models: ModelControlModelRecord[] = []
+  const defaults = createEmptyModeDefaults()
+  const seenSlotModels = new Map<string, string>()
+
+  const registerSeedModel = (slotType: Exclude<ModelControlSlot, "ttsProvider">, modelRef: { id: string; label: string; provider: string }) => {
+    const key = `${slotType}:${modelRef.id}`
+    const existingId = seenSlotModels.get(key)
+    if (existingId) {
+      return existingId
+    }
+
+    const provider = ensureProvider(modelRef.provider)
+    const modelId = `seed-model-${slugifyModelControlValue(slotType)}-${slugifyModelControlValue(modelRef.id)}`
+    models.push({
+      id: modelId,
+      modelKey: `${slotType}-${slugifyModelControlValue(modelRef.id)}`,
+      providerId: provider.id,
+      slotType,
+      providerModelId: modelRef.id,
+      displayName: modelRef.label,
+      capabilityJson: slotType.startsWith("video")
+        ? { ...resolveVideoModelCapability(modelRef.id) }
+        : { provider: modelRef.provider },
+      lifecycleStatus: "available",
+      lastValidatedAt: now,
+      lastValidationError: null,
+      createdAt: now,
+      updatedAt: now,
+    })
+    seenSlotModels.set(key, modelId)
+    return modelId
+  }
+
+  for (const modeId of MODEL_CONTROL_MODES) {
+    const mode = MODE_MODELS[modeId]
+    defaults[modeId].textModel = registerSeedModel("textModel", mode.textModel)
+    defaults[modeId].imageDraftModel = registerSeedModel("imageDraftModel", mode.imageDraftModel)
+    defaults[modeId].imageFinalModel = registerSeedModel("imageFinalModel", mode.imageFinalModel)
+    defaults[modeId].videoDraftModel = registerSeedModel("videoDraftModel", mode.videoDraftModel)
+    defaults[modeId].videoFinalModel = registerSeedModel("videoFinalModel", mode.videoFinalModel)
+    defaults[modeId].ttsProvider = ensureProvider(mode.ttsProvider).id
+  }
+
+  return {
+    providers: Array.from(providerMap.values()),
+    models,
+    defaults: {
+      globalDefaults: createEmptySlotAssignments(),
+      modeDefaults: defaults,
+      updatedAt: now,
+    },
+  }
+}
+
+function hasPersistedModelControlState(state: {
+  providers: ModelControlProviderRecord[]
+  models: ModelControlModelRecord[]
+  defaults: ModelControlDefaultsDocument
+}) {
+  const hasDefaults = MODEL_CONTROL_SLOTS.some(
+    (slot) =>
+      state.defaults.globalDefaults[slot] ||
+      state.defaults.modeDefaults.mass_production?.[slot] ||
+      state.defaults.modeDefaults.high_quality?.[slot],
+  )
+
+  return (state.providers.length > 0 && state.models.length > 0) || hasDefaults
+}
+
+let modelControlStatePromise:
+  | Promise<{
+      providers: ModelControlProviderRecord[]
+      models: ModelControlModelRecord[]
+      defaults: ModelControlDefaultsDocument
+    }>
+  | null = null
+
+async function ensureModelControlState() {
+  if (!modelControlStatePromise) {
+    modelControlStatePromise = (async () => {
+      const rawProviders = await readProviderRecords()
+      const rawModels = await readModelRecords()
+      const rawDefaults = await readModelDefaults()
+
+      const state = {
+        providers: (rawProviders as unknown[])
+          .map(normalizeProviderRecord)
+          .filter(Boolean) as ModelControlProviderRecord[],
+        models: (rawModels as unknown[]).map(normalizeModelRecord).filter(Boolean) as ModelControlModelRecord[],
+        defaults: normalizeDefaultsDocument(rawDefaults),
+      }
+
+      const hasDefaults = MODEL_CONTROL_SLOTS.some(
+        (slot) =>
+          state.defaults.globalDefaults[slot] ||
+          state.defaults.modeDefaults.mass_production?.[slot] ||
+          state.defaults.modeDefaults.high_quality?.[slot],
+      )
+
+      if (state.providers.length === 0 && state.models.length === 0 && !hasDefaults) {
+        const seeded = buildModelControlSeedState()
+        await replaceProviderRecords(seeded.providers as never[])
+        await replaceModelRecords(seeded.models as never[])
+        await replaceModelDefaults(seeded.defaults as never)
+        return seeded
+      }
+
+      if (state.providers.length > 0 && state.models.length > 0 && !hasDefaults) {
+        const seeded = buildModelControlSeedState()
+        const nextDefaults: ModelControlDefaultsDocument = {
+          ...state.defaults,
+          modeDefaults: seeded.defaults.modeDefaults,
+          updatedAt: seeded.defaults.updatedAt,
+        }
+        await replaceModelDefaults(nextDefaults as never)
+        return {
+          ...state,
+          defaults: nextDefaults,
+        }
+      }
+
+      if (hasPersistedModelControlState(state)) {
+        return state
+      }
+
+      const seeded = buildModelControlSeedState()
+      await replaceProviderRecords(seeded.providers as never[])
+      await replaceModelRecords(seeded.models as never[])
+      await replaceModelDefaults(seeded.defaults as never)
+      return seeded
+    })().finally(() => {
+      modelControlStatePromise = null
+    })
+  }
+
+  return modelControlStatePromise
+}
+
+function sanitizeProviderRecord(provider: ModelControlProviderRecord) {
+  return {
+    id: provider.id,
+    providerKey: provider.providerKey,
+    providerType: provider.providerType,
+    displayName: provider.displayName,
+    endpointUrl: provider.endpointUrl,
+    authType: provider.authType,
+    status: provider.status,
+    lastValidatedAt: provider.lastValidatedAt,
+    lastValidationError: provider.lastValidationError,
+    createdAt: provider.createdAt,
+    updatedAt: provider.updatedAt,
+    secretConfigured: Boolean(provider.encryptedSecret),
+    secretPreview: provider.secretPreview,
+  }
+}
+
+function sanitizeModelRecord(model: ModelControlModelRecord, providers: ModelControlProviderRecord[]) {
+  const provider = providers.find((item) => item.id === model.providerId) ?? null
+  return {
+    id: model.id,
+    modelKey: model.modelKey,
+    providerId: model.providerId,
+    slotType: model.slotType,
+    providerModelId: model.providerModelId,
+    displayName: model.displayName,
+    capabilityJson: model.capabilityJson,
+    lifecycleStatus: model.lifecycleStatus,
+    lastValidatedAt: model.lastValidatedAt,
+    lastValidationError: model.lastValidationError,
+    createdAt: model.createdAt,
+    updatedAt: model.updatedAt,
+    provider: provider
+      ? {
+          id: provider.id,
+          displayName: provider.displayName,
+          providerType: provider.providerType,
+          status: provider.status,
+        }
+      : null,
+  }
+}
+
+function validateProviderForAvailability(provider: ModelControlProviderRecord) {
+  const normalizedProviderType = provider.providerType.trim().toLowerCase()
+  const normalizedEndpoint = provider.endpointUrl.trim()
+
+  if (!provider.providerKey.trim()) {
+    return { ok: false as const, error: "providerKey is required" }
+  }
+
+  if (!provider.displayName.trim()) {
+    return { ok: false as const, error: "displayName is required" }
+  }
+
+  if (!normalizedProviderType) {
+    return { ok: false as const, error: "providerType is required" }
+  }
+
+  if (provider.authType !== "none" && !provider.encryptedSecret) {
+    return { ok: false as const, error: "provider secret is required for authenticated providers" }
+  }
+
+  if (normalizedEndpoint && !/^https?:\/\//i.test(normalizedEndpoint)) {
+    return { ok: false as const, error: "endpointUrl must start with http:// or https://" }
+  }
+
+  if (!normalizedEndpoint && !TTS_PROVIDER_TYPES.has(normalizedProviderType)) {
+    return { ok: false as const, error: "endpointUrl is required for non-TTS providers" }
+  }
+
+  return { ok: true as const }
+}
+
+function validateModelForAvailability(model: ModelControlModelRecord, providers: ModelControlProviderRecord[]) {
+  const provider = providers.find((item) => item.id === model.providerId) ?? null
+  if (!provider) {
+    return { ok: false as const, error: "linked provider does not exist" }
+  }
+
+  if (provider.status !== "available") {
+    return { ok: false as const, error: "linked provider must be available before model validation" }
+  }
+
+  if (!model.modelKey.trim()) {
+    return { ok: false as const, error: "modelKey is required" }
+  }
+
+  if (!model.providerModelId.trim()) {
+    return { ok: false as const, error: "providerModelId is required" }
+  }
+
+  if (model.slotType === "ttsProvider") {
+    return { ok: false as const, error: "ttsProvider defaults must point to provider records, not model records" }
+  }
+
+  if (TTS_PROVIDER_TYPES.has(provider.providerType.trim().toLowerCase())) {
+    return { ok: false as const, error: "TTS providers cannot validate non-TTS model slots" }
+  }
+
+  return { ok: true as const }
+}
+
+function buildSelectablePools(state: {
+  providers: ModelControlProviderRecord[]
+  models: ModelControlModelRecord[]
+}) {
+  const slots = Object.fromEntries(
+    MODEL_CONTROL_SLOTS.map((slotType) => [slotType, [] as Array<Record<string, unknown>>]),
+  ) as Record<ModelControlSlot, Array<Record<string, unknown>>>
+
+  for (const model of state.models) {
+    const provider = state.providers.find((item) => item.id === model.providerId)
+    if (!provider || provider.status !== "available" || model.lifecycleStatus !== "available") {
+      continue
+    }
+
+    slots[model.slotType].push({
+      slotType: model.slotType,
+      sourceType: "model",
+      valueId: model.id,
+      modelId: model.id,
+      displayName: model.displayName,
+      providerId: provider.id,
+      providerType: provider.providerType,
+      providerModelId: model.providerModelId,
+      capabilityJson: model.capabilityJson,
+    })
+  }
+
+  for (const provider of state.providers) {
+    if (provider.status !== "available" || !TTS_PROVIDER_TYPES.has(provider.providerType.trim().toLowerCase())) {
+      continue
+    }
+
+    slots.ttsProvider.push({
+      slotType: "ttsProvider",
+      sourceType: "provider",
+      valueId: provider.id,
+      providerId: provider.id,
+      displayName: provider.displayName,
+      providerType: provider.providerType,
+    })
+  }
+
+  return slots
+}
+
+function toModelControlSelection(
+  valueId: string | null | undefined,
+  slotType: ModelControlSlot,
+  selectable: ReturnType<typeof buildSelectablePools>,
+) {
+  if (!valueId) {
+    return null
+  }
+
+  const matched = selectable[slotType].find((entry) => entry.valueId === valueId) ?? null
+  if (!matched) {
+    return {
+      recordId: valueId,
+      displayName: null,
+      providerDisplayName: null,
+    }
+  }
+
+  return {
+    valueId,
+    recordId: valueId,
+    displayName: typeof matched.displayName === "string" ? matched.displayName : null,
+    providerDisplayName:
+      typeof matched.providerDisplayName === "string"
+        ? matched.providerDisplayName
+        : typeof matched.providerType === "string"
+          ? matched.providerType
+          : null,
+  }
+}
+
+function resolveEffectiveSelections(
+  defaults: ModelControlDefaultsDocument,
+  state: {
+    providers: ModelControlProviderRecord[]
+    models: ModelControlModelRecord[]
+  },
+  modeId: ModelControlMode,
+) {
+  const selectable = buildSelectablePools(state)
+  return Object.fromEntries(
+    MODEL_CONTROL_SLOTS.map((slotType) => {
+      const modeValue = defaults.modeDefaults[modeId]?.[slotType] ?? null
+      const globalValue = defaults.globalDefaults[slotType] ?? null
+      const source = modeValue ? "mode" : globalValue ? "global" : "unconfigured"
+      const valueId = modeValue ?? globalValue
+      const matched = valueId ? selectable[slotType].find((entry) => entry.valueId === valueId) ?? null : null
+      return [
+        slotType,
+        matched
+          ? {
+              ...matched,
+              source,
+            }
+          : valueId
+            ? {
+                valueId,
+                source,
+              }
+            : null,
+      ]
+    }),
+  ) as Record<ModelControlSlot, Record<string, unknown> | null>
+}
+
+function buildDefaultsResponse(
+  defaults: ModelControlDefaultsDocument,
+  state: {
+    providers: ModelControlProviderRecord[]
+    models: ModelControlModelRecord[]
+  },
+) {
+  const selectable = buildSelectablePools(state)
+  const selectionView = {
+    global: Object.fromEntries(
+      MODEL_CONTROL_SLOTS.map((slotType) => [
+        slotType,
+        toModelControlSelection(defaults.globalDefaults[slotType], slotType, selectable),
+      ]),
+    ),
+    modes: Object.fromEntries(
+      MODEL_CONTROL_MODES.map((modeId) => [
+        modeId,
+        Object.fromEntries(
+          MODEL_CONTROL_SLOTS.map((slotType) => [
+            slotType,
+            toModelControlSelection(defaults.modeDefaults[modeId]?.[slotType], slotType, selectable),
+          ]),
+        ),
+      ]),
+    ),
+  }
+
+  const effective = Object.fromEntries(
+    MODEL_CONTROL_MODES.map((modeId) => [modeId, resolveEffectiveSelections(defaults, state, modeId)]),
+  )
+
+  return {
+    ...selectionView,
+    updatedAt: defaults.updatedAt,
+    defaults: {
+      global: { ...defaults.globalDefaults },
+      modes: Object.fromEntries(
+        MODEL_CONTROL_MODES.map((modeId) => [modeId, { ...defaults.modeDefaults[modeId] }]),
+      ),
+    },
+    effective,
+  }
+}
+
+function isSelectableTarget(
+  slotType: ModelControlSlot,
+  valueId: string,
+  state: {
+    providers: ModelControlProviderRecord[]
+    models: ModelControlModelRecord[]
+  },
+) {
+  const selectable = buildSelectablePools(state)
+  return selectable[slotType].some((entry) => entry.valueId === valueId)
 }
 
 app.get("/api/health", (c) => {
@@ -290,6 +1075,368 @@ app.get("/api/bootstrap", (c) => {
       budgetLimitCny: mode.budgetLimitCny,
       maxSingleShotSec: resolveVideoModelCapability(mode.videoDraftModel.id).maxSingleShotSec,
     })),
+  })
+})
+
+app.use("/api/model-control", requireAuth())
+
+app.get("/api/model-control/providers", async (c) => {
+  const state = await ensureModelControlState()
+  return c.json({
+    providers: state.providers.map(sanitizeProviderRecord),
+  })
+})
+
+app.post("/api/model-control/providers", zValidator("json", createProviderInputSchema), async (c) => {
+  const payload = c.req.valid("json")
+  const state = await ensureModelControlState()
+  const now = nowIso()
+  const record: ModelControlProviderRecord = {
+    id: randomUUID(),
+    providerKey: payload.providerKey,
+    providerType: payload.providerType,
+    displayName: payload.displayName,
+    endpointUrl: payload.endpointUrl.trim(),
+    authType: payload.authType,
+    encryptedSecret: payload.secret ? encryptSecret(payload.secret) : null,
+    secretPreview: payload.secret ? maskSecretPreview(payload.secret) : null,
+    status: "draft",
+    lastValidatedAt: null,
+    lastValidationError: null,
+    createdAt: now,
+    updatedAt: now,
+  }
+  const providers = [...state.providers, record]
+  await replaceProviderRecords(providers as never[])
+  return c.json({ provider: sanitizeProviderRecord(record) }, 201)
+})
+
+app.patch("/api/model-control/providers/:providerId", zValidator("json", updateProviderInputSchema), async (c) => {
+  const providerId = c.req.param("providerId")
+  const payload = c.req.valid("json")
+  const state = await ensureModelControlState()
+  const index = state.providers.findIndex((item) => item.id === providerId)
+  if (index < 0) {
+    return c.json({ message: "PROVIDER_NOT_FOUND" }, 404)
+  }
+
+  const current = state.providers[index]
+  const next: ModelControlProviderRecord = {
+    ...current,
+    providerKey: payload.providerKey ?? current.providerKey,
+    providerType: payload.providerType ?? current.providerType,
+    displayName: payload.displayName ?? current.displayName,
+    endpointUrl: payload.endpointUrl ?? current.endpointUrl,
+    authType: payload.authType ?? current.authType,
+    encryptedSecret: payload.secret ? encryptSecret(payload.secret) : current.encryptedSecret,
+    secretPreview: payload.secret ? maskSecretPreview(payload.secret) : current.secretPreview,
+    status: payload.status ?? "draft",
+    lastValidatedAt: payload.status && payload.status !== "available" ? current.lastValidatedAt : null,
+    lastValidationError: payload.status && payload.status !== "available" ? current.lastValidationError : null,
+    updatedAt: nowIso(),
+  }
+  const providers = [...state.providers]
+  providers[index] = next
+  await replaceProviderRecords(providers as never[])
+  return c.json({ provider: sanitizeProviderRecord(next) })
+})
+
+app.get("/api/model-control/models", async (c) => {
+  const state = await ensureModelControlState()
+  return c.json({
+    models: state.models.map((model) => sanitizeModelRecord(model, state.providers)),
+  })
+})
+
+app.post("/api/model-control/models", zValidator("json", createModelInputSchema), async (c) => {
+  const payload = c.req.valid("json")
+  const state = await ensureModelControlState()
+  const now = nowIso()
+  const record: ModelControlModelRecord = {
+    id: randomUUID(),
+    modelKey: payload.modelKey,
+    providerId: payload.providerId,
+    slotType: payload.slotType,
+    providerModelId: payload.providerModelId,
+    displayName: payload.displayName,
+    capabilityJson: payload.capabilityJson,
+    lifecycleStatus: "draft",
+    lastValidatedAt: null,
+    lastValidationError: null,
+    createdAt: now,
+    updatedAt: now,
+  }
+  const models = [...state.models, record]
+  await replaceModelRecords(models as never[])
+  return c.json({ model: sanitizeModelRecord(record, state.providers) }, 201)
+})
+
+app.patch("/api/model-control/models/:modelId", zValidator("json", updateModelInputSchema), async (c) => {
+  const modelId = c.req.param("modelId")
+  const payload = c.req.valid("json")
+  const state = await ensureModelControlState()
+  const index = state.models.findIndex((item) => item.id === modelId)
+  if (index < 0) {
+    return c.json({ message: "MODEL_NOT_FOUND" }, 404)
+  }
+
+  const current = state.models[index]
+  const next: ModelControlModelRecord = {
+    ...current,
+    modelKey: payload.modelKey ?? current.modelKey,
+    providerId: payload.providerId ?? current.providerId,
+    slotType: payload.slotType ?? current.slotType,
+    providerModelId: payload.providerModelId ?? current.providerModelId,
+    displayName: payload.displayName ?? current.displayName,
+    capabilityJson: payload.capabilityJson ?? current.capabilityJson,
+    lifecycleStatus: payload.lifecycleStatus ?? "draft",
+    lastValidatedAt: payload.lifecycleStatus && payload.lifecycleStatus !== "available" ? current.lastValidatedAt : null,
+    lastValidationError:
+      payload.lifecycleStatus && payload.lifecycleStatus !== "available" ? current.lastValidationError : null,
+    updatedAt: nowIso(),
+  }
+  const models = [...state.models]
+  models[index] = next
+  await replaceModelRecords(models as never[])
+  return c.json({ model: sanitizeModelRecord(next, state.providers) })
+})
+
+app.get("/api/model-control/defaults", async (c) => {
+  const state = await ensureModelControlState()
+  return c.json(buildDefaultsResponse(state.defaults, state))
+})
+
+app.put("/api/model-control/defaults", zValidator("json", updateDefaultsInputSchema), async (c) => {
+  const payload = c.req.valid("json")
+  const state = await ensureModelControlState()
+  const globalDefaults = {
+    ...state.defaults.globalDefaults,
+    ...(payload.global ?? {}),
+  }
+  const modeDefaults = {
+    ...state.defaults.modeDefaults,
+    mass_production: {
+      ...state.defaults.modeDefaults.mass_production,
+      ...(payload.modes?.mass_production ?? {}),
+    },
+    high_quality: {
+      ...state.defaults.modeDefaults.high_quality,
+      ...(payload.modes?.high_quality ?? {}),
+    },
+  }
+
+  for (const slotType of MODEL_CONTROL_SLOTS) {
+    const globalValue = globalDefaults[slotType]
+    if (globalValue && !isSelectableTarget(slotType, globalValue, state)) {
+      return c.json({ message: `DEFAULT_TARGET_NOT_SELECTABLE:${slotType}:${globalValue}` }, 400)
+    }
+
+    for (const modeId of MODEL_CONTROL_MODES) {
+      const modeValue = modeDefaults[modeId][slotType]
+      if (modeValue && !isSelectableTarget(slotType, modeValue, state)) {
+        return c.json({ message: `DEFAULT_TARGET_NOT_SELECTABLE:${slotType}:${modeValue}` }, 400)
+      }
+    }
+  }
+
+  const nextDefaults: ModelControlDefaultsDocument = {
+    globalDefaults,
+    modeDefaults,
+    updatedAt: nowIso(),
+  }
+  await replaceModelDefaults(nextDefaults as never)
+  return c.json(buildDefaultsResponse(nextDefaults, state))
+})
+
+app.put("/api/model-control/defaults/global", zValidator("json", z.object({
+  assignments: slotAssignmentsSchema,
+})), async (c) => {
+  const payload = c.req.valid("json")
+  const state = await ensureModelControlState()
+  const globalDefaults = {
+    ...state.defaults.globalDefaults,
+    ...payload.assignments,
+  }
+
+  for (const slotType of MODEL_CONTROL_SLOTS) {
+    const valueId = globalDefaults[slotType]
+    if (valueId && !isSelectableTarget(slotType, valueId, state)) {
+      return c.json({ message: `DEFAULT_TARGET_NOT_SELECTABLE:${slotType}:${valueId}` }, 400)
+    }
+  }
+
+  const nextDefaults: ModelControlDefaultsDocument = {
+    ...state.defaults,
+    globalDefaults,
+    updatedAt: nowIso(),
+  }
+  await replaceModelDefaults(nextDefaults as never)
+  return c.json(buildDefaultsResponse(nextDefaults, state))
+})
+
+app.put("/api/model-control/defaults/modes/:modeId", zValidator("json", z.object({
+  assignments: slotAssignmentsSchema,
+})), async (c) => {
+  const modeId = modelControlModeSchema.safeParse(c.req.param("modeId"))
+  if (!modeId.success) {
+    return c.json({ message: "MODE_NOT_FOUND" }, 404)
+  }
+
+  const payload = c.req.valid("json")
+  const state = await ensureModelControlState()
+  const nextModeDefaults = {
+    ...state.defaults.modeDefaults,
+    [modeId.data]: {
+      ...state.defaults.modeDefaults[modeId.data],
+      ...payload.assignments,
+    },
+  }
+
+  for (const slotType of MODEL_CONTROL_SLOTS) {
+    const valueId = nextModeDefaults[modeId.data]?.[slotType]
+    if (valueId && !isSelectableTarget(slotType, valueId, state)) {
+      return c.json({ message: `DEFAULT_TARGET_NOT_SELECTABLE:${slotType}:${valueId}` }, 400)
+    }
+  }
+
+  const nextDefaults: ModelControlDefaultsDocument = {
+    ...state.defaults,
+    modeDefaults: nextModeDefaults,
+    updatedAt: nowIso(),
+  }
+  await replaceModelDefaults(nextDefaults as never)
+  return c.json(buildDefaultsResponse(nextDefaults, state))
+})
+
+app.post("/api/model-control/validation/providers/:providerId", async (c) => {
+  const providerId = c.req.param("providerId")
+  const state = await ensureModelControlState()
+  const index = state.providers.findIndex((item) => item.id === providerId)
+  if (index < 0) {
+    return c.json({ message: "PROVIDER_NOT_FOUND" }, 404)
+  }
+
+  const current = state.providers[index]
+  const validation = validateProviderForAvailability(current)
+  const next: ModelControlProviderRecord = {
+    ...current,
+    status: validation.ok ? "available" : "invalid",
+    lastValidatedAt: nowIso(),
+    lastValidationError: validation.ok ? null : validation.error,
+    updatedAt: nowIso(),
+  }
+  const providers = [...state.providers]
+  providers[index] = next
+  await replaceProviderRecords(providers as never[])
+  return c.json({ provider: sanitizeProviderRecord(next) })
+})
+
+app.post("/api/model-control/validation/models/:modelId", async (c) => {
+  const modelId = c.req.param("modelId")
+  const state = await ensureModelControlState()
+  const index = state.models.findIndex((item) => item.id === modelId)
+  if (index < 0) {
+    return c.json({ message: "MODEL_NOT_FOUND" }, 404)
+  }
+
+  const current = state.models[index]
+  const validation = validateModelForAvailability(current, state.providers)
+  const next: ModelControlModelRecord = {
+    ...current,
+    lifecycleStatus: validation.ok ? "available" : "invalid",
+    lastValidatedAt: nowIso(),
+    lastValidationError: validation.ok ? null : validation.error,
+    updatedAt: nowIso(),
+  }
+  const models = [...state.models]
+  models[index] = next
+  await replaceModelRecords(models as never[])
+  return c.json({ model: sanitizeModelRecord(next, state.providers) })
+})
+
+app.get("/api/model-control/selectable", async (c) => {
+  const state = await ensureModelControlState()
+  const slotTypeQuery = c.req.query("slotType")
+  const modeIdQuery = c.req.query("modeId")
+  const selectable = buildSelectablePools(state)
+  const selectedMode = modelControlModeSchema.safeParse(modeIdQuery).success ? (modeIdQuery as ModelControlMode) : "high_quality"
+  const selectedSlot = modelControlSlotSchema.safeParse(slotTypeQuery).success
+    ? (slotTypeQuery as ModelControlSlot)
+    : null
+  const slotOrder = selectedSlot ? [selectedSlot] : MODEL_CONTROL_SLOTS
+  const slots = Object.fromEntries(
+    slotOrder.map((slotType) => [
+      slotType,
+      selectable[slotType].map((entry) => ({
+        ...entry,
+        recordId: entry.valueId,
+      })),
+    ]),
+  ) as Partial<Record<ModelControlSlot, Array<Record<string, unknown>>>> 
+  const effective = Object.fromEntries(
+    slotOrder.map((slotType) => {
+      const modeValue = state.defaults.modeDefaults[selectedMode]?.[slotType] ?? null
+      const globalValue = state.defaults.globalDefaults[slotType] ?? null
+      const valueId = modeValue ?? globalValue
+      const matched = valueId ? selectable[slotType].find((entry) => entry.valueId === valueId) ?? null : null
+      return [
+        slotType,
+        matched
+          ? {
+              ...matched,
+              recordId: matched.valueId,
+            }
+          : valueId
+            ? { valueId }
+            : null,
+      ]
+    }),
+  )
+
+  return c.json({
+    modeId: selectedMode,
+    slots,
+    effective,
+    pools: Object.fromEntries(
+      slotOrder.map((slotType) => [
+        slotType,
+        {
+          slotType,
+          options: (slots[slotType] ?? []).map((entry) => {
+            const record = entry as {
+              valueId: string
+              displayName?: string | null
+              providerDisplayName?: string | null
+              providerType?: string | null
+              providerId?: string
+              capabilityJson?: Record<string, unknown>
+              description?: string | null
+            }
+            return {
+              recordId: record.valueId,
+              valueId: record.valueId,
+              displayName: record.displayName ?? "",
+              providerDisplayName:
+                typeof record.providerDisplayName === "string"
+                  ? record.providerDisplayName
+                  : typeof record.providerType === "string"
+                    ? record.providerType
+                    : null,
+              providerId: record.providerId,
+            slotType,
+              capabilityJson: record.capabilityJson,
+              description: record.description ?? null,
+            }
+          }),
+          globalDefaultId: state.defaults.globalDefaults[slotType] ?? null,
+          modeDefaultId: state.defaults.modeDefaults[selectedMode]?.[slotType] ?? null,
+          effectiveId:
+            state.defaults.modeDefaults[selectedMode]?.[slotType] ??
+            state.defaults.globalDefaults[slotType] ??
+            null,
+        },
+      ]),
+    ),
   })
 })
 

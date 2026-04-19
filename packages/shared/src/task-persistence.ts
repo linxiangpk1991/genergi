@@ -2,8 +2,15 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises"
 import path from "node:path"
 import type {
   AssetRecord,
+  GlobalModelDefaults,
+  ModelControlStatus,
+  ModelControlDefaults,
+  ModelDefaultsDocument,
+  ModelRecord,
+  ProviderRegistryRecord,
   ReviewStageId,
   ReviewSummary,
+  ProviderRecord,
   StoryboardScene,
   StoredUser,
   TaskDetail,
@@ -30,6 +37,25 @@ function resolveFiles() {
     tempAssetsFile: path.join(dataDir, "assets.tmp.json"),
     usersFile: path.join(dataDir, "users.json"),
     tempUsersFile: path.join(dataDir, "users.tmp.json"),
+    providersFile: path.join(dataDir, "providers.json"),
+    tempProvidersFile: path.join(dataDir, "providers.tmp.json"),
+    modelsFile: path.join(dataDir, "models.json"),
+    tempModelsFile: path.join(dataDir, "models.tmp.json"),
+    modelDefaultsFile: path.join(dataDir, "model-defaults.json"),
+    tempModelDefaultsFile: path.join(dataDir, "model-defaults.tmp.json"),
+  }
+}
+
+async function commitTempFile(tempPath: string, finalPath: string, content: string) {
+  await writeFile(tempPath, content, "utf8")
+  try {
+    await rename(tempPath, finalPath)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    if (!message.includes("ENOENT")) {
+      throw error
+    }
+    await writeFile(finalPath, content, "utf8")
   }
 }
 
@@ -85,6 +111,132 @@ function normalizeReviewSummaryRecord<T extends Partial<ReviewSummary>>(record: 
     reviewStage: normalizeReviewStage(record.reviewStage),
     pendingReviewCount: normalizeNonNegativeInteger(record.pendingReviewCount),
     reviewUpdatedAt: normalizeNullableString(record.reviewUpdatedAt),
+  }
+}
+
+function normalizeControlStatus(value: unknown): ModelControlStatus {
+  return value === "validating" ||
+    value === "available" ||
+    value === "invalid" ||
+    value === "disabled" ||
+    value === "deprecated"
+    ? value
+    : "draft"
+}
+
+function normalizeCapabilityJson(value: unknown) {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {}
+}
+
+function normalizeProviderRecord(record: ProviderRecord): ProviderRecord {
+  return {
+    ...record,
+    encryptedEndpoint: normalizeNullableString(record.encryptedEndpoint),
+    encryptedSecret: normalizeNullableString(record.encryptedSecret),
+    endpointHint: normalizeNullableString(record.endpointHint),
+    secretHint: normalizeNullableString(record.secretHint),
+    status: normalizeControlStatus(record.status),
+    lastValidatedAt: normalizeNullableString(record.lastValidatedAt),
+    lastValidationError: normalizeNullableString(record.lastValidationError),
+  }
+}
+
+function normalizeModelRecord(record: ModelRecord): ModelRecord {
+  return {
+    ...record,
+    capabilityJson: normalizeCapabilityJson(record.capabilityJson),
+    lifecycleStatus: normalizeControlStatus(record.lifecycleStatus),
+    lastValidatedAt: normalizeNullableString(record.lastValidatedAt),
+    lastValidationError: normalizeNullableString(record.lastValidationError),
+  }
+}
+
+function normalizeGlobalModelDefaults(value: unknown): GlobalModelDefaults {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {}
+  }
+
+  return Object.fromEntries(
+    Object.entries(value).flatMap(([slot, selection]) => {
+      if (typeof selection === "string" && selection.trim()) {
+        return [[
+          slot,
+          {
+            modelId: selection.trim(),
+            providerId: slot === "ttsProvider" ? selection.trim() : undefined,
+          },
+        ]]
+      }
+
+      if (!selection || typeof selection !== "object" || Array.isArray(selection)) {
+        return []
+      }
+
+      const modelId = typeof (selection as { modelId?: unknown }).modelId === "string"
+        ? (selection as { modelId: string }).modelId.trim()
+        : ""
+      if (!modelId) {
+        return []
+      }
+
+      const providerId = typeof (selection as { providerId?: unknown }).providerId === "string"
+        ? (selection as { providerId: string }).providerId.trim()
+        : slot === "ttsProvider"
+          ? modelId
+          : undefined
+      return [[slot, { modelId, providerId }]]
+    }),
+  ) as GlobalModelDefaults
+}
+
+function normalizeModelDefaultsDocument(value: unknown): ModelDefaultsDocument {
+  const record = value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Partial<ModelDefaultsDocument> & {
+        global?: unknown
+        modes?: Record<string, unknown>
+        modeDefaults?: unknown
+      })
+    : {}
+
+  const modeDefaults = Array.isArray(record.modeDefaults)
+    ? record.modeDefaults
+        .filter((entry): entry is NonNullable<ModelDefaultsDocument["modeDefaults"]>[number] =>
+          Boolean(entry) && typeof entry === "object" && typeof entry.modeId === "string",
+        )
+        .map((entry) => ({
+          modeId: entry.modeId,
+          slots: normalizeGlobalModelDefaults(entry.slots),
+        }))
+    : []
+
+  if (!modeDefaults.length && record.modes && typeof record.modes === "object") {
+    for (const modeId of ["mass_production", "high_quality"] as const) {
+      if (modeId in record.modes) {
+        modeDefaults.push({
+          modeId,
+          slots: normalizeGlobalModelDefaults(record.modes[modeId]),
+        })
+      }
+    }
+  } else if (record.modeDefaults && typeof record.modeDefaults === "object") {
+    const modeDefaultsRecord = record.modeDefaults as unknown as Record<string, unknown>
+    for (const modeId of ["mass_production", "high_quality"] as const) {
+      const source = modeDefaultsRecord[modeId]
+      if (source && typeof source === "object" && !Array.isArray(source)) {
+        modeDefaults.push({
+          modeId,
+          slots: normalizeGlobalModelDefaults(source),
+        })
+      }
+    }
+  }
+
+  return {
+    globalDefaults: normalizeGlobalModelDefaults(record.globalDefaults ?? record.global),
+    modeDefaults,
+    updatedAt: normalizeNullableString(record.updatedAt),
   }
 }
 
@@ -194,8 +346,7 @@ export function seedTaskSummaries(): TaskSummary[] {
 export async function writeTaskSummaries(tasks: TaskSummary[]) {
   const { dataDir, tasksFile, tempTasksFile } = resolveFiles()
   await mkdir(dataDir, { recursive: true })
-  await writeFile(tempTasksFile, JSON.stringify(tasks, null, 2), "utf8")
-  await rename(tempTasksFile, tasksFile)
+  await commitTempFile(tempTasksFile, tasksFile, JSON.stringify(tasks, null, 2))
 }
 
 export async function ensureTaskDataFile() {
@@ -260,8 +411,7 @@ export async function updateTaskSummary(
 async function writeTaskDetails(details: Record<string, TaskDetail>) {
   const { dataDir, detailsFile, tempDetailsFile } = resolveFiles()
   await mkdir(dataDir, { recursive: true })
-  await writeFile(tempDetailsFile, JSON.stringify(details, null, 2), "utf8")
-  await rename(tempDetailsFile, detailsFile)
+  await commitTempFile(tempDetailsFile, detailsFile, JSON.stringify(details, null, 2))
 }
 
 export async function readTaskDetails(): Promise<Record<string, TaskDetail>> {
@@ -345,8 +495,7 @@ const defaultRuntimeStatus: RuntimeStatus = {
 async function writeRuntimeStatus(status: RuntimeStatus) {
   const { dataDir, runtimeFile, tempRuntimeFile } = resolveFiles()
   await mkdir(dataDir, { recursive: true })
-  await writeFile(tempRuntimeFile, JSON.stringify(status, null, 2), "utf8")
-  await rename(tempRuntimeFile, runtimeFile)
+  await commitTempFile(tempRuntimeFile, runtimeFile, JSON.stringify(status, null, 2))
 }
 
 export async function readRuntimeStatus(): Promise<RuntimeStatus> {
@@ -378,8 +527,7 @@ export async function updateRuntimeStatus(
 async function writeAssetRecords(records: Record<string, AssetRecord[]>) {
   const { dataDir, assetsFile, tempAssetsFile } = resolveFiles()
   await mkdir(dataDir, { recursive: true })
-  await writeFile(tempAssetsFile, JSON.stringify(records, null, 2), "utf8")
-  await rename(tempAssetsFile, assetsFile)
+  await commitTempFile(tempAssetsFile, assetsFile, JSON.stringify(records, null, 2))
 }
 
 export async function readAssetRecords(): Promise<Record<string, AssetRecord[]>> {
@@ -420,8 +568,7 @@ export async function readTaskAssets(taskId: string) {
 async function writeUserRecords(records: StoredUser[]) {
   const { dataDir, usersFile, tempUsersFile } = resolveFiles()
   await mkdir(dataDir, { recursive: true })
-  await writeFile(tempUsersFile, JSON.stringify(records, null, 2), "utf8")
-  await rename(tempUsersFile, usersFile)
+  await commitTempFile(tempUsersFile, usersFile, JSON.stringify(records, null, 2))
 }
 
 export async function ensureUserDataFile() {
@@ -456,4 +603,209 @@ export async function readUserRecords(): Promise<StoredUser[]> {
 
 export async function replaceUserRecords(records: StoredUser[]) {
   await writeUserRecords(records)
+}
+
+async function writeProviderRecords(records: ProviderRecord[]) {
+  const { dataDir, providersFile, tempProvidersFile } = resolveFiles()
+  await mkdir(dataDir, { recursive: true })
+  await commitTempFile(tempProvidersFile, providersFile, JSON.stringify(records, null, 2))
+}
+
+export async function readProviderRecords(): Promise<ProviderRecord[]> {
+  const { dataDir, providersFile } = resolveFiles()
+  await mkdir(dataDir, { recursive: true })
+  try {
+    const content = await readFile(providersFile, "utf8")
+    if (!content.trim()) {
+      await writeProviderRecords([])
+      return []
+    }
+
+    const parsed = JSON.parse(content) as ProviderRecord[]
+    const normalized = parsed.map((record) => normalizeProviderRecord(record))
+    if (JSON.stringify(parsed) !== JSON.stringify(normalized)) {
+      await writeProviderRecords(normalized)
+    }
+    return normalized
+  } catch {
+    await writeProviderRecords([])
+    return []
+  }
+}
+
+export async function replaceProviderRecords(records: ProviderRecord[]) {
+  await writeProviderRecords(records)
+}
+
+export async function readProviderRegistryRecords(): Promise<ProviderRegistryRecord[]> {
+  const records = await readProviderRecords()
+  return records.map((record) => ({
+    id: record.id,
+    providerKey: record.providerKey,
+    providerType: record.providerType,
+    displayName: record.displayName,
+    endpointUrl: record.endpointHint ?? "",
+    authType: record.authType,
+    authHeaderName: null,
+    encryptedSecret: record.encryptedSecret,
+    status:
+      record.status === "available" ||
+      record.status === "validating" ||
+      record.status === "invalid" ||
+      record.status === "disabled" ||
+      record.status === "deprecated"
+        ? record.status
+        : "draft",
+    lastValidatedAt: record.lastValidatedAt ?? null,
+    lastValidationError: record.lastValidationError ?? null,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
+  }))
+}
+
+async function writeModelRecords(records: ModelRecord[]) {
+  const { dataDir, modelsFile, tempModelsFile } = resolveFiles()
+  await mkdir(dataDir, { recursive: true })
+  await commitTempFile(tempModelsFile, modelsFile, JSON.stringify(records, null, 2))
+}
+
+export async function readModelRecords(): Promise<ModelRecord[]> {
+  const { dataDir, modelsFile } = resolveFiles()
+  await mkdir(dataDir, { recursive: true })
+  try {
+    const content = await readFile(modelsFile, "utf8")
+    if (!content.trim()) {
+      await writeModelRecords([])
+      return []
+    }
+
+    const parsed = JSON.parse(content) as ModelRecord[]
+    const normalized = parsed.map((record) => normalizeModelRecord(record))
+    if (JSON.stringify(parsed) !== JSON.stringify(normalized)) {
+      await writeModelRecords(normalized)
+    }
+    return normalized
+  } catch {
+    await writeModelRecords([])
+    return []
+  }
+}
+
+export async function replaceModelRecords(records: ModelRecord[]) {
+  await writeModelRecords(records)
+}
+
+export async function readModelRegistryRecords() {
+  return readModelRecords()
+}
+
+function createDefaultModelDefaults(): ModelDefaultsDocument {
+  return {
+    globalDefaults: {} satisfies GlobalModelDefaults,
+    modeDefaults: [],
+    updatedAt: null,
+  }
+}
+
+async function writeModelDefaults(document: ModelDefaultsDocument) {
+  const { dataDir, modelDefaultsFile, tempModelDefaultsFile } = resolveFiles()
+  await mkdir(dataDir, { recursive: true })
+  await commitTempFile(tempModelDefaultsFile, modelDefaultsFile, JSON.stringify(document, null, 2))
+}
+
+export async function readModelDefaults(): Promise<ModelDefaultsDocument> {
+  const { dataDir, modelDefaultsFile } = resolveFiles()
+  await mkdir(dataDir, { recursive: true })
+  try {
+    const content = await readFile(modelDefaultsFile, "utf8")
+    if (!content.trim()) {
+      const defaults = createDefaultModelDefaults()
+      await writeModelDefaults(defaults)
+      return defaults
+    }
+
+    const parsed = JSON.parse(content) as ModelDefaultsDocument
+    const normalized = normalizeModelDefaultsDocument(parsed)
+    if (JSON.stringify(parsed) !== JSON.stringify(normalized)) {
+      await writeModelDefaults(normalized)
+    }
+    return normalized
+  } catch {
+    const defaults = createDefaultModelDefaults()
+    await writeModelDefaults(defaults)
+    return defaults
+  }
+}
+
+export async function replaceModelDefaults(document: ModelDefaultsDocument) {
+  await writeModelDefaults(document)
+}
+
+function toLegacyDefaults(document: ModelDefaultsDocument): ModelControlDefaults {
+  const legacy = {
+    global: {} as NonNullable<ModelControlDefaults["global"]>,
+    modes: {
+      mass_production: {},
+      high_quality: {},
+    } as NonNullable<ModelControlDefaults["modes"]>,
+    updatedAt: document.updatedAt ?? null,
+  }
+
+  for (const [slot, selection] of Object.entries(document.globalDefaults)) {
+    if (selection?.modelId) {
+      legacy.global[slot as keyof typeof legacy.global] = {
+        slotType: slot as any,
+        providerId: selection.providerId ?? "",
+        modelId: selection.modelId,
+      }
+    }
+  }
+
+  for (const entry of document.modeDefaults) {
+    for (const [slot, selection] of Object.entries(entry.slots)) {
+      if (selection?.modelId) {
+        legacy.modes[entry.modeId][slot as keyof (typeof legacy.modes)[typeof entry.modeId]] = {
+          slotType: slot as any,
+          providerId: selection.providerId ?? "",
+          modelId: selection.modelId,
+        }
+      }
+    }
+  }
+
+  return legacy as ModelControlDefaults
+}
+
+function fromLegacyDefaults(document: ModelControlDefaults): ModelDefaultsDocument {
+  return {
+    globalDefaults: Object.fromEntries(
+      Object.entries(document.global ?? {}).map(([slot, selection]) => [
+        slot,
+        selection?.modelId
+          ? { modelId: selection.modelId, providerId: selection.providerId ?? undefined, slotType: selection.slotType ?? undefined }
+          : undefined,
+      ]),
+    ) as GlobalModelDefaults,
+    modeDefaults: (["mass_production", "high_quality"] as const).map((modeId) => ({
+      modeId,
+      slots: Object.fromEntries(
+        Object.entries(document.modes?.[modeId] ?? {}).map(([slot, selection]) => [
+          slot,
+          selection?.modelId
+            ? { modelId: selection.modelId, providerId: selection.providerId ?? undefined, slotType: selection.slotType ?? undefined }
+            : undefined,
+        ]),
+      ) as GlobalModelDefaults,
+    })),
+    updatedAt: document.updatedAt ?? null,
+  }
+}
+
+export async function readModelControlDefaults(): Promise<ModelControlDefaults> {
+  const defaults = await readModelDefaults()
+  return toLegacyDefaults(defaults)
+}
+
+export async function replaceModelControlDefaults(document: ModelControlDefaults) {
+  await replaceModelDefaults(fromLegacyDefaults(document))
 }

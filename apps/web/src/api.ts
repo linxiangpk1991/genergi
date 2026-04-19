@@ -1,5 +1,12 @@
 export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? ""
 
+type ApiErrorBody = {
+  message?: string
+  reason?: string
+  detail?: string
+  error?: string
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     credentials: "include",
@@ -11,10 +18,41 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   })
 
   if (!response.ok) {
-    throw new Error(`Request failed: ${response.status}`)
+    let detail = `Request failed: ${response.status}`
+
+    try {
+      const errorBody = (await response.json()) as ApiErrorBody
+      detail =
+        errorBody.reason ??
+        errorBody.message ??
+        errorBody.detail ??
+        errorBody.error ??
+        detail
+    } catch {
+      detail = response.statusText || detail
+    }
+
+    throw new Error(detail)
   }
 
   return (await response.json()) as T
+}
+
+function buildWorkspaceUrl(pathname: string, params: Record<string, string | undefined>) {
+  const searchParams = new URLSearchParams()
+
+  Object.entries(params).forEach(([key, value]) => {
+    if (value) {
+      searchParams.set(key, value)
+    }
+  })
+
+  const search = searchParams.toString()
+  return search ? `${pathname}?${search}` : pathname
+}
+
+function buildApiUrl(pathname: string, params: Record<string, string | undefined>) {
+  return buildWorkspaceUrl(pathname, params)
 }
 
 export type HealthResponse = {
@@ -132,19 +170,6 @@ export type TaskSummary = {
   planning?: TaskPlanningSnapshot
 }
 
-function buildWorkspaceUrl(pathname: string, params: Record<string, string | undefined>) {
-  const searchParams = new URLSearchParams()
-
-  Object.entries(params).forEach(([key, value]) => {
-    if (value) {
-      searchParams.set(key, value)
-    }
-  })
-
-  const search = searchParams.toString()
-  return search ? `${pathname}?${search}` : pathname
-}
-
 export type StoryboardScene = {
   id: string
   index: number
@@ -258,6 +283,137 @@ export function buildTaskReviewUrl(task: Pick<TaskSummary, "id" | "reviewStage">
   return buildAssetCenterUrl(task.id)
 }
 
+export const MODEL_CONTROL_SLOT_ORDER = [
+  "textModel",
+  "imageDraftModel",
+  "imageFinalModel",
+  "videoDraftModel",
+  "videoFinalModel",
+  "ttsProvider",
+] as const
+
+export type ModelControlSlotType = (typeof MODEL_CONTROL_SLOT_ORDER)[number]
+
+export type ModelControlModeId = "mass_production" | "high_quality"
+
+export const MODEL_CONTROL_SLOT_LABELS: Record<ModelControlSlotType, string> = {
+  textModel: "文案规划",
+  imageDraftModel: "草图出图",
+  imageFinalModel: "终稿出图",
+  videoDraftModel: "草稿视频",
+  videoFinalModel: "终稿视频",
+  ttsProvider: "TTS 配音",
+}
+
+export const MODEL_CONTROL_MODE_LABELS: Record<ModelControlModeId, string> = {
+  mass_production: "量产模式",
+  high_quality: "高质量模式",
+}
+
+export type ModelControlLifecycleStatus =
+  | "draft"
+  | "validating"
+  | "available"
+  | "invalid"
+  | "disabled"
+  | "deprecated"
+
+export type ProviderAuthType = "bearer_token" | "api_key_header" | "none" | string
+
+export type ProviderRegistryRecord = {
+  id: string
+  providerKey: string
+  providerType: string
+  displayName: string
+  endpointUrl: string
+  authType: ProviderAuthType
+  status: ModelControlLifecycleStatus
+  hasSecret?: boolean
+  maskedSecret?: string | null
+  lastValidatedAt?: string | null
+  lastValidationError?: string | null
+  createdAt?: string
+  updatedAt?: string
+}
+
+export type ModelRegistryRecord = {
+  id: string
+  modelKey: string
+  providerId: string
+  providerDisplayName?: string | null
+  slotType: ModelControlSlotType
+  providerModelId: string
+  displayName: string
+  lifecycleStatus: ModelControlLifecycleStatus
+  capabilityJson: Record<string, unknown>
+  lastValidatedAt?: string | null
+  lastValidationError?: string | null
+  createdAt?: string
+  updatedAt?: string
+}
+
+export type ModelControlSelection = {
+  recordId: string | null
+  displayName?: string | null
+  providerDisplayName?: string | null
+}
+
+export type ModelControlDefaults = {
+  global: Partial<Record<ModelControlSlotType, ModelControlSelection | null>>
+  modes: Partial<Record<ModelControlModeId, Partial<Record<ModelControlSlotType, ModelControlSelection | null>>>>
+}
+
+export type SelectableModelOption = {
+  recordId: string
+  displayName: string
+  providerDisplayName?: string | null
+  providerId?: string
+  slotType: ModelControlSlotType
+  capabilityJson?: Record<string, unknown>
+  description?: string | null
+}
+
+export type SelectableSlotPool = {
+  slotType: ModelControlSlotType
+  options: SelectableModelOption[]
+  globalDefaultId?: string | null
+  modeDefaultId?: string | null
+  effectiveId?: string | null
+}
+
+export type SelectableModelPoolsResponse = {
+  modeId: ModelControlModeId
+  pools: Record<ModelControlSlotType, SelectableSlotPool>
+}
+
+export type CreateModelProviderPayload = {
+  providerKey: string
+  providerType: string
+  displayName: string
+  endpointUrl: string
+  authType: ProviderAuthType
+  secret?: string
+  status?: ModelControlLifecycleStatus
+}
+
+export type UpdateModelProviderPayload = Partial<CreateModelProviderPayload>
+
+export type CreateModelRegistryEntryPayload = {
+  modelKey: string
+  providerId: string
+  slotType: ModelControlSlotType
+  providerModelId: string
+  displayName: string
+  capabilityJson: Record<string, unknown>
+  lifecycleStatus?: ModelControlLifecycleStatus
+}
+
+export type UpdateModelRegistryEntryPayload = Partial<CreateModelRegistryEntryPayload>
+
+export type UpdateModelDefaultsPayload = {
+  assignments: Partial<Record<ModelControlSlotType, string | null>>
+}
+
 export type CreateTaskPayload = {
   title: string
   script: string
@@ -266,6 +422,7 @@ export type CreateTaskPayload = {
   aspectRatio: string
   targetDurationSec: number
   generationMode?: GenerationPreferenceId
+  modelOverrides?: Partial<Record<ModelControlSlotType, { modelId?: string; providerId?: string }>>
 }
 
 export const api = {
@@ -316,4 +473,47 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  listModelProviders: () => request<{ providers: ProviderRegistryRecord[] }>("/api/model-control/providers"),
+  createModelProvider: (payload: CreateModelProviderPayload) =>
+    request<{ provider: ProviderRegistryRecord }>("/api/model-control/providers", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  updateModelProvider: (providerId: string, payload: UpdateModelProviderPayload) =>
+    request<{ provider: ProviderRegistryRecord }>(`/api/model-control/providers/${providerId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+  validateModelProvider: (providerId: string) =>
+    request<{ provider: ProviderRegistryRecord }>(`/api/model-control/validation/providers/${providerId}`, {
+      method: "POST",
+    }),
+  listModelRegistry: () => request<{ models: ModelRegistryRecord[] }>("/api/model-control/models"),
+  createModelRegistryEntry: (payload: CreateModelRegistryEntryPayload) =>
+    request<{ model: ModelRegistryRecord }>("/api/model-control/models", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  updateModelRegistryEntry: (modelId: string, payload: UpdateModelRegistryEntryPayload) =>
+    request<{ model: ModelRegistryRecord }>(`/api/model-control/models/${modelId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+  validateModelRegistryEntry: (modelId: string) =>
+    request<{ model: ModelRegistryRecord }>(`/api/model-control/validation/models/${modelId}`, {
+      method: "POST",
+    }),
+  getModelDefaults: () => request<ModelControlDefaults>("/api/model-control/defaults"),
+  updateGlobalModelDefaults: (payload: UpdateModelDefaultsPayload) =>
+    request<ModelControlDefaults>("/api/model-control/defaults/global", {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  updateModeModelDefaults: (modeId: ModelControlModeId, payload: UpdateModelDefaultsPayload) =>
+    request<ModelControlDefaults>(`/api/model-control/defaults/modes/${modeId}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  getSelectableModelPools: (modeId: ModelControlModeId) =>
+    request<SelectableModelPoolsResponse>(buildApiUrl("/api/model-control/selectable", { modeId })),
 }

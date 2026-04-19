@@ -25,6 +25,7 @@ import type {
   TaskSummary,
   TaskStatus,
 } from "@genergi/shared"
+import { resolveEffectiveSlots } from "./model-control/resolver.js"
 
 function now() {
   return new Date().toISOString()
@@ -381,6 +382,41 @@ function buildSceneReviewRequirements(taskRunConfig: TaskRunConfig) {
   }
 }
 
+function mapResolvedSlotsToTaskConfig(
+  taskRunConfig: TaskRunConfig,
+  slotSnapshots: TaskRunConfig["slotSnapshots"],
+): TaskRunConfig {
+  const bySlot = new Map(slotSnapshots.map((slot) => [slot.slotType, slot]))
+
+  const textModel = bySlot.get("textModel")
+  const imageDraftModel = bySlot.get("imageDraftModel")
+  const imageFinalModel = bySlot.get("imageFinalModel")
+  const videoDraftModel = bySlot.get("videoDraftModel")
+  const videoFinalModel = bySlot.get("videoFinalModel")
+  const ttsProvider = bySlot.get("ttsProvider")
+
+  return {
+    ...taskRunConfig,
+    textModel: textModel
+      ? { id: textModel.modelKey, label: textModel.displayName, provider: textModel.providerType }
+      : taskRunConfig.textModel,
+    imageDraftModel: imageDraftModel
+      ? { id: imageDraftModel.modelKey, label: imageDraftModel.displayName, provider: imageDraftModel.providerType }
+      : taskRunConfig.imageDraftModel,
+    imageFinalModel: imageFinalModel
+      ? { id: imageFinalModel.modelKey, label: imageFinalModel.displayName, provider: imageFinalModel.providerType }
+      : taskRunConfig.imageFinalModel,
+    videoDraftModel: videoDraftModel
+      ? { id: videoDraftModel.modelKey, label: videoDraftModel.displayName, provider: videoDraftModel.providerType }
+      : taskRunConfig.videoDraftModel,
+    videoFinalModel: videoFinalModel
+      ? { id: videoFinalModel.modelKey, label: videoFinalModel.displayName, provider: videoFinalModel.providerType }
+      : taskRunConfig.videoFinalModel,
+    ttsProvider: ttsProvider?.providerModelId ?? taskRunConfig.ttsProvider,
+    slotSnapshots,
+  }
+}
+
 async function syncTaskSummaryFromDetail(
   task: TaskSummary,
   detail: TaskDetail,
@@ -529,11 +565,22 @@ export async function createTask(input: CreateTaskInput): Promise<{ task: TaskSu
   const tasks = await listTasks()
   const estimate = estimateCost(input.modeId)
   const timestamp = now()
-  const taskRunConfig = buildDefaultTaskRunConfig(
+  let taskRunConfig = buildDefaultTaskRunConfig(
     input.modeId,
     input.channelId,
     input.targetDurationSec,
     input.generationMode,
+  )
+  const resolvedSlots = await resolveEffectiveSlots({
+    modeId: input.modeId,
+    taskOverrides: input.modelOverrides,
+  })
+  taskRunConfig = mapResolvedSlotsToTaskConfig(
+    {
+      ...taskRunConfig,
+      modelOverrides: input.modelOverrides,
+    },
+    resolvedSlots,
   )
   const taskId = `task_${Date.now()}`
   const detail = applyDerivedReviewState(

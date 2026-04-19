@@ -9,6 +9,10 @@ import { LoginPage } from "./pages/LoginPage"
 import { AssetsPage } from "./pages/AssetsPage"
 import { UserCenterPage } from "./pages/UserCenterPage"
 import { StoryboardReviewPage } from "./pages/StoryboardReviewPage"
+import { ModelControlCenterPage } from "./pages/ModelControlCenterPage"
+import { ModelProvidersPage } from "./pages/ModelProvidersPage"
+import { ModelRegistryPage } from "./pages/ModelRegistryPage"
+import { ModelDefaultsPage } from "./pages/ModelDefaultsPage"
 
 export function App() {
   const [authLoading, setAuthLoading] = useState(true)
@@ -46,6 +50,10 @@ export function App() {
         <Route path="/batch-dashboard" element={<BatchDashboardPage />} />
         <Route path="/asset-center" element={<AssetsPage />} />
         <Route path="/user-center" element={<UserCenterPage />} />
+        <Route path="/model-control-center" element={<ModelControlCenterPage />} />
+        <Route path="/model-control-center/providers" element={<ModelProvidersPage />} />
+        <Route path="/model-control-center/registry" element={<ModelRegistryPage />} />
+        <Route path="/model-control-center/defaults" element={<ModelDefaultsPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </AppLayout>

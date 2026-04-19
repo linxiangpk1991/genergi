@@ -8,6 +8,7 @@ const navItems = [
   { to: "/keyframe-review", label: "关键帧审阅" },
   { to: "/batch-dashboard", label: "生产看板" },
   { to: "/asset-center", label: "交付资产" },
+  { to: "/model-control-center", label: "模型控制中心" },
   { to: "/user-center", label: "用户中心" },
 ]
 
@@ -41,6 +42,13 @@ function getWorkspaceMeta(pathname: string) {
     return {
       title: "交付资产",
       description: "优先检查最终交付物，再回溯脚本、字幕和中间产物。",
+    }
+  }
+
+  if (pathname.startsWith("/model-control-center")) {
+    return {
+      title: "模型控制中心",
+      description: "管理 Provider、模型注册表、默认值优先级和任务发起页可选覆盖池。",
     }
   }
 

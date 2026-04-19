@@ -73,6 +73,187 @@ describe("API task store", () => {
     expect(detail?.scenes[1]?.reviewedAt).toBeNull()
     expect(detail?.scenes[1]?.keyframeReviewNote).toBeNull()
     expect(detail?.scenes[1]?.keyframeReviewedAt).toBeNull()
+    expect(created.taskRunConfig.slotSnapshots.length).toBe(6)
+    expect(created.taskRunConfig.slotSnapshots.find((item) => item.slotType === "textModel")?.providerId).toEqual(expect.any(String))
+    expect(created.taskRunConfig.slotSnapshots.find((item) => item.slotType === "videoDraftModel")?.capabilityJson.maxSingleShotSec).toBeGreaterThan(0)
+    expect(created.taskRunConfig.slotSnapshots.find((item) => item.slotType === "ttsProvider")?.providerType).toBe("edge-tts")
+  })
+
+  it("freezes the resolved model snapshot at task creation even after defaults change later", async () => {
+    dataDir = await mkdtemp(path.join(os.tmpdir(), "genergi-task-store-"))
+    process.env.GENERGI_DATA_DIR = dataDir
+
+    const taskStore = await import("../../../apps/api/src/lib/task-store")
+    const registryStore = await import("../../../apps/api/src/lib/model-control/registry-store")
+
+    const textProvider = await registryStore.createProviderRecord({
+      providerKey: "text-prod",
+      providerType: "openai-compatible",
+      displayName: "Text Prod",
+      endpointUrl: "https://api.openai.example/v1",
+      authType: "none",
+    })
+    const imageProvider = await registryStore.createProviderRecord({
+      providerKey: "image-prod",
+      providerType: "openai-compatible",
+      displayName: "Image Prod",
+      endpointUrl: "https://api.openai.example/v1",
+      authType: "none",
+    })
+    const videoProvider = await registryStore.createProviderRecord({
+      providerKey: "video-prod",
+      providerType: "openai-compatible",
+      displayName: "Video Prod",
+      endpointUrl: "https://api.openai.example/v1",
+      authType: "none",
+    })
+    const ttsProvider = await registryStore.createProviderRecord({
+      providerKey: "edge-tts",
+      providerType: "edge-tts",
+      displayName: "Edge TTS",
+      endpointUrl: "https://edge-tts.local",
+      authType: "none",
+    })
+    for (const provider of [textProvider, imageProvider, videoProvider, ttsProvider]) {
+      await registryStore.updateProviderRecord(provider.id, { status: "available" })
+    }
+
+    const textMode = await registryStore.createModelRecord({
+      modelKey: "text.default",
+      providerId: textProvider.id,
+      slotType: "textModel",
+      providerModelId: "gpt-mode",
+      displayName: "Mode Text",
+      capabilityJson: {},
+    })
+    const textOverride = await registryStore.createModelRecord({
+      modelKey: "text.default",
+      providerId: textProvider.id,
+      slotType: "textModel",
+      providerModelId: "gpt-override",
+      displayName: "Override Text",
+      capabilityJson: {},
+    })
+    const textLater = await registryStore.createModelRecord({
+      modelKey: "text.default",
+      providerId: textProvider.id,
+      slotType: "textModel",
+      providerModelId: "gpt-later",
+      displayName: "Later Text",
+      capabilityJson: {},
+    })
+    const imageDraft = await registryStore.createModelRecord({
+      modelKey: "image.draft",
+      providerId: imageProvider.id,
+      slotType: "imageDraftModel",
+      providerModelId: "image-draft",
+      displayName: "Image Draft",
+      capabilityJson: {},
+    })
+    const imageFinal = await registryStore.createModelRecord({
+      modelKey: "image.final",
+      providerId: imageProvider.id,
+      slotType: "imageFinalModel",
+      providerModelId: "image-final",
+      displayName: "Image Final",
+      capabilityJson: {},
+    })
+    const videoDraft = await registryStore.createModelRecord({
+      modelKey: "video.draft",
+      providerId: videoProvider.id,
+      slotType: "videoDraftModel",
+      providerModelId: "video-draft",
+      displayName: "Video Draft",
+      capabilityJson: {
+        maxSingleShotSec: 8,
+      },
+    })
+    const videoFinal = await registryStore.createModelRecord({
+      modelKey: "video.final",
+      providerId: videoProvider.id,
+      slotType: "videoFinalModel",
+      providerModelId: "video-final",
+      displayName: "Video Final",
+      capabilityJson: {
+        maxSingleShotSec: 8,
+      },
+    })
+    const ttsModel = await registryStore.createModelRecord({
+      modelKey: "edge-tts",
+      providerId: ttsProvider.id,
+      slotType: "ttsProvider",
+      providerModelId: "edge-tts",
+      displayName: "Edge TTS",
+      capabilityJson: {},
+    })
+    for (const model of [textMode, textOverride, textLater, imageDraft, imageFinal, videoDraft, videoFinal, ttsModel]) {
+      await registryStore.updateModelRecord(model.id, { lifecycleStatus: "available" })
+    }
+
+    await registryStore.updateModelDefaultsDocument({
+      globalDefaults: {
+        textModel: { modelId: textMode.id },
+        imageDraftModel: { modelId: imageDraft.id },
+        imageFinalModel: { modelId: imageFinal.id },
+        videoDraftModel: { modelId: videoDraft.id },
+        videoFinalModel: { modelId: videoFinal.id },
+        ttsProvider: { modelId: ttsModel.id },
+      },
+      modeDefaults: [
+        {
+          modeId: "high_quality",
+          slots: {
+            textModel: { modelId: textMode.id },
+          },
+        },
+      ],
+      updatedAt: null,
+    })
+
+    const created = await taskStore.createTask({
+      title: "Snapshot freeze task",
+      script: "Show the benefit. Explain the upgrade. Close with a CTA.",
+      modeId: "high_quality",
+      channelId: "reels",
+      aspectRatio: "9:16",
+      targetDurationSec: 30,
+      generationMode: "system_enhanced",
+      modelOverrides: {
+        textModel: {
+          modelId: textOverride.id,
+        },
+      },
+    })
+
+    expect(created.taskRunConfig.slotSnapshots.find((item) => item.slotType === "textModel")?.displayName).toBe("Override Text")
+
+    await registryStore.updateModelDefaultsDocument({
+      globalDefaults: {
+        textModel: { modelId: textLater.id },
+        imageDraftModel: { modelId: imageDraft.id },
+        imageFinalModel: { modelId: imageFinal.id },
+        videoDraftModel: { modelId: videoDraft.id },
+        videoFinalModel: { modelId: videoFinal.id },
+        ttsProvider: { modelId: ttsModel.id },
+      },
+      modeDefaults: [
+        {
+          modeId: "high_quality",
+          slots: {
+            textModel: { modelId: textLater.id },
+          },
+        },
+      ],
+      updatedAt: null,
+    })
+
+    const detail = await taskStore.getTaskDetail(created.task.id)
+    const textSnapshot = detail?.taskRunConfig.slotSnapshots.find((item) => item.slotType === "textModel")
+    const ttsSnapshot = detail?.taskRunConfig.slotSnapshots.find((item) => item.slotType === "ttsProvider")
+
+    expect(textSnapshot?.displayName).toBe("Override Text")
+    expect(textSnapshot?.providerModelId).toBe("gpt-override")
+    expect(ttsSnapshot?.providerId).toBe(ttsProvider.id)
   })
 
   it("persists storyboard and keyframe review decisions with truthful task review summaries", async () => {

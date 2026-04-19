@@ -11,10 +11,12 @@ import {
 } from "@genergi/shared"
 import type { AssetRecord, TaskSummary } from "@genergi/shared"
 import {
+  buildWorkerRuntimeLabels,
   buildFinalVideoWithNarration,
   createFallbackKeyframeBundleFromVideos,
   createKeyframeBundle,
   createSceneVideoBundle,
+  describeRuntimeGenerationConfig,
   resolveRuntimeGenerationConfig,
   rewriteTaskWithTextProvider,
   synthesizeNarration,
@@ -71,13 +73,21 @@ async function writeTaskArtifacts(taskId: string) {
 
   const preparedDetail = await mergeLatestReviewMetadata(await rewriteTaskWithTextProvider(detail))
   const runtime = resolveRuntimeGenerationConfig(preparedDetail)
+  const runtimeSummary = describeRuntimeGenerationConfig(runtime)
+  const runtimeLabels = buildWorkerRuntimeLabels(runtime, {
+    sceneCount: preparedDetail.scenes.length,
+    targetDurationSec: preparedDetail.taskRunConfig.targetDurationSec,
+    keyframeCount: preparedDetail.scenes.length,
+  })
+
+  console.log(`[worker] ${taskId} runtime snapshot => ${runtimeSummary}`)
   await upsertTaskDetail(preparedDetail)
   await writeWorkerHeartbeat(`Preparing source files for ${taskId}`)
   const taskDir = await writeTaskSourceFiles(preparedDetail)
-  await writeWorkerHeartbeat(`Synthesizing narration for ${taskId}`)
+  await writeWorkerHeartbeat(`Synthesizing narration for ${taskId} with ${runtime.ttsLabel}`)
   const narration = await synthesizeNarration(preparedDetail)
   const firstScene = preparedDetail.scenes[0]
-  await writeWorkerHeartbeat(`Creating scene videos for ${taskId}`)
+  await writeWorkerHeartbeat(`Creating scene videos for ${taskId} with ${runtime.videoModelLabel}`)
   const sceneVideos = await createSceneVideoBundle({
     taskId,
     detail: preparedDetail,
@@ -88,7 +98,7 @@ async function writeTaskArtifacts(taskId: string) {
   })
   let keyframes
   try {
-    await writeWorkerHeartbeat(`Generating keyframes for ${taskId}`)
+    await writeWorkerHeartbeat(`Generating keyframes for ${taskId} with ${runtime.imageModelLabel}`)
     keyframes = await Promise.race([
       createKeyframeBundle({
         taskId,
@@ -158,7 +168,7 @@ async function writeTaskArtifacts(taskId: string) {
       id: `${taskId}_audio`,
       taskId,
       assetType: "audio",
-      label: `${runtime.ttsLabel} (${runtime.ttsProvider})`,
+      label: runtimeLabels.audio,
       status: "ready",
       path: narration.audioPath,
       createdAt: now,
@@ -167,7 +177,11 @@ async function writeTaskArtifacts(taskId: string) {
       id: `${taskId}_keyframes`,
       taskId,
       assetType: "keyframe_bundle",
-      label: `关键帧包 (${keyframes.frameCount} 张)`,
+      label: buildWorkerRuntimeLabels(runtime, {
+        sceneCount: sceneVideos.length,
+        targetDurationSec: preparedDetail.taskRunConfig.targetDurationSec,
+        keyframeCount: keyframes.frameCount,
+      }).keyframes,
       status: "ready",
       path: keyframes.manifestPath,
       createdAt: now,
@@ -176,7 +190,11 @@ async function writeTaskArtifacts(taskId: string) {
       id: `${taskId}_video`,
       taskId,
       assetType: "video_bundle",
-      label: `真实视频输出 (${sceneVideos.length} scenes / ${preparedDetail.taskRunConfig.targetDurationSec}s)`,
+      label: buildWorkerRuntimeLabels(runtime, {
+        sceneCount: sceneVideos.length,
+        targetDurationSec: preparedDetail.taskRunConfig.targetDurationSec,
+        keyframeCount: keyframes.frameCount,
+      }).video,
       status: "ready",
       path: finalVideo.outputPath,
       createdAt: now,

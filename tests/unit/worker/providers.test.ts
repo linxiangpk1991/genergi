@@ -314,9 +314,57 @@ Here's the thing. In Chinese destiny analysis, there's a pattern called "late bl
 
     const runtime = providers.resolveRuntimeGenerationConfig(createTaskDetail())
 
+    expect(runtime.textModelId).toBe("text.default")
+    expect(runtime.textProvider).toBe("anthropic-compatible")
     expect(runtime.imageModelId).toBe("image.premium")
     expect(runtime.videoModelId).toBe("video.hd")
     expect(runtime.ttsProvider).toBe("edge-tts")
+  })
+
+  it("formats a frozen runtime summary from task snapshot labels instead of static defaults", async () => {
+    const providers = await import("../../../apps/worker/src/lib/providers")
+
+    const runtime = providers.resolveRuntimeGenerationConfig(
+      createTaskDetail({
+        taskRunConfig: {
+          ...createTaskDetail().taskRunConfig,
+          textModel: { id: "text.alt", label: "Claude Sonnet Runtime", provider: "anthropic-compatible" },
+          imageFinalModel: { id: "image.alt", label: "Gemini Runtime Image", provider: "openai-compatible" },
+          videoFinalModel: { id: "video.alt", label: "Veo Runtime Video", provider: "openai-compatible" },
+          ttsProvider: "edge-tts",
+        },
+      }),
+    )
+
+    expect(providers.describeRuntimeGenerationConfig(runtime)).toContain("Claude Sonnet Runtime")
+    expect(providers.describeRuntimeGenerationConfig(runtime)).toContain("Gemini Runtime Image")
+    expect(providers.describeRuntimeGenerationConfig(runtime)).toContain("Veo Runtime Video")
+    expect(providers.describeRuntimeGenerationConfig(runtime)).toContain("edge-tts")
+  })
+
+  it("builds worker asset labels from the frozen runtime snapshot", async () => {
+    const providers = await import("../../../apps/worker/src/lib/providers")
+
+    const runtime = providers.resolveRuntimeGenerationConfig(
+      createTaskDetail({
+        taskRunConfig: {
+          ...createTaskDetail().taskRunConfig,
+          imageFinalModel: { id: "image.alt", label: "Gemini Runtime Image", provider: "openai-compatible" },
+          videoFinalModel: { id: "video.alt", label: "Veo Runtime Video", provider: "openai-compatible" },
+        },
+      }),
+    )
+
+    const labels = providers.buildWorkerRuntimeLabels(runtime, {
+      sceneCount: 2,
+      targetDurationSec: 15,
+      keyframeCount: 2,
+    })
+
+    expect(labels.audio).toContain("Edge TTS")
+    expect(labels.keyframes).toContain("Gemini Runtime Image")
+    expect(labels.video).toContain("Veo Runtime Video")
+    expect(labels.video).toContain("15s")
   })
 
   it("rejects unsupported tts providers instead of silently falling back to edge tts", async () => {

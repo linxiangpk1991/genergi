@@ -5,6 +5,10 @@ import {
   generationRouteSchema,
   planningVersionSchema,
 } from "./generation-route.js"
+import {
+  resolvedSlotSnapshotSchema,
+  taskModelOverrideSchema,
+} from "./model-control.js"
 
 export type AppId = "web" | "api" | "worker"
 
@@ -94,6 +98,8 @@ export const taskRunConfigSchema = z.object({
   requireKeyframeReview: z.boolean(),
   budgetLimitCny: z.number().nonnegative(),
   aspectRatio: z.string(),
+  slotSnapshots: z.array(resolvedSlotSnapshotSchema).default([]),
+  modelOverrides: taskModelOverrideSchema.optional(),
 })
 export type TaskRunConfig = z.infer<typeof taskRunConfigSchema>
 
@@ -177,6 +183,7 @@ export const createTaskInputSchema = z.object({
   aspectRatio: z.string().default("9:16"),
   targetDurationSec: videoDurationSecSchema.default(30),
   generationMode: generationModeSchema.default("user_locked"),
+  modelOverrides: taskModelOverrideSchema.optional(),
 })
 export type CreateTaskInput = z.infer<typeof createTaskInputSchema>
 
@@ -244,3 +251,4 @@ export * from "./task-persistence.js"
 export * from "./storyboard-planner.js"
 export * from "./generation-route.js"
 export * from "./planning-contract.js"
+export * from "./model-control.js"
