@@ -170,16 +170,16 @@ export function resolveRuntimeGenerationConfig(detail: Pick<TaskDetail, "taskRun
     textProviderLabel: getProviderLabel(detail.taskRunConfig.textModel.provider),
     textModelId: detail.taskRunConfig.textModel.id,
     textModelLabel: detail.taskRunConfig.textModel.label,
-    imageProvider: detail.taskRunConfig.imageFinalModel.provider,
-    imageProviderLabel: getProviderLabel(detail.taskRunConfig.imageFinalModel.provider),
+    imageProvider: detail.taskRunConfig.imageModel.provider,
+    imageProviderLabel: getProviderLabel(detail.taskRunConfig.imageModel.provider),
     ttsProvider,
     ttsLabel: "Edge TTS",
-    imageModelLabel: detail.taskRunConfig.imageFinalModel.label,
-    imageModelId: detail.taskRunConfig.imageFinalModel.id,
-    videoProvider: detail.taskRunConfig.videoFinalModel.provider,
-    videoProviderLabel: getProviderLabel(detail.taskRunConfig.videoFinalModel.provider),
-    videoModelLabel: detail.taskRunConfig.videoFinalModel.label,
-    videoModelId: detail.taskRunConfig.videoFinalModel.id,
+    imageModelLabel: detail.taskRunConfig.imageModel.label,
+    imageModelId: detail.taskRunConfig.imageModel.id,
+    videoProvider: detail.taskRunConfig.videoModel.provider,
+    videoProviderLabel: getProviderLabel(detail.taskRunConfig.videoModel.provider),
+    videoModelLabel: detail.taskRunConfig.videoModel.label,
+    videoModelId: detail.taskRunConfig.videoModel.id,
   } satisfies RuntimeGenerationConfig
 }
 
@@ -474,8 +474,8 @@ type GatewayImageRuntime = {
 export async function resolveImageGenerationRuntime(detail: TaskDetail, model: string): Promise<GeminiNativeImageRuntime | GatewayImageRuntime> {
   const slotSnapshots = detail.taskRunConfig.slotSnapshots ?? []
   const imageSnapshot =
-    slotSnapshots.find((slot) => slot.slotType === "imageFinalModel" && (slot.modelKey === model || slot.modelId === model || slot.providerModelId === model)) ??
-    slotSnapshots.find((slot) => slot.slotType === "imageFinalModel")
+    slotSnapshots.find((slot) => slot.slotType === "imageModel" && (slot.modelKey === model || slot.modelId === model || slot.providerModelId === model)) ??
+    slotSnapshots.find((slot) => slot.slotType === "imageModel")
 
   const transport = `${imageSnapshot?.capabilityJson?.imageTransport ?? ""}`.trim().toLowerCase()
   if (imageSnapshot && transport === "gemini-generate-content") {
@@ -938,7 +938,7 @@ function alignDetailScenes(detail: TaskDetail, script: string): TaskDetail {
     scenes: buildStoryboardScenes({
       script,
       targetDurationSec: detail.taskRunConfig.targetDurationSec ?? 30,
-      maxSceneDurationSec: resolveVideoModelCapability(detail.taskRunConfig.videoDraftModel.id).maxSingleShotSec,
+      maxSceneDurationSec: resolveVideoModelCapability(detail.taskRunConfig.videoModel.id).maxSingleShotSec,
       aspectRatio: detail.taskRunConfig.aspectRatio,
       existingScenes: detail.scenes,
       reviewRequirements: {
@@ -958,7 +958,7 @@ function buildPlanningFallback(detail: TaskDetail): TextPlanningOutput {
   const scenes = buildStoryboardScenes({
     script: finalVoiceoverScript,
     targetDurationSec: detail.taskRunConfig.targetDurationSec ?? 30,
-    maxSceneDurationSec: resolveVideoModelCapability(detail.taskRunConfig.videoDraftModel.id).maxSingleShotSec,
+    maxSceneDurationSec: resolveVideoModelCapability(detail.taskRunConfig.videoModel.id).maxSingleShotSec,
     aspectRatio: detail.taskRunConfig.aspectRatio,
     reviewRequirements: {
       requireStoryboardReview: detail.taskRunConfig.requireStoryboardReview,
@@ -996,7 +996,7 @@ async function requestStructuredPlanning(detail: TaskDetail): Promise<TextPlanni
   }
 
   const preference = GENERATION_PREFERENCES.find((item) => item.id === detail.taskRunConfig.generationMode)
-  const capability = resolveVideoModelCapability(detail.taskRunConfig.videoDraftModel.id)
+  const capability = resolveVideoModelCapability(detail.taskRunConfig.videoModel.id)
   const maxSceneCount =
     detail.taskRunConfig.generationRoute === "single_shot"
       ? 1

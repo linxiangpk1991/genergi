@@ -200,7 +200,7 @@ export type TaskDetail = {
     generationRoute: GenerationRouteId
     routeReason: string
     planningVersion: string
-    imageFinalModel: {
+    imageModel: {
       label: string
     }
   }
@@ -285,10 +285,8 @@ export function buildTaskReviewUrl(task: Pick<TaskSummary, "id" | "reviewStage">
 
 export const MODEL_CONTROL_SLOT_ORDER = [
   "textModel",
-  "imageDraftModel",
-  "imageFinalModel",
-  "videoDraftModel",
-  "videoFinalModel",
+  "imageModel",
+  "videoModel",
   "ttsProvider",
 ] as const
 
@@ -298,10 +296,8 @@ export type ModelControlModeId = "mass_production" | "high_quality"
 
 export const MODEL_CONTROL_SLOT_LABELS: Record<ModelControlSlotType, string> = {
   textModel: "文案规划",
-  imageDraftModel: "草图出图",
-  imageFinalModel: "终稿出图",
-  videoDraftModel: "草稿视频",
-  videoFinalModel: "终稿视频",
+  imageModel: "图片模型",
+  videoModel: "视频模型",
   ttsProvider: "TTS 配音",
 }
 

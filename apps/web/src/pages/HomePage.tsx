@@ -551,7 +551,7 @@ export function HomePage() {
             </div>
             <div className="planning-note-card">
               <strong>只有在你明确知道要替换哪一段时再覆盖</strong>
-              <span>例如只想切换文案模型或视频终稿模型，就只改对应槽位，其他保持默认。</span>
+              <span>例如只想切换文案模型或视频模型，就只改对应槽位，其他保持默认。</span>
             </div>
             <div className="planning-note-card">
               <strong>高级覆盖不等于永久改默认</strong>

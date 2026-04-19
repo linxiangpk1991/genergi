@@ -159,10 +159,8 @@ function enrichDetail(detail: NonNullable<Awaited<ReturnType<typeof getTaskDetai
 
 const modelControlSlotSchema = z.enum([
   "textModel",
-  "imageDraftModel",
-  "imageFinalModel",
-  "videoDraftModel",
-  "videoFinalModel",
+  "imageModel",
+  "videoModel",
   "ttsProvider",
 ])
 type ModelControlSlot = z.infer<typeof modelControlSlotSchema>
@@ -234,10 +232,8 @@ type ModelControlDefaultsDocument = {
 
 const slotAssignmentsSchema = z.object({
   textModel: z.string().trim().min(1).nullable().optional(),
-  imageDraftModel: z.string().trim().min(1).nullable().optional(),
-  imageFinalModel: z.string().trim().min(1).nullable().optional(),
-  videoDraftModel: z.string().trim().min(1).nullable().optional(),
-  videoFinalModel: z.string().trim().min(1).nullable().optional(),
+  imageModel: z.string().trim().min(1).nullable().optional(),
+  videoModel: z.string().trim().min(1).nullable().optional(),
   ttsProvider: z.string().trim().min(1).nullable().optional(),
 })
 
@@ -296,10 +292,8 @@ const TTS_PROVIDER_TYPES = new Set(["edge-tts", "azure-tts"])
 function createEmptySlotAssignments(): Record<ModelControlSlot, string | null> {
   return {
     textModel: null,
-    imageDraftModel: null,
-    imageFinalModel: null,
-    videoDraftModel: null,
-    videoFinalModel: null,
+    imageModel: null,
+    videoModel: null,
     ttsProvider: null,
   }
 }
@@ -562,10 +556,8 @@ function buildModelControlSeedState(): {
   for (const modeId of MODEL_CONTROL_MODES) {
     const mode = MODE_MODELS[modeId]
     defaults[modeId].textModel = registerSeedModel("textModel", mode.textModel)
-    defaults[modeId].imageDraftModel = registerSeedModel("imageDraftModel", mode.imageDraftModel)
-    defaults[modeId].imageFinalModel = registerSeedModel("imageFinalModel", mode.imageFinalModel)
-    defaults[modeId].videoDraftModel = registerSeedModel("videoDraftModel", mode.videoDraftModel)
-    defaults[modeId].videoFinalModel = registerSeedModel("videoFinalModel", mode.videoFinalModel)
+    defaults[modeId].imageModel = registerSeedModel("imageModel", mode.imageModel)
+    defaults[modeId].videoModel = registerSeedModel("videoModel", mode.videoModel)
     defaults[modeId].ttsProvider = ensureProvider(mode.ttsProvider).id
   }
 
@@ -1073,7 +1065,7 @@ app.get("/api/bootstrap", (c) => {
           ? "侧重效率、批量生产与成本控制"
           : "侧重品牌表现、审阅质量与最终画面效果",
       budgetLimitCny: mode.budgetLimitCny,
-      maxSingleShotSec: resolveVideoModelCapability(mode.videoDraftModel.id).maxSingleShotSec,
+      maxSingleShotSec: resolveVideoModelCapability(mode.videoModel.id).maxSingleShotSec,
     })),
   })
 })

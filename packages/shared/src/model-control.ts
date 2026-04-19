@@ -30,10 +30,8 @@ export type ModelControlStatus = z.infer<typeof modelControlStatusSchema>
 
 export const modelSlotTypeSchema = z.enum([
   "textModel",
-  "imageDraftModel",
-  "imageFinalModel",
-  "videoDraftModel",
-  "videoFinalModel",
+  "imageModel",
+  "videoModel",
   "ttsProvider",
 ])
 export type ModelSlotType = z.infer<typeof modelSlotTypeSchema>
@@ -107,10 +105,8 @@ export type SlotSelection = z.infer<typeof slotSelectionSchema>
 
 export const globalModelDefaultsSchema = z.object({
   textModel: slotSelectionSchema.optional(),
-  imageDraftModel: slotSelectionSchema.optional(),
-  imageFinalModel: slotSelectionSchema.optional(),
-  videoDraftModel: slotSelectionSchema.optional(),
-  videoFinalModel: slotSelectionSchema.optional(),
+  imageModel: slotSelectionSchema.optional(),
+  videoModel: slotSelectionSchema.optional(),
   ttsProvider: slotSelectionSchema.optional(),
 })
 export type GlobalModelDefaults = z.infer<typeof globalModelDefaultsSchema>
@@ -134,27 +130,21 @@ export type ModelDefaultsDocument = z.infer<typeof modelDefaultsDocumentSchema>
 export const modelControlDefaultsSchema = z.object({
   global: z.object({
     textModel: slotSelectionSchema.nullable().optional(),
-    imageDraftModel: slotSelectionSchema.nullable().optional(),
-    imageFinalModel: slotSelectionSchema.nullable().optional(),
-    videoDraftModel: slotSelectionSchema.nullable().optional(),
-    videoFinalModel: slotSelectionSchema.nullable().optional(),
+    imageModel: slotSelectionSchema.nullable().optional(),
+    videoModel: slotSelectionSchema.nullable().optional(),
     ttsProvider: slotSelectionSchema.nullable().optional(),
   }),
   modes: z.object({
     mass_production: z.object({
       textModel: slotSelectionSchema.nullable().optional(),
-      imageDraftModel: slotSelectionSchema.nullable().optional(),
-      imageFinalModel: slotSelectionSchema.nullable().optional(),
-      videoDraftModel: slotSelectionSchema.nullable().optional(),
-      videoFinalModel: slotSelectionSchema.nullable().optional(),
+      imageModel: slotSelectionSchema.nullable().optional(),
+      videoModel: slotSelectionSchema.nullable().optional(),
       ttsProvider: slotSelectionSchema.nullable().optional(),
     }).default({}),
     high_quality: z.object({
       textModel: slotSelectionSchema.nullable().optional(),
-      imageDraftModel: slotSelectionSchema.nullable().optional(),
-      imageFinalModel: slotSelectionSchema.nullable().optional(),
-      videoDraftModel: slotSelectionSchema.nullable().optional(),
-      videoFinalModel: slotSelectionSchema.nullable().optional(),
+      imageModel: slotSelectionSchema.nullable().optional(),
+      videoModel: slotSelectionSchema.nullable().optional(),
       ttsProvider: slotSelectionSchema.nullable().optional(),
     }).default({}),
   }),

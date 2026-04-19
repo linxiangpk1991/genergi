@@ -60,14 +60,10 @@ function getSlotValueForMode(mode: (typeof MODE_MODELS)[keyof typeof MODE_MODELS
   switch (slotType) {
     case "textModel":
       return mode.textModel
-    case "imageDraftModel":
-      return mode.imageDraftModel
-    case "imageFinalModel":
-      return mode.imageFinalModel
-    case "videoDraftModel":
-      return mode.videoDraftModel
-    case "videoFinalModel":
-      return mode.videoFinalModel
+    case "imageModel":
+      return mode.imageModel
+    case "videoModel":
+      return mode.videoModel
     case "ttsProvider":
       return {
         id: mode.ttsProvider,
@@ -79,7 +75,7 @@ function getSlotValueForMode(mode: (typeof MODE_MODELS)[keyof typeof MODE_MODELS
 
 function createSeedModelRecord(slotType: ModelSlotType, slotValue: { id: string; label: string; provider: string }): ModelRecord {
   const timestamp = now()
-  const capabilityJson = slotType === "videoDraftModel" || slotType === "videoFinalModel"
+  const capabilityJson = slotType === "videoModel"
     ? resolveVideoModelCapability(slotValue.id)
     : {}
   return {
@@ -106,10 +102,8 @@ function createSeedDefaults(models: ModelRecord[]): ModelDefaultsDocument {
     modeId: modeId as ProductionModeId,
     slots: {
       textModel: { modelId: slotLookup.get(`textModel:${mode.textModel.id}`) ?? "" },
-      imageDraftModel: { modelId: slotLookup.get(`imageDraftModel:${mode.imageDraftModel.id}`) ?? "" },
-      imageFinalModel: { modelId: slotLookup.get(`imageFinalModel:${mode.imageFinalModel.id}`) ?? "" },
-      videoDraftModel: { modelId: slotLookup.get(`videoDraftModel:${mode.videoDraftModel.id}`) ?? "" },
-      videoFinalModel: { modelId: slotLookup.get(`videoFinalModel:${mode.videoFinalModel.id}`) ?? "" },
+      imageModel: { modelId: slotLookup.get(`imageModel:${mode.imageModel.id}`) ?? "" },
+      videoModel: { modelId: slotLookup.get(`videoModel:${mode.videoModel.id}`) ?? "" },
       ttsProvider: { providerId: `provider_${mode.ttsProvider}`, modelId: `provider_${mode.ttsProvider}` },
     } satisfies GlobalModelDefaults,
   }))
@@ -143,7 +137,7 @@ export async function ensureModelControlSeeded() {
       const seedModels: ModelRecord[] = []
 
       for (const mode of Object.values(MODE_MODELS)) {
-        ;(["textModel", "imageDraftModel", "imageFinalModel", "videoDraftModel", "videoFinalModel", "ttsProvider"] as const).forEach((slotType) => {
+        ;(["textModel", "imageModel", "videoModel", "ttsProvider"] as const).forEach((slotType) => {
           const slotValue = getSlotValueForMode(mode, slotType)
           providerTypes.add(slotValue.provider)
           const existing = seedModels.find((model) => model.slotType === slotType && model.providerModelId === slotValue.id)

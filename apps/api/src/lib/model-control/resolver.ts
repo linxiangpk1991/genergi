@@ -9,10 +9,8 @@ import { getModelDefaultsDocument, listModelRecords, listProviderRecords } from 
 
 const ALL_SLOTS: ModelSlotType[] = [
   "textModel",
-  "imageDraftModel",
-  "imageFinalModel",
-  "videoDraftModel",
-  "videoFinalModel",
+  "imageModel",
+  "videoModel",
   "ttsProvider",
 ]
 

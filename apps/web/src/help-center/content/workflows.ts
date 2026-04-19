@@ -55,7 +55,7 @@ export const workflowGuides: HelpWorkflowGuide[] = [
         id: "registry",
         title: "登记 Model",
         description: "把可运行模型按槽位登记到 Model Registry，并绑定对应 Provider。",
-        notes: ["文案、图像、视频和 TTS 都要放到对应槽位。"],
+        notes: ["当前只维护四个运行时槽位：文本、图片、视频、TTS。", "不要再按草图/终稿去理解图片和视频模型。"],
       },
       {
         id: "defaults",

@@ -400,7 +400,7 @@ export function KeyframeReviewPage() {
           <div className="metric-grid">
             <div className="metric-card"><span>分辨率</span><strong>1080 × 1920</strong></div>
             <div className="metric-card"><span>时间轴</span><strong>{selectedScene ? `${selectedScene.startLabel} - ${selectedScene.endLabel}` : "--"}</strong></div>
-            <div className="metric-card"><span>图像模型</span><strong>{detail?.taskRunConfig.imageFinalModel?.label ?? "待同步"}</strong></div>
+            <div className="metric-card"><span>图像模型</span><strong>{detail?.taskRunConfig.imageModel?.label ?? "待同步"}</strong></div>
             <div className="metric-card"><span>分镜总数</span><strong>{detail?.scenes.length ?? "--"}</strong></div>
           </div>
           <div className="review-block">

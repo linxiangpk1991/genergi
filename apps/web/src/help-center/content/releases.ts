@@ -2,6 +2,21 @@ import type { HelpReleaseEntry } from "./types"
 
 export const releaseTimelineEntries: HelpReleaseEntry[] = [
   {
+    id: "2026-04-20-unified-media-slots",
+    versionDate: "2026-04-20",
+    title: "统一媒体模型槽位",
+    summary: "模型控制面、任务覆盖和运行时快照统一收敛到文本、图片、视频、TTS 四个真实槽位。",
+    affectedFeatureIds: ["model-control-center", "task-launch", "keyframe-review"],
+    operatorNotes: [
+      "图片和视频不再区分草图/终稿槽位，当前任务启动即直接走真实生成链。",
+      "旧任务数据清理后，新任务只会冻结四个运行时槽位。",
+    ],
+    workflowChanges: [
+      "Defaults Center 和任务级高级覆盖都只显示四个槽位。",
+      "帮助中心与模型控制说明同步改成四槽位心智。",
+    ],
+  },
+  {
     id: "2026-04-19-help-center",
     versionDate: "2026-04-19",
     title: "帮助中心一期上线",
