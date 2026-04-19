@@ -101,9 +101,26 @@ function normalizeImageModel(model: string) {
   return lower
 }
 
-function resolveGeminiBaseUrl(baseUrl: string) {
+export function resolveProviderApiBaseUrl(baseUrl: string) {
   const trimmed = baseUrl.trim().replace(/\/+$/, "")
   return trimmed.replace(/\/v1$/i, "")
+}
+
+export function normalizeVideoModel(model: string) {
+  const normalized = (model ?? "").trim()
+  if (!normalized) {
+    return "veo3.1"
+  }
+
+  const lower = normalized.toLowerCase()
+  if (lower === "video.draft") {
+    return "veo3.1-fast"
+  }
+  if (lower === "video.final" || lower === "video.hd") {
+    return "veo3.1"
+  }
+
+  return normalized
 }
 
 function extractGeminiInlineImageReference(payload: any) {
@@ -489,7 +506,7 @@ export async function resolveImageGenerationRuntime(detail: TaskDetail, model: s
 
     return {
       kind: "gemini-native",
-      baseUrl: resolveGeminiBaseUrl(endpointUrl),
+      baseUrl: resolveProviderApiBaseUrl(endpointUrl),
       apiKey: decryptControlPlaneSecret(encryptedSecret),
       providerId: provider.id,
       providerKey: provider.providerKey,
@@ -515,7 +532,7 @@ export async function createGeminiNativeImageArtifact(
     postJson?: (url: string, body: Record<string, unknown>) => Promise<any>
   } = {},
 ) {
-  const url = `${resolveGeminiBaseUrl(input.baseUrl)}/v1beta/models/${input.model}:generateContent?key=${input.apiKey}`
+  const url = `${resolveProviderApiBaseUrl(input.baseUrl)}/v1beta/models/${input.model}:generateContent?key=${input.apiKey}`
   const body = {
     contents: [
       {
@@ -988,7 +1005,7 @@ async function requestStructuredPlanning(detail: TaskDetail): Promise<TextPlanni
   const runtime = resolveRuntimeGenerationConfig(detail)
   const provider = runtime.textProvider.trim().toLowerCase()
   const apiKey = process.env.GENERGI_TEXT_API_KEY ?? ""
-  const baseUrl = (process.env.GENERGI_TEXT_BASE_URL ?? "").replace(/\/+$/, "")
+  const baseUrl = resolveProviderApiBaseUrl(process.env.GENERGI_TEXT_BASE_URL ?? "")
   const model = resolvePlanningModelId(runtime)
 
   if (!provider || !apiKey || !baseUrl) {
@@ -1197,7 +1214,7 @@ export async function createVideoFromPrompt(input: { taskId: string; scene: Stor
       createResponse = await axios.post(
         `${gatewayBaseUrl}/v1/video/generations`,
         {
-          model: input.model,
+          model: normalizeVideoModel(input.model),
           prompt: input.scene.videoPrompt || input.scene.script || input.scene.title,
           duration: Math.max(Math.round(input.scene.durationSec), 4),
         },

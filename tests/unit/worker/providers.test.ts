@@ -309,6 +309,23 @@ Here's the thing. In Chinese destiny analysis, there's a pattern called "late bl
     expect(providers.resolveTtsRateForTargetDuration(20, 15, 0)).toBeGreaterThan(0)
   })
 
+  it("normalizes provider base urls before appending text or gemini api paths", async () => {
+    const providers = await import("../../../apps/worker/src/lib/providers")
+
+    expect(providers.resolveProviderApiBaseUrl("https://code.77code.fun/v1")).toBe("https://code.77code.fun")
+    expect(providers.resolveProviderApiBaseUrl("https://code.77code.fun")).toBe("https://code.77code.fun")
+    expect(providers.resolveProviderApiBaseUrl("https://code.77code.fun/v1/")).toBe("https://code.77code.fun")
+  })
+
+  it("normalizes legacy video aliases into gateway-supported upstream ids", async () => {
+    const providers = await import("../../../apps/worker/src/lib/providers")
+
+    expect(providers.normalizeVideoModel("video.draft")).toBe("veo3.1-fast")
+    expect(providers.normalizeVideoModel("video.final")).toBe("veo3.1")
+    expect(providers.normalizeVideoModel("video.hd")).toBe("veo3.1")
+    expect(providers.normalizeVideoModel("veo3.1")).toBe("veo3.1")
+  })
+
   it("resolves runtime generation models from the frozen unified task config", async () => {
     const providers = await import("../../../apps/worker/src/lib/providers")
 
