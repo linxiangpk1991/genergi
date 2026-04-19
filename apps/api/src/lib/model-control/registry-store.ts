@@ -13,6 +13,8 @@ import {
   type ModelSlotType,
   type ModelControlStatus,
   type ProviderRecord,
+  normalizeImageProviderModelId,
+  normalizeVideoProviderModelId,
   readModelDefaults,
   readModelRecords,
   readProviderRecords,
@@ -75,15 +77,20 @@ function getSlotValueForMode(mode: (typeof MODE_MODELS)[keyof typeof MODE_MODELS
 
 function createSeedModelRecord(slotType: ModelSlotType, slotValue: { id: string; label: string; provider: string }): ModelRecord {
   const timestamp = now()
+  const providerModelId = slotType === "imageModel"
+    ? normalizeImageProviderModelId(slotValue.id)
+    : slotType === "videoModel"
+      ? normalizeVideoProviderModelId(slotValue.id)
+      : slotValue.id
   const capabilityJson = slotType === "videoModel"
-    ? resolveVideoModelCapability(slotValue.id)
+    ? resolveVideoModelCapability(providerModelId)
     : {}
   return {
     id: `model_${slotType}_${slotValue.id}`.replace(/[^a-zA-Z0-9_-]/g, "_"),
     modelKey: slotValue.id,
     providerId: `provider_${slotValue.provider}`,
     slotType,
-    providerModelId: slotValue.id,
+    providerModelId,
     displayName: slotValue.label,
     capabilityJson,
     lifecycleStatus: "available",
@@ -96,7 +103,7 @@ function createSeedModelRecord(slotType: ModelSlotType, slotValue: { id: string;
 
 function createSeedDefaults(models: ModelRecord[]): ModelDefaultsDocument {
   const slotLookup = new Map(
-    models.map((model) => [`${model.slotType}:${model.providerModelId}`, model.id]),
+    models.map((model) => [`${model.slotType}:${model.modelKey}`, model.id]),
   )
   const modeDefaults = Object.entries(MODE_MODELS).map(([modeId, mode]) => ({
     modeId: modeId as ProductionModeId,

@@ -60,6 +60,20 @@ export const VIDEO_MODEL_CAPABILITIES: Record<string, VideoModelCapability> = {
     maxSingleShotSec: 8,
     supportedSingleShotDurations: [4, 6, 8],
   },
+  "veo3.1-fast": {
+    modelId: "veo3.1-fast",
+    provider: "openai-compatible",
+    label: "Veo 3.1 Fast",
+    maxSingleShotSec: 8,
+    supportedSingleShotDurations: [4, 6, 8],
+  },
+  "veo3.1": {
+    modelId: "veo3.1",
+    provider: "openai-compatible",
+    label: "Veo 3.1 Portrait",
+    maxSingleShotSec: 8,
+    supportedSingleShotDurations: [4, 6, 8],
+  },
 }
 
 export const CHANNELS: Record<ChannelProfileId, { label: string; description: string }> = {

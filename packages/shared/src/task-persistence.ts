@@ -16,6 +16,10 @@ import type {
   TaskDetail,
   TaskSummary,
 } from "./index.js"
+import {
+  normalizeImageProviderModelId,
+  normalizeVideoProviderModelId,
+} from "./provider-model-ids.js"
 
 function resolveDataDir() {
   return process.env.GENERGI_DATA_DIR
@@ -168,14 +172,35 @@ function normalizeModelRecord(record: ModelRecord): ModelRecord | null {
     return null
   }
 
+  const providerModelId =
+    slotType === "imageModel"
+      ? normalizeImageProviderModelId(record.providerModelId)
+      : slotType === "videoModel"
+        ? normalizeVideoProviderModelId(record.providerModelId)
+        : record.providerModelId
+  const capabilityJson = normalizeCapabilityJson(record.capabilityJson)
+
   return {
     ...record,
     slotType,
-    capabilityJson: normalizeCapabilityJson(record.capabilityJson),
+    providerModelId,
+    capabilityJson:
+      slotType === "videoModel" && typeof capabilityJson.modelId === "string"
+        ? {
+            ...capabilityJson,
+            modelId: normalizeVideoProviderModelId(capabilityJson.modelId),
+          }
+        : capabilityJson,
     lifecycleStatus: normalizeControlStatus(record.lifecycleStatus),
     lastValidatedAt: normalizeNullableString(record.lastValidatedAt),
     lastValidationError: normalizeNullableString(record.lastValidationError),
   }
+}
+
+function normalizeTaskRuntimeModelId(slotType: "imageModel" | "videoModel", modelId: string) {
+  return slotType === "imageModel"
+    ? normalizeImageProviderModelId(modelId)
+    : normalizeVideoProviderModelId(modelId)
 }
 
 const unifiedDefaultSlotKeys = [
@@ -351,8 +376,38 @@ export function normalizeTaskDetailRecord(
     reviewUpdatedAt?: string | null
   },
 ): TaskDetail {
+  const taskRunConfig = detail.taskRunConfig
   return {
     ...detail,
+    taskRunConfig: {
+      ...taskRunConfig,
+      imageModel: {
+        ...taskRunConfig.imageModel,
+        id: normalizeTaskRuntimeModelId("imageModel", taskRunConfig.imageModel.id),
+      },
+      videoModel: {
+        ...taskRunConfig.videoModel,
+        id: normalizeTaskRuntimeModelId("videoModel", taskRunConfig.videoModel.id),
+      },
+      slotSnapshots: Array.isArray(taskRunConfig.slotSnapshots)
+        ? taskRunConfig.slotSnapshots.map((slot) => ({
+            ...slot,
+            providerModelId:
+              slot.slotType === "imageModel"
+                ? normalizeImageProviderModelId(slot.providerModelId)
+                : slot.slotType === "videoModel"
+                  ? normalizeVideoProviderModelId(slot.providerModelId)
+                  : slot.providerModelId,
+            capabilityJson:
+              slot.slotType === "videoModel" && typeof slot.capabilityJson?.modelId === "string"
+                ? {
+                    ...slot.capabilityJson,
+                    modelId: normalizeVideoProviderModelId(slot.capabilityJson.modelId),
+                  }
+                : slot.capabilityJson,
+          }))
+        : [],
+    },
     actualDurationSec: detail.actualDurationSec ?? null,
     scenes: Array.isArray(detail.scenes)
       ? detail.scenes.map((scene) => normalizeStoryboardScene(scene))

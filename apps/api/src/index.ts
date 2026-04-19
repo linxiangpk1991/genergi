@@ -17,6 +17,8 @@ import {
 import {
   createTaskInputSchema,
   createUserInputSchema,
+  normalizeImageProviderModelId,
+  normalizeVideoProviderModelId,
   readModelDefaults,
   readModelRecords,
   readProviderRecords,
@@ -403,6 +405,13 @@ function normalizeModelRecord(raw: unknown): ModelControlModelRecord | null {
   const lifecycleStatus = modelLifecycleStatusSchema.safeParse(record.lifecycleStatus).success
     ? modelLifecycleStatusSchema.parse(record.lifecycleStatus)
     : "draft"
+  const rawProviderModelId = typeof record.providerModelId === "string" ? record.providerModelId.trim() : ""
+  const providerModelId =
+    slotType === "imageModel"
+      ? normalizeImageProviderModelId(rawProviderModelId)
+      : slotType === "videoModel"
+        ? normalizeVideoProviderModelId(rawProviderModelId)
+        : rawProviderModelId
   const now = nowIso()
   return {
     id: typeof record.id === "string" && record.id.trim() ? record.id : randomUUID(),
@@ -412,7 +421,7 @@ function normalizeModelRecord(raw: unknown): ModelControlModelRecord | null {
         : `${slotType}-${slugifyModelControlValue(String(record.providerModelId ?? "model"))}`,
     providerId: typeof record.providerId === "string" ? record.providerId.trim() : "",
     slotType,
-    providerModelId: typeof record.providerModelId === "string" ? record.providerModelId.trim() : "",
+    providerModelId,
     displayName:
       typeof record.displayName === "string" && record.displayName.trim()
         ? record.displayName.trim()
@@ -556,10 +565,15 @@ function buildModelControlSeedState(): {
       modelKey: `${slotType}-${slugifyModelControlValue(modelRef.id)}`,
       providerId: provider.id,
       slotType,
-      providerModelId: modelRef.id,
+      providerModelId:
+        slotType === "imageModel"
+          ? normalizeImageProviderModelId(modelRef.id)
+          : slotType === "videoModel"
+            ? normalizeVideoProviderModelId(modelRef.id)
+            : modelRef.id,
       displayName: modelRef.label,
       capabilityJson: slotType.startsWith("video")
-        ? { ...resolveVideoModelCapability(modelRef.id) }
+        ? { ...resolveVideoModelCapability(normalizeVideoProviderModelId(modelRef.id)) }
         : { provider: modelRef.provider },
       lifecycleStatus: "available",
       lastValidatedAt: now,

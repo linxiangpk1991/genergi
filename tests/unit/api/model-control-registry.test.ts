@@ -332,7 +332,7 @@ describe("API model control registry routes", () => {
     expect(selectableResponse.status).toBe(200)
 
     const modelsPayload = (await modelsResponse.json()) as {
-      models: Array<{ id: string; slotType: string }>
+      models: Array<{ id: string; slotType: string; providerModelId: string }>
     }
     const selectablePayload = (await selectableResponse.json()) as {
       slots: Record<string, Array<{ valueId: string }>>
@@ -341,6 +341,8 @@ describe("API model control registry routes", () => {
 
     expect(modelsPayload.models.find((model) => model.id === imageModelId)?.slotType).toBe("imageModel")
     expect(modelsPayload.models.find((model) => model.id === videoModelId)?.slotType).toBe("videoModel")
+    expect(modelsPayload.models.find((model) => model.id === imageModelId)?.providerModelId).toBe("gemini-3-pro-image-preview-2k")
+    expect(modelsPayload.models.find((model) => model.id === videoModelId)?.providerModelId).toBe("veo3.1")
     expect(selectablePayload.slots.imageModel.some((item) => item.valueId === imageModelId)).toBe(true)
     expect(selectablePayload.slots.videoModel.some((item) => item.valueId === videoModelId)).toBe(true)
     expect(selectablePayload.effective.imageModel?.valueId).toBe(imageModelId)

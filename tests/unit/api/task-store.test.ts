@@ -347,12 +347,74 @@ describe("API task store", () => {
     })
 
     expect(created.taskRunConfig.textModel.id).toBe("text.default")
-    expect(created.taskRunConfig.imageModel.id).toBe("image.premium")
-    expect(created.taskRunConfig.videoModel.id).toBe("video.hd")
+    expect(created.taskRunConfig.imageModel.id).toBe("gemini-3-pro-image-preview-2k")
+    expect(created.taskRunConfig.videoModel.id).toBe("veo3.1")
     expect(created.taskRunConfig.imageModel.label).toBe("Legacy Premium Image")
     expect(created.taskRunConfig.videoModel.label).toBe("Legacy HD Video")
     expect(created.taskRunConfig.slotSnapshots.find((item) => item.slotType === "imageModel")?.modelId).toBe("legacy_image_model")
     expect(created.taskRunConfig.slotSnapshots.find((item) => item.slotType === "videoModel")?.modelId).toBe("legacy_video_model")
+  })
+
+  it("normalizes stored media aliases in task detail runtime config when legacy records are read back", async () => {
+    dataDir = await mkdtemp(path.join(os.tmpdir(), "genergi-task-store-"))
+    process.env.GENERGI_DATA_DIR = dataDir
+
+    const store = await import("../../../apps/api/src/lib/task-store")
+
+    const created = await store.createTask({
+      title: "Legacy runtime id normalization",
+      script: "Show the product. Explain the benefit. End with a CTA.",
+      modeId: "high_quality",
+      channelId: "reels",
+      aspectRatio: "9:16",
+      targetDurationSec: 30,
+      generationMode: "system_enhanced",
+    })
+
+    const detailsFile = path.join(dataDir, "task-details.json")
+    const detailRecords = await readJsonFile<Record<string, Record<string, unknown>>>(detailsFile)
+    const detailRecord = detailRecords[created.task.id]
+    const taskRunConfig = detailRecord?.taskRunConfig as Record<string, unknown>
+    const slotSnapshots = taskRunConfig?.slotSnapshots as Array<Record<string, unknown>>
+
+    detailRecords[created.task.id] = {
+      ...detailRecord,
+      taskRunConfig: {
+        ...taskRunConfig,
+        imageModel: {
+          ...(taskRunConfig?.imageModel as Record<string, unknown>),
+          id: "image.premium",
+        },
+        videoModel: {
+          ...(taskRunConfig?.videoModel as Record<string, unknown>),
+          id: "video.hd",
+        },
+        slotSnapshots: slotSnapshots.map((slot) => {
+          if (slot.slotType === "imageModel") {
+            return {
+              ...slot,
+              providerModelId: "image.premium",
+            }
+          }
+          if (slot.slotType === "videoModel") {
+            return {
+              ...slot,
+              providerModelId: "video.hd",
+            }
+          }
+          return slot
+        }),
+      },
+    }
+
+    await writeJsonFile(detailsFile, detailRecords)
+
+    const normalized = await store.getTaskDetail(created.task.id)
+
+    expect(normalized?.taskRunConfig.imageModel.id).toBe("gemini-3-pro-image-preview-2k")
+    expect(normalized?.taskRunConfig.videoModel.id).toBe("veo3.1")
+    expect(normalized?.taskRunConfig.slotSnapshots.find((slot) => slot.slotType === "imageModel")?.providerModelId).toBe("gemini-3-pro-image-preview-2k")
+    expect(normalized?.taskRunConfig.slotSnapshots.find((slot) => slot.slotType === "videoModel")?.providerModelId).toBe("veo3.1")
   })
 
   it("persists storyboard and keyframe review decisions with truthful task review summaries", async () => {
