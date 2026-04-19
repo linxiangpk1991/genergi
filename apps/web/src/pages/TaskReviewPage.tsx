@@ -3,6 +3,7 @@ import { Link, useSearchParams } from "react-router-dom"
 import {
   api,
   buildAssetCenterUrl,
+  buildKeyframePreviewUrl,
   buildBatchDashboardUrl,
   type TaskBlueprintRecord,
   type TaskBlueprintReviewRecord,
@@ -222,6 +223,14 @@ export function TaskReviewPage() {
                 <div className="review-block">
                   <label className="field-label">起始关键画面描述</label>
                   <div className="review-content">{scene.startFrameDescription}</div>
+                </div>
+                <div className="review-block">
+                  <label className="field-label">关键画面预览</label>
+                  <img
+                    alt={`关键画面 ${scene.id}`}
+                    className="visual-preview__image"
+                    src={buildKeyframePreviewUrl(detail?.taskId ?? blueprint?.taskId ?? "", scene.id)}
+                  />
                 </div>
                 <div className="review-block">
                   <label className="field-label">图片提示词</label>

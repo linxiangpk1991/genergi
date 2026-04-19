@@ -4,11 +4,9 @@ import { api } from "./api"
 import { AppLayout } from "./components/AppLayout"
 import { BatchDashboardPage } from "./pages/BatchDashboardPage"
 import { HomePage } from "./pages/HomePage"
-import { KeyframeReviewPage } from "./pages/KeyframeReviewPage"
 import { LoginPage } from "./pages/LoginPage"
 import { AssetsPage } from "./pages/AssetsPage"
 import { UserCenterPage } from "./pages/UserCenterPage"
-import { StoryboardReviewPage } from "./pages/StoryboardReviewPage"
 import { ModelControlCenterPage } from "./pages/ModelControlCenterPage"
 import { ModelProvidersPage } from "./pages/ModelProvidersPage"
 import { ModelRegistryPage } from "./pages/ModelRegistryPage"
@@ -51,8 +49,6 @@ export function App() {
     <AppLayout operator={operator}>
       <Routes>
         <Route path="/" element={<HomePage />} />
-        <Route path="/storyboard-review" element={<StoryboardReviewPage />} />
-        <Route path="/keyframe-review" element={<KeyframeReviewPage />} />
         <Route path="/batch-dashboard" element={<BatchDashboardPage />} />
         <Route path="/task-review" element={<TaskReviewPage />} />
         <Route path="/project-library" element={<ProjectLibraryPage />} />

@@ -476,31 +476,10 @@ export async function getTaskDetail(taskId: string) {
     const hasExpectedDuration = existing.taskRunConfig.targetDurationSec === task.targetDurationSec
     const hasExpectedRoute = existing.taskRunConfig.generationRoute === task.generationRoute
     if (hasExpectedDuration && hasExpectedRoute && totalSceneDuration === task.targetDurationSec) {
-      const derived = applyDerivedReviewState(
-        {
-          ...normalizedExisting,
-          actualDurationSec: normalizedExisting.actualDurationSec ?? task.actualDurationSec,
-        },
-        task.status,
-      )
-      const summaryChanged =
-        task.reviewStage !== derived.reviewSummary.reviewStage ||
-        task.pendingReviewCount !== derived.reviewSummary.pendingReviewCount ||
-        task.reviewUpdatedAt !== derived.reviewSummary.reviewUpdatedAt ||
-        task.status !== derived.status
-      const detailChanged =
-        normalizedExisting.reviewStage !== derived.detail.reviewStage ||
-        normalizedExisting.pendingReviewCount !== derived.detail.pendingReviewCount ||
-        normalizedExisting.reviewUpdatedAt !== derived.detail.reviewUpdatedAt
-
-      if (detailChanged) {
-        await upsertTaskDetail(derived.detail)
+      return {
+        ...normalizedExisting,
+        actualDurationSec: normalizedExisting.actualDurationSec ?? task.actualDurationSec,
       }
-      if (summaryChanged) {
-        await syncTaskSummaryFromDetail(task, derived.detail, normalizedExisting.updatedAt)
-      }
-
-      return derived.detail
     }
 
     const rebuiltScenes = mergeSceneReviewMetadata(
@@ -524,7 +503,6 @@ export async function getTaskDetail(taskId: string) {
       task.status,
     ).detail
     await upsertTaskDetail(normalized)
-    await syncTaskSummaryFromDetail(task, normalized, normalized.updatedAt)
     return normalized
   }
 
@@ -599,28 +577,25 @@ export async function createTask(input: CreateTaskInput): Promise<{ task: TaskSu
     resolvedSlots,
   )
   const taskId = `task_${Date.now()}`
-  const detail = applyDerivedReviewState(
-    {
-      taskId,
-      projectId: input.projectId,
-      title: input.title,
+  const detail = normalizeTaskDetailRecord({
+    taskId,
+    projectId: input.projectId,
+    title: input.title,
+    script: input.script,
+    taskRunConfig,
+    blueprintVersion: 1,
+    blueprintStatus: "pending_generation",
+    actualDurationSec: null,
+    scenes: buildStoryboardScenes({
       script: input.script,
-      taskRunConfig,
-      blueprintVersion: 1,
-      blueprintStatus: "pending_generation",
-      actualDurationSec: null,
-      scenes: buildStoryboardScenes({
-        script: input.script,
-        targetDurationSec: input.targetDurationSec,
-        maxSceneDurationSec: resolveVideoModelCapability(taskRunConfig.videoModel.id).maxSingleShotSec,
-        aspectRatio: taskRunConfig.aspectRatio,
-        reviewRequirements: buildSceneReviewRequirements(taskRunConfig),
-      }),
-      updatedAt: timestamp,
-      ...createDefaultReviewSummary(),
-    },
-    "queued",
-  ).detail
+      targetDurationSec: input.targetDurationSec,
+      maxSceneDurationSec: resolveVideoModelCapability(taskRunConfig.videoModel.id).maxSingleShotSec,
+      aspectRatio: taskRunConfig.aspectRatio,
+      reviewRequirements: buildSceneReviewRequirements(taskRunConfig),
+    }),
+    updatedAt: timestamp,
+    ...createDefaultReviewSummary(),
+  })
   const task: TaskSummary = {
     id: taskId,
     projectId: input.projectId,
@@ -638,7 +613,7 @@ export async function createTask(input: CreateTaskInput): Promise<{ task: TaskSu
     blueprintVersion: detail.blueprintVersion,
     blueprintStatus: detail.blueprintStatus,
     actualDurationSec: null,
-    status: resolveTaskStatusForReview("queued", detail.reviewStage ?? null),
+    status: "queued",
     progressPct: 0,
     retryCount: 0,
     estimatedCostCny: estimate.budgetUsagePct / 100 * taskRunConfig.budgetLimitCny,

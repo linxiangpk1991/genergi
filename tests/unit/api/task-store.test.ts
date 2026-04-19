@@ -63,9 +63,9 @@ describe("API task store", () => {
     expect(created.task.blueprintStatus).toBe("pending_generation")
     expect(created.task.generationRoute).toBe("multi_scene")
     expect(created.task.routeReason).toContain("single-shot limit")
-    expect(created.task.status).toBe("waiting_review")
-    expect(created.task.reviewStage).toBe("storyboard_review")
-    expect(created.task.pendingReviewCount).toBe(3)
+    expect(created.task.status).toBe("queued")
+    expect(created.task.reviewStage).toBeNull()
+    expect(created.task.pendingReviewCount).toBe(0)
     expect(created.task.reviewUpdatedAt).toBeNull()
 
     const detail = await store.getTaskDetail(created.task.id)
@@ -81,8 +81,8 @@ describe("API task store", () => {
     expect(detail?.scenes).toHaveLength(4)
     expect(detail?.scenes.reduce((total, scene) => total + scene.durationSec, 0)).toBe(30)
     expect(detail?.scenes.some((scene) => scene.script.includes("Show the product in action"))).toBe(false)
-    expect(detail?.reviewStage).toBe("storyboard_review")
-    expect(detail?.pendingReviewCount).toBe(3)
+    expect(detail?.reviewStage).toBeNull()
+    expect(detail?.pendingReviewCount).toBe(0)
     expect(detail?.reviewUpdatedAt).toBeNull()
     expect(detail?.scenes[1]?.reviewNote).toBeNull()
     expect(detail?.scenes[1]?.reviewedAt).toBeNull()
@@ -569,13 +569,13 @@ describe("API task store", () => {
       generationMode: "user_locked",
     })
 
-    expect(created.task.status).toBe("waiting_review")
-    expect(created.task.reviewStage).toBe("keyframe_review")
-    expect(created.task.pendingReviewCount).toBe(4)
+    expect(created.task.status).toBe("queued")
+    expect(created.task.reviewStage).toBeNull()
+    expect(created.task.pendingReviewCount).toBe(0)
 
     const detail = await store.getTaskDetail(created.task.id)
-    expect(detail?.reviewStage).toBe("keyframe_review")
-    expect(detail?.pendingReviewCount).toBe(4)
+    expect(detail?.reviewStage).toBeNull()
+    expect(detail?.pendingReviewCount).toBe(0)
     expect(detail?.scenes.every((scene) => scene.reviewStatus === "approved")).toBe(true)
     expect(detail?.scenes.every((scene) => scene.keyframeStatus === "pending")).toBe(true)
 
@@ -599,9 +599,9 @@ describe("API task store", () => {
 
     const normalized = await store.getTaskDetail(created.task.id)
 
-    expect(normalized?.reviewStage).toBe("keyframe_review")
-    expect(normalized?.pendingReviewCount).toBe(4)
-    expect(normalized?.reviewUpdatedAt).toBe("2026-04-19T09:00:00.000Z")
+    expect(normalized?.reviewStage).toBeNull()
+    expect(normalized?.pendingReviewCount).toBe(0)
+    expect(normalized?.reviewUpdatedAt).toBeNull()
     expect(normalized?.scenes[0]?.reviewStatus).toBe("pending")
     expect(normalized?.scenes[0]?.reviewNote).toBe("Legacy storyboard note")
     expect(normalized?.scenes[0]?.reviewedAt).toBe("2026-04-19T09:00:00.000Z")
@@ -651,11 +651,11 @@ describe("API task store", () => {
     const summaries = await store.listTasks()
     const updatedSummary = summaries.find((task) => task.id === created.task.id)
 
-    expect(normalized?.reviewStage).toBe("auto_qa")
+    expect(normalized?.reviewStage).toBeNull()
     expect(normalized?.pendingReviewCount).toBe(0)
-    expect(updatedSummary?.reviewStage).toBe("auto_qa")
+    expect(updatedSummary?.reviewStage).toBeNull()
     expect(updatedSummary?.pendingReviewCount).toBe(0)
-    expect(updatedSummary?.status).toBe("running")
+    expect(updatedSummary?.status).toBe("queued")
   })
 
   it("normalizes legacy review fields and preserves existing review metadata when detail scenes are rebuilt", async () => {

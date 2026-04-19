@@ -425,7 +425,14 @@ export function buildAssetCenterUrl(taskId?: string) {
   return buildWorkspaceUrl("/asset-center", { taskId })
 }
 
-export function buildTaskReviewUrl(task: Pick<TaskSummary, "id" | "reviewStage">, sceneId?: string) {
+export function buildTaskReviewUrl(
+  task: Pick<TaskSummary, "id" | "reviewStage" | "blueprintStatus">,
+  sceneId?: string,
+) {
+  if ("blueprintStatus" in task && task.blueprintStatus === "ready_for_review") {
+    return buildWorkspaceUrl("/task-review", { taskId: task.id })
+  }
+
   if (task.reviewStage === "keyframe_review") {
     return buildKeyframeReviewUrl(task.id, sceneId)
   }

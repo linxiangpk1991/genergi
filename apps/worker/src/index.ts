@@ -386,9 +386,14 @@ const worker = new Worker(
       }))
 
       console.log(`[worker] ${taskId} => generate media assets`)
-      await writeTaskArtifacts(taskId, {
+      const result = await writeTaskArtifacts(taskId, {
         continueExecution: job.data.continueExecution ?? false,
       })
+
+      if (result.phase === "review_ready") {
+        console.log(`[worker] ${taskId} => waiting for blueprint review`)
+        return { ok: true, taskId: job.data.taskId, phase: "review_ready" }
+      }
 
       await updateTaskSummary(taskId, (task: TaskSummary) => ({
         ...task,
