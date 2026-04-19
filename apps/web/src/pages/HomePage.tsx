@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   api,
+  type ExecutionMode,
   MODEL_CONTROL_MODE_LABELS,
   MODEL_CONTROL_SLOT_LABELS,
   MODEL_CONTROL_SLOT_ORDER,
@@ -8,8 +9,11 @@ import {
   type GenerationPreferenceId,
   type ModelControlModeId,
   type ModelControlSlotType,
+  type ProjectRecord,
+  type RenderSpec,
   type SelectableModelOption,
   type SelectableModelPoolsResponse,
+  type TerminalPresetId,
   type TaskSummary,
 } from "../api";
 
@@ -41,6 +45,78 @@ function getChannelLabel(channelId: string) {
   }
 
   return channelId;
+}
+
+const TERMINAL_PRESET_OPTIONS: Array<{
+  id: TerminalPresetId;
+  label: string;
+  renderSpec: RenderSpec;
+}> = [
+  {
+    id: "phone_portrait",
+    label: "手机竖屏",
+    renderSpec: {
+      terminalPresetId: "phone_portrait",
+      width: 1080,
+      height: 1920,
+      aspectRatio: "9:16",
+      safeArea: { topPct: 8, rightPct: 6, bottomPct: 10, leftPct: 6 },
+      compositionGuideline: "主体保持在竖屏中心安全区",
+      motionGuideline: "优先轻推拉",
+    },
+  },
+  {
+    id: "phone_landscape",
+    label: "手机横屏",
+    renderSpec: {
+      terminalPresetId: "phone_landscape",
+      width: 1920,
+      height: 1080,
+      aspectRatio: "16:9",
+      safeArea: { topPct: 8, rightPct: 6, bottomPct: 8, leftPct: 6 },
+      compositionGuideline: "主体不宜过小，适合横向叙事",
+      motionGuideline: "可用横向推进和平移",
+    },
+  },
+  {
+    id: "tablet_portrait",
+    label: "平板竖屏",
+    renderSpec: {
+      terminalPresetId: "tablet_portrait",
+      width: 1536,
+      height: 2048,
+      aspectRatio: "3:4",
+      safeArea: { topPct: 7, rightPct: 6, bottomPct: 9, leftPct: 6 },
+      compositionGuideline: "保留更多环境空间，主体仍需集中",
+      motionGuideline: "可使用更缓的推进",
+    },
+  },
+  {
+    id: "tablet_landscape",
+    label: "平板横屏",
+    renderSpec: {
+      terminalPresetId: "tablet_landscape",
+      width: 2048,
+      height: 1536,
+      aspectRatio: "4:3",
+      safeArea: { topPct: 7, rightPct: 6, bottomPct: 7, leftPct: 6 },
+      compositionGuideline: "适合横向场景展开",
+      motionGuideline: "允许横向环境展开",
+    },
+  },
+];
+
+function getDefaultTerminalPresetId(channelId: string): TerminalPresetId {
+  return channelId === "tiktok" || channelId === "reels" || channelId === "shorts"
+    ? "phone_portrait"
+    : "phone_portrait";
+}
+
+function getRenderSpec(terminalPresetId: TerminalPresetId): RenderSpec {
+  return (
+    TERMINAL_PRESET_OPTIONS.find((item) => item.id === terminalPresetId)?.renderSpec ??
+    TERMINAL_PRESET_OPTIONS[0].renderSpec
+  );
 }
 
 function pruneOverrides(
@@ -98,11 +174,15 @@ function describeOption(option: SelectableModelOption | null) {
 
 export function HomePage() {
   const [bootstrap, setBootstrap] = useState<BootstrapResponse | null>(null);
+  const [projects, setProjects] = useState<ProjectRecord[]>([]);
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
   const [title, setTitle] = useState("");
   const [script, setScript] = useState("");
+  const [projectId, setProjectId] = useState("project_default");
   const [modeId, setModeId] = useState<ModelControlModeId>("mass_production");
   const [channelId, setChannelId] = useState("tiktok");
+  const [terminalPresetId, setTerminalPresetId] =
+    useState<TerminalPresetId>("phone_portrait");
   const [targetDurationSec, setTargetDurationSec] = useState(30);
   const [generationPreference, setGenerationPreference] =
     useState<GenerationPreferenceId>("user_locked");
@@ -122,12 +202,17 @@ export function HomePage() {
   useEffect(() => {
     async function load() {
       try {
-        const [bootstrapRes, taskRes] = await Promise.all([
+        const [bootstrapRes, taskRes, projectRes] = await Promise.all([
           api.bootstrap(),
           api.listTasks(),
+          api.listProjects(),
         ]);
         setBootstrap(bootstrapRes);
         setTasks(taskRes.tasks);
+        setProjects(projectRes.projects);
+        if (projectRes.projects[0]?.id) {
+          setProjectId(projectRes.projects[0].id);
+        }
         setTasksUpdatedAt(new Date().toLocaleTimeString("zh-CN"));
         setTargetDurationSec(
           bootstrapRes.durationOptions[1] ??
@@ -202,10 +287,21 @@ export function HomePage() {
     };
   }, [bootstrap, modeId]);
 
+  useEffect(() => {
+    setTerminalPresetId(getDefaultTerminalPresetId(channelId));
+  }, [channelId]);
+
   const selectedMode = useMemo(
     () => bootstrap?.modes.find((mode) => mode.id === modeId) ?? null,
     [bootstrap, modeId],
   );
+  const selectedProject = useMemo(
+    () => projects.find((project) => project.id === projectId) ?? null,
+    [projects, projectId],
+  );
+  const selectedExecutionMode: ExecutionMode =
+    selectedMode?.executionMode ?? "automated";
+  const renderSpec = getRenderSpec(terminalPresetId);
 
   const routePreview =
     targetDurationSec <= (selectedMode?.maxSingleShotSec ?? 8)
@@ -301,9 +397,10 @@ export function HomePage() {
       const result = await api.createTask({
         title,
         script,
+        projectId,
         modeId,
         channelId,
-        aspectRatio: "9:16",
+        terminalPresetId,
         targetDurationSec,
         generationMode: generationPreference,
         modelOverrides: Object.keys(overridePayload).length
@@ -460,6 +557,34 @@ export function HomePage() {
             ))}
           </div>
 
+          <label className="field-label">所属项目</label>
+          <select
+            className="input"
+            value={projectId}
+            onChange={(event) => setProjectId(event.target.value)}
+          >
+            {projects.map((project) => (
+              <option key={project.id} value={project.id}>
+                {project.name}
+              </option>
+            ))}
+          </select>
+
+          <label className="field-label">终端预设</label>
+          <select
+            className="input"
+            value={terminalPresetId}
+            onChange={(event) =>
+              setTerminalPresetId(event.target.value as TerminalPresetId)
+            }
+          >
+            {TERMINAL_PRESET_OPTIONS.map((preset) => (
+              <option key={preset.id} value={preset.id}>
+                {preset.label} · {preset.renderSpec.width} × {preset.renderSpec.height}
+              </option>
+            ))}
+          </select>
+
           <div className="planning-strip">
             <div className="planning-chip">
               <span className="planning-chip__label">成片组织方式</span>
@@ -471,6 +596,20 @@ export function HomePage() {
               <strong>{getPreferenceLabel(generationPreference)}</strong>
               <span>{planningSummary}</span>
             </div>
+            <div className="planning-chip">
+              <span className="planning-chip__label">执行方式</span>
+              <strong>{selectedExecutionMode}</strong>
+              <span>
+                {selectedExecutionMode === "review_required"
+                  ? "关键画面与提示词审核通过后，才继续完整视频生成。"
+                  : "关键画面完成后会自动继续生成视频。"}
+              </span>
+            </div>
+            <div className="planning-chip">
+              <span className="planning-chip__label">终端规格</span>
+              <strong>{renderSpec.width} × {renderSpec.height}</strong>
+              <span>{renderSpec.aspectRatio} · {renderSpec.compositionGuideline}</span>
+            </div>
           </div>
         </section>
 
@@ -478,10 +617,18 @@ export function HomePage() {
           <section className="card card--compact">
             <h3>本次任务摘要</h3>
             <div className="metric-row">
+              <span>所属项目</span>
+              <strong>{selectedProject?.name ?? "未选择"}</strong>
+            </div>
+            <div className="metric-row">
               <span>生产模式</span>
               <strong>
                 {selectedMode?.label ?? MODEL_CONTROL_MODE_LABELS[modeId]}
               </strong>
+            </div>
+            <div className="metric-row">
+              <span>执行方式</span>
+              <strong>{selectedExecutionMode}</strong>
             </div>
             <div className="metric-row">
               <span>目标正片长度</span>
@@ -501,6 +648,20 @@ export function HomePage() {
             <div className="metric-row">
               <span>成片组织</span>
               <strong>{routePreview}</strong>
+            </div>
+            <div className="metric-row">
+              <span>终端预设</span>
+              <strong>
+                {TERMINAL_PRESET_OPTIONS.find((item) => item.id === terminalPresetId)?.label ?? terminalPresetId}
+              </strong>
+            </div>
+            <div className="metric-row">
+              <span>输出规格</span>
+              <strong>{renderSpec.width} × {renderSpec.height}</strong>
+            </div>
+            <div className="metric-row">
+              <span>画面比例</span>
+              <strong>{renderSpec.aspectRatio}</strong>
             </div>
             <div className="metric-row">
               <span>模式预算上限</span>

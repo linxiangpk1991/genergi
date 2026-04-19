@@ -17,6 +17,8 @@ import { HelpCenterHomePage } from "./pages/HelpCenterHomePage"
 import { HelpWorkflowPage } from "./pages/HelpWorkflowPage"
 import { HelpFeaturePage } from "./pages/HelpFeaturePage"
 import { HelpReleaseTimelinePage } from "./pages/HelpReleaseTimelinePage"
+import { TaskReviewPage } from "./pages/TaskReviewPage"
+import { ProjectLibraryPage } from "./pages/ProjectLibraryPage"
 
 export function App() {
   const [authLoading, setAuthLoading] = useState(true)
@@ -52,6 +54,8 @@ export function App() {
         <Route path="/storyboard-review" element={<StoryboardReviewPage />} />
         <Route path="/keyframe-review" element={<KeyframeReviewPage />} />
         <Route path="/batch-dashboard" element={<BatchDashboardPage />} />
+        <Route path="/task-review" element={<TaskReviewPage />} />
+        <Route path="/project-library" element={<ProjectLibraryPage />} />
         <Route path="/asset-center" element={<AssetsPage />} />
         <Route path="/user-center" element={<UserCenterPage />} />
         <Route path="/help-center" element={<HelpCenterHomePage />} />

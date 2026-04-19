@@ -9,6 +9,7 @@ const navGroups = [
       { to: "/", label: "任务启动" },
       { to: "/storyboard-review", label: "分镜审阅" },
       { to: "/keyframe-review", label: "关键帧审阅" },
+      { to: "/task-review", label: "任务审核" },
       { to: "/batch-dashboard", label: "生产看板" },
       { to: "/asset-center", label: "交付资产" },
     ],
@@ -16,6 +17,7 @@ const navGroups = [
   {
     label: "系统管理",
     items: [
+      { to: "/project-library", label: "项目审核库" },
       { to: "/help-center", label: "帮助中心" },
       { to: "/model-control-center", label: "模型控制中心" },
       { to: "/user-center", label: "用户中心" },
@@ -39,6 +41,13 @@ function getWorkspaceMeta(pathname: string) {
     return {
       title: "关键帧审阅",
       description: "查看真实关键帧，判断画面主体、质感和风格是否达标。",
+    }
+  }
+
+  if (pathname === "/task-review") {
+    return {
+      title: "任务审核",
+      description: "整任务查看蓝图、关键画面、提示词和尺寸规格，通过后再继续完整视频生成。",
     }
   }
 
@@ -67,6 +76,13 @@ function getWorkspaceMeta(pathname: string) {
     return {
       title: "帮助中心",
       description: "按流程学习、按功能查阅，并查看版本更新时间线。",
+    }
+  }
+
+  if (pathname === "/project-library") {
+    return {
+      title: "项目审核库",
+      description: "查看当前项目沉淀下来的审核通过蓝图与复用素材。",
     }
   }
 

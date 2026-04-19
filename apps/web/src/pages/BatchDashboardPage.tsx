@@ -20,6 +20,10 @@ function formatDurationDelta(task: TaskSummary) {
 }
 
 function getTaskExceptionLabel(task: TaskSummary) {
+  if (task.executionMode === "review_required" && task.blueprintStatus === "ready_for_review") {
+    return `蓝图待审 v${task.blueprintVersion}`
+  }
+
   if (task.reviewStage === "storyboard_review") {
     return `分镜待审 ${task.pendingReviewCount ?? 0} 项`
   }
@@ -41,6 +45,14 @@ function getTaskExceptionLabel(task: TaskSummary) {
 
 function getTaskActions(task: TaskSummary) {
   const actions: Array<{ label: string; to: string; tone: "primary" | "ghost" }> = []
+
+  if (task.executionMode === "review_required" && task.blueprintStatus === "ready_for_review") {
+    actions.push({
+      label: `继续任务审核 · v${task.blueprintVersion}`,
+      to: `/task-review?taskId=${task.id}`,
+      tone: "primary",
+    })
+  }
 
   if (task.reviewStage === "storyboard_review") {
     actions.push({

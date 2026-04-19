@@ -422,7 +422,12 @@ export function AssetsPage() {
                 <strong>{getReviewStageLabel(selectedTask)}</strong>
                 <span>资产排查完成后，可以直接跳回当前任务真正需要处理的工作台。</span>
                 <div className="task-item__actions">
-                  {selectedTask?.reviewStage === "storyboard_review" ? (
+                  {selectedTask?.executionMode === "review_required" &&
+                  selectedTask?.blueprintStatus === "ready_for_review" ? (
+                    <Link className="primary-button" to={`/task-review?taskId=${selectedTask.id}`}>
+                      进入任务审核
+                    </Link>
+                  ) : selectedTask?.reviewStage === "storyboard_review" ? (
                     <Link className="primary-button" to={buildStoryboardReviewUrl(selectedTask.id)}>
                       进入分镜审阅
                     </Link>
