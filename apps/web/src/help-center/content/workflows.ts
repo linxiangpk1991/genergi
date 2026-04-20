@@ -14,16 +14,10 @@ export const workflowGuides: HelpWorkflowGuide[] = [
         notes: ["先把内容写清楚，再考虑是否需要高级覆盖。"],
       },
       {
-        id: "storyboard",
-        title: "分镜审阅",
-        description: "检查脚本、分镜结构和每段提示词，确认内容表达是否正确。",
-        notes: ["重点看脚本顺序、信息完整度和 CTA 是否合适。"],
-      },
-      {
-        id: "keyframe",
-        title: "关键帧审阅",
-        description: "检查关键帧的主体、构图和画面方向，判断是否能继续进入交付。",
-        notes: ["优先看主题是否对、画面是否偏题。"],
+        id: "task-review",
+        title: "任务审核",
+        description: "整任务检查蓝图、旁白、关键画面、图片提示词、视频提示词和终端尺寸，确认是否继续执行。",
+        notes: ["重点看整套分镜契约是否连续一致。", "审核通过后还需要显式继续完整生成。"],
       },
       {
         id: "delivery",
@@ -34,10 +28,10 @@ export const workflowGuides: HelpWorkflowGuide[] = [
     ],
     decisionPoints: [
       "任务启动时先确定时长和生成方式，再决定是否使用高级覆盖。",
-      "分镜审阅通过后，任务会继续进入关键帧审阅或自动 QA。",
+      "任务审核通过后，任务才会继续完整视频生成；审核驳回则需要重建蓝图。",
       "交付资产里优先看最终视频，再决定是否需要继续回查中间产物。",
     ],
-    relatedFeatureIds: ["task-launch", "storyboard-review", "keyframe-review", "asset-center"],
+    relatedFeatureIds: ["task-launch", "task-review", "project-library", "asset-center"],
   },
   {
     id: "model-onboarding-and-defaults",
@@ -97,15 +91,15 @@ export const workflowGuides: HelpWorkflowGuide[] = [
       },
       {
         id: "review-context",
-        title: "必要时回到审阅页",
-        description: "如果问题出在分镜或关键帧表达上，再回到对应审阅页继续处理。",
-        notes: ["不要在没确认问题类型时直接重做。"],
+        title: "必要时回到任务审核",
+        description: "如果问题出在蓝图契约、关键画面或提示词表达上，再回到任务审核工作台继续处理。",
+        notes: ["不要在没确认问题类型时直接重做。", "审核通过但未继续执行的任务，也应从这里恢复主链。"],
       },
     ],
     decisionPoints: [
       "先分清是生成失败、内容问题还是交付缺失，再决定去哪一页继续处理。",
       "失败任务优先看任务状态和资产缺口，不要直接猜原因。",
     ],
-    relatedFeatureIds: ["batch-dashboard", "asset-center", "storyboard-review", "keyframe-review"],
+    relatedFeatureIds: ["batch-dashboard", "asset-center", "task-review"],
   },
 ]

@@ -2,11 +2,26 @@ import type { HelpReleaseEntry } from "./types"
 
 export const releaseTimelineEntries: HelpReleaseEntry[] = [
   {
+    id: "2026-04-20-keyframe-first-review-flow",
+    versionDate: "2026-04-20",
+    title: "关键画面优先审核流上线",
+    summary: "高质量任务改为先生成整套蓝图和关键画面，审核通过后再继续完整视频生成，并沉淀到项目审核库。",
+    affectedFeatureIds: ["task-launch", "task-review", "project-library", "batch-dashboard", "asset-center"],
+    operatorNotes: [
+      "高质量任务不再走旧分镜审阅和旧关键帧审阅入口，统一改到整任务审核工作台。",
+      "项目审核库会沉淀审核通过的蓝图版本，可作为后续任务的参考基线。",
+    ],
+    workflowChanges: [
+      "任务启动时会冻结项目、执行模式和终端尺寸规格。",
+      "审核通过后需要在任务审核页显式继续完整视频生成，不再自动滑入旧链。",
+    ],
+  },
+  {
     id: "2026-04-20-unified-media-slots",
     versionDate: "2026-04-20",
     title: "统一媒体模型槽位",
     summary: "模型控制面、任务覆盖和运行时快照统一收敛到文本、图片、视频、TTS 四个真实槽位。",
-    affectedFeatureIds: ["model-control-center", "task-launch", "keyframe-review"],
+    affectedFeatureIds: ["model-control-center", "task-launch", "task-review"],
     operatorNotes: [
       "图片和视频不再区分草图/终稿槽位，当前任务启动即直接走真实生成链。",
       "旧任务数据清理后，新任务只会冻结四个运行时槽位。",
@@ -21,7 +36,7 @@ export const releaseTimelineEntries: HelpReleaseEntry[] = [
     versionDate: "2026-04-19",
     title: "帮助中心一期上线",
     summary: "帮助中心作为站内模块上线，支持按流程学习、按功能查阅和时间线更新日志。",
-    affectedFeatureIds: ["task-launch", "storyboard-review", "keyframe-review", "batch-dashboard", "asset-center", "model-control-center", "user-center"],
+    affectedFeatureIds: ["task-launch", "task-review", "project-library", "batch-dashboard", "asset-center", "model-control-center", "user-center"],
     operatorNotes: [
       "现在可以在后台直接查看系统功能说明，不需要翻仓库文档。",
       "帮助中心内容按运营视角重写，优先看流程图和操作要点。",

@@ -5,8 +5,7 @@ import {
   buildAssetDownloadUrl,
   buildAssetPreviewUrl,
   buildBatchDashboardUrl,
-  buildKeyframeReviewUrl,
-  buildStoryboardReviewUrl,
+  buildTaskReviewUrl,
   type AssetRecord,
   type RuntimeStatusResponse,
   type TaskSummary,
@@ -32,20 +31,36 @@ function getToleranceLabel(delta: number | null) {
   return "需复核"
 }
 
-function getReviewStageLabel(task: TaskSummary | null) {
-  if (!task?.reviewStage) {
+function getTaskFlowLabel(task: TaskSummary | null) {
+  if (!task) {
     return "待同步"
   }
 
-  if (task.reviewStage === "storyboard_review") {
-    return `待审分镜 (${task.pendingReviewCount ?? 0})`
+  if (task.executionMode === "review_required" && task.blueprintStatus === "ready_for_review") {
+    return `整任务待审 (蓝图 v${task.blueprintVersion})`
   }
 
-  if (task.reviewStage === "keyframe_review") {
-    return `待审关键帧 (${task.pendingReviewCount ?? 0})`
+  if (task.executionMode === "review_required" && task.blueprintStatus === "approved") {
+    return `审核已通过，待继续执行 (蓝图 v${task.blueprintVersion})`
   }
 
-  return "自动 QA"
+  if (task.executionMode === "review_required" && task.blueprintStatus === "rejected") {
+    return `蓝图已驳回 (蓝图 v${task.blueprintVersion})`
+  }
+
+  if (task.status === "completed") {
+    return "任务已完成"
+  }
+
+  if (task.status === "failed") {
+    return "任务失败"
+  }
+
+  if (task.status === "running") {
+    return "生成进行中"
+  }
+
+  return "等待生成"
 }
 
 function sortAssetsForDelivery(assets: AssetRecord[]) {
@@ -381,8 +396,8 @@ export function AssetsPage() {
               <strong className="metric-value">{assetStats.deliverableReadyCount}/{assetStats.deliverableTotal || 0}</strong>
             </div>
             <div className="asset-metric-card">
-              <div className="metric-label">审阅阶段</div>
-              <strong className="metric-value">{getReviewStageLabel(selectedTask)}</strong>
+              <div className="metric-label">当前链路</div>
+              <strong className="metric-value">{getTaskFlowLabel(selectedTask)}</strong>
             </div>
           </div>
 
@@ -419,21 +434,15 @@ export function AssetsPage() {
             <h3>当前处理入口</h3>
             <div className="task-list compact-list">
               <div className="task-item">
-                <strong>{getReviewStageLabel(selectedTask)}</strong>
-                <span>资产排查完成后，可以直接跳回当前任务真正需要处理的工作台。</span>
+                <strong>{getTaskFlowLabel(selectedTask)}</strong>
+                <span>资产排查完成后，直接回到当前任务真正需要处理的唯一主工作台。</span>
                 <div className="task-item__actions">
                   {selectedTask?.executionMode === "review_required" &&
-                  selectedTask?.blueprintStatus === "ready_for_review" ? (
-                    <Link className="primary-button" to={`/task-review?taskId=${selectedTask.id}`}>
+                  (selectedTask.blueprintStatus === "ready_for_review" ||
+                    selectedTask.blueprintStatus === "approved" ||
+                    selectedTask.blueprintStatus === "rejected") ? (
+                    <Link className="primary-button" to={buildTaskReviewUrl(selectedTask)}>
                       进入任务审核
-                    </Link>
-                  ) : selectedTask?.reviewStage === "storyboard_review" ? (
-                    <Link className="primary-button" to={buildStoryboardReviewUrl(selectedTask.id)}>
-                      进入分镜审阅
-                    </Link>
-                  ) : selectedTask?.reviewStage === "keyframe_review" ? (
-                    <Link className="primary-button" to={buildKeyframeReviewUrl(selectedTask.id)}>
-                      进入关键帧审阅
                     </Link>
                   ) : (
                     <Link className="primary-button" to={buildBatchDashboardUrl(selectedTaskId || undefined)}>
@@ -453,7 +462,7 @@ export function AssetsPage() {
             <div className="task-list compact-list">
               <div className="task-item"><strong>路由原因</strong><span>{selectedTask?.routeReason ?? "待接入"}</span></div>
               <div className="task-item"><strong>内容策略</strong><span>{selectedTask?.planning?.generationPreferenceLabel ?? "待接入"}</span></div>
-              <div className="task-item"><strong>审阅状态</strong><span>{getReviewStageLabel(selectedTask)}</span></div>
+              <div className="task-item"><strong>当前链路</strong><span>{getTaskFlowLabel(selectedTask)}</span></div>
               <div className="task-item"><strong>可预览资产</strong><span>{assetStats.previewableCount} 个</span></div>
               <div className="task-item"><strong>已就绪资产</strong><span>{assetStats.readyCount} 个</span></div>
             </div>

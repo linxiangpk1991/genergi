@@ -32,6 +32,31 @@ export function TaskReviewPage() {
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState("")
 
+  function applyBlueprintStatus(taskId: string, status: TaskBlueprintRecord["status"]) {
+    setDetail((current) =>
+      current
+        ? {
+            ...current,
+            blueprintStatus: status,
+            taskRunConfig: {
+              ...current.taskRunConfig,
+              blueprintStatus: status,
+            },
+          }
+        : current,
+    )
+    setTasks((current) =>
+      current.map((task) =>
+        task.id === taskId
+          ? {
+              ...task,
+              blueprintStatus: status,
+            }
+          : task,
+      ),
+    )
+  }
+
   useEffect(() => {
     let active = true
 
@@ -44,7 +69,15 @@ export function TaskReviewPage() {
         setTasks(taskResult.tasks)
 
         const selectedTaskId =
-          routeTaskId || taskResult.tasks.find((task) => task.blueprintStatus === "ready_for_review")?.id || taskResult.tasks[0]?.id
+          routeTaskId ||
+          taskResult.tasks.find(
+            (task) =>
+              task.executionMode === "review_required" &&
+              (task.blueprintStatus === "ready_for_review" ||
+                task.blueprintStatus === "approved" ||
+                task.blueprintStatus === "rejected"),
+          )?.id ||
+          taskResult.tasks[0]?.id
         if (!selectedTaskId) {
           setDetail(null)
           setBlueprint(null)
@@ -102,6 +135,7 @@ export function TaskReviewPage() {
       })
       setBlueprint(result.blueprint)
       setReview(result.review)
+      applyBlueprintStatus(detail.taskId, result.blueprint.status)
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "审核提交失败")
     } finally {
@@ -119,6 +153,7 @@ export function TaskReviewPage() {
     try {
       const result = await api.resumeCurrentBlueprint(detail.taskId)
       setBlueprint(result.blueprint)
+      applyBlueprintStatus(detail.taskId, result.blueprint.status)
     } catch (resumeError) {
       setError(resumeError instanceof Error ? resumeError.message : "继续执行失败")
     } finally {

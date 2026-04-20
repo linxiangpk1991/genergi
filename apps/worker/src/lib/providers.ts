@@ -29,6 +29,8 @@ import { concatVideos, extractKeyframeFromVideo, getMediaDurationSeconds, muxNar
 const gatewayBaseUrl = process.env.GENERGI_MEDIA_GATEWAY_BASE_URL ?? "https://open.xiaojingai.com"
 const gatewayApiKey = process.env.GENERGI_MEDIA_GATEWAY_API_KEY ?? ""
 const gatewayImageGenerationPaths = ["/v1/images/generations", "/v1/image/generations"]
+const REVIEW_REQUIRED_KEYFRAME_TIMEOUT_MS = 300000
+const DEGRADABLE_KEYFRAME_TIMEOUT_MS = 30000
 
 function ensureTaskDir(taskId: string) {
   const root = process.env.GENERGI_DATA_DIR ?? ".data"
@@ -44,6 +46,24 @@ function buildGatewayHeaders() {
     Authorization: `Bearer ${gatewayApiKey}`,
     "Content-Type": "application/json",
   }
+}
+
+export function resolveKeyframeGenerationTimeoutPolicy(input: {
+  detail: Pick<TaskDetail, "taskRunConfig">
+  continueExecution?: boolean
+}) {
+  const reviewGateActive =
+    input.detail.taskRunConfig.executionMode === "review_required" && !input.continueExecution
+
+  return reviewGateActive
+    ? {
+        timeoutMs: REVIEW_REQUIRED_KEYFRAME_TIMEOUT_MS,
+        onTimeoutMessage: "Image generation timed out before review assets were ready",
+      }
+    : {
+        timeoutMs: DEGRADABLE_KEYFRAME_TIMEOUT_MS,
+        onTimeoutMessage: "Image generation timeout, switching to video-derived keyframe",
+      }
 }
 
 function getModelControlMasterKey() {

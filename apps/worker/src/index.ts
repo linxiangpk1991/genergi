@@ -18,6 +18,7 @@ import {
   createSceneVideoBundle,
   describeRuntimeGenerationConfig,
   prepareTaskBlueprint,
+  resolveKeyframeGenerationTimeoutPolicy,
   resolveRuntimeGenerationConfig,
   synthesizeNarration,
   upsertTaskBlueprintSnapshot,
@@ -113,6 +114,10 @@ async function writeTaskArtifacts(
     | null = null
   try {
     await writeWorkerHeartbeat(`Generating keyframes for ${taskId} with ${runtime.imageModelLabel}`)
+    const keyframeTimeoutPolicy = resolveKeyframeGenerationTimeoutPolicy({
+      detail: preparedDetail,
+      continueExecution: options.continueExecution,
+    })
     keyframes = await Promise.race([
       createKeyframeBundle({
         taskId,
@@ -120,7 +125,7 @@ async function writeTaskArtifacts(
         model: runtime.imageModelId,
       }),
       new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("Image generation timeout, switching to video-derived keyframe")), 30000),
+        setTimeout(() => reject(new Error(keyframeTimeoutPolicy.onTimeoutMessage)), keyframeTimeoutPolicy.timeoutMs),
       ),
     ])
   } catch (error) {

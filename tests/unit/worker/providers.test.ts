@@ -648,6 +648,40 @@ Here's the thing. In Chinese destiny analysis, there's a pattern called "late bl
     expect(manifest.frames[1].sceneIndex).toBe(1)
   })
 
+  it("keeps review-gated keyframe generation on the long timeout path without fallback wording", async () => {
+    const providers = await import("../../../apps/worker/src/lib/providers")
+
+    const policy = providers.resolveKeyframeGenerationTimeoutPolicy({
+      detail: createTaskDetail({
+        taskRunConfig: {
+          ...createTaskDetail().taskRunConfig,
+          executionMode: "review_required",
+        },
+      }),
+      continueExecution: false,
+    })
+
+    expect(policy.timeoutMs).toBe(300000)
+    expect(policy.onTimeoutMessage).toBe("Image generation timed out before review assets were ready")
+  })
+
+  it("keeps automated keyframe generation on the short fallback timeout path", async () => {
+    const providers = await import("../../../apps/worker/src/lib/providers")
+
+    const policy = providers.resolveKeyframeGenerationTimeoutPolicy({
+      detail: createTaskDetail({
+        taskRunConfig: {
+          ...createTaskDetail().taskRunConfig,
+          executionMode: "automated",
+        },
+      }),
+      continueExecution: false,
+    })
+
+    expect(policy.timeoutMs).toBe(30000)
+    expect(policy.onTimeoutMessage).toBe("Image generation timeout, switching to video-derived keyframe")
+  })
+
   it("uses Gemini native image generation for flash-image models that declare gemini transport", async () => {
     const providers = await import("../../../apps/worker/src/lib/providers")
     const { encryptControlPlaneSecret } = await import("../../../apps/api/src/lib/model-control/crypto")

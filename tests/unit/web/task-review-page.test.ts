@@ -14,6 +14,8 @@ vi.mock("../../../apps/web/src/api", async () => {
       listTasks: vi.fn(),
       getTaskDetail: vi.fn(),
       getTaskCurrentBlueprint: vi.fn(),
+      reviewTaskBlueprint: vi.fn(),
+      resumeCurrentBlueprint: vi.fn(),
     },
   }
 })
@@ -196,6 +198,119 @@ describe("TaskReviewPage", () => {
       review: null,
       nextStage: { canResumeExecution: false, resumePath: null },
     } as any)
+
+    vi.mocked(api.reviewTaskBlueprint).mockResolvedValue({
+      blueprint: {
+        taskId: "task_reviewable",
+        version: 3,
+        status: "approved",
+        updatedAt: "2026-04-20T00:05:00.000Z",
+        blueprint: {
+          taskId: "task_reviewable",
+          projectId: "project_default",
+          version: 3,
+          createdAt: "2026-04-20T00:00:00.000Z",
+          executionMode: "review_required",
+          renderSpec: {
+            terminalPresetId: "phone_portrait",
+            width: 1080,
+            height: 1920,
+            aspectRatio: "9:16",
+            safeArea: { topPct: 8, rightPct: 6, bottomPct: 10, leftPct: 6 },
+            compositionGuideline: "主体保持在竖屏中心安全区",
+            motionGuideline: "优先轻推拉",
+          },
+          globalTheme: "Desk setup refresh",
+          visualStyleGuide: "Premium silver, soft daylight, crisp desk reflections",
+          subjectProfile: "Single hero product",
+          productProfile: "Fast charging dock",
+          backgroundConstraints: ["clean desk"],
+          negativeConstraints: ["no subtitles"],
+          totalVoiceoverScript: "Show the clutter, reveal the product, end with the clean setup.",
+          sceneContracts: [
+            {
+              id: "scene_1",
+              index: 0,
+              sceneGoal: "Open on desk clutter",
+              voiceoverScript: "Your desk starts like this.",
+              startFrameDescription: "Hook frame with cable clutter",
+              imagePrompt: "Vertical product ad frame, cable clutter on desk",
+              videoPrompt: "Slow push-in over the clutter before the product appears",
+              startFrameIntent: "Introduce the problem",
+              endFrameIntent: "Hold the problem state",
+              durationSec: 5,
+              transitionHint: "hard cut",
+              continuityConstraints: ["product hidden"],
+            },
+          ],
+        },
+        keyframeManifestPath: null,
+      },
+      review: {
+        taskId: "task_reviewable",
+        version: 3,
+        decision: "approved",
+        note: null,
+        decidedAt: "2026-04-20T00:05:00.000Z",
+      },
+      projectLibraryEntry: null,
+      nextStage: { canResumeExecution: true, resumePath: "/task-review?taskId=task_reviewable" },
+    } as any)
+
+    vi.mocked(api.resumeCurrentBlueprint).mockResolvedValue({
+      blueprint: {
+        taskId: "task_reviewable",
+        version: 3,
+        status: "approved",
+        updatedAt: "2026-04-20T00:06:00.000Z",
+        blueprint: {
+          taskId: "task_reviewable",
+          projectId: "project_default",
+          version: 3,
+          createdAt: "2026-04-20T00:00:00.000Z",
+          executionMode: "review_required",
+          renderSpec: {
+            terminalPresetId: "phone_portrait",
+            width: 1080,
+            height: 1920,
+            aspectRatio: "9:16",
+            safeArea: { topPct: 8, rightPct: 6, bottomPct: 10, leftPct: 6 },
+            compositionGuideline: "主体保持在竖屏中心安全区",
+            motionGuideline: "优先轻推拉",
+          },
+          globalTheme: "Desk setup refresh",
+          visualStyleGuide: "Premium silver, soft daylight, crisp desk reflections",
+          subjectProfile: "Single hero product",
+          productProfile: "Fast charging dock",
+          backgroundConstraints: ["clean desk"],
+          negativeConstraints: ["no subtitles"],
+          totalVoiceoverScript: "Show the clutter, reveal the product, end with the clean setup.",
+          sceneContracts: [
+            {
+              id: "scene_1",
+              index: 0,
+              sceneGoal: "Open on desk clutter",
+              voiceoverScript: "Your desk starts like this.",
+              startFrameDescription: "Hook frame with cable clutter",
+              imagePrompt: "Vertical product ad frame, cable clutter on desk",
+              videoPrompt: "Slow push-in over the clutter before the product appears",
+              startFrameIntent: "Introduce the problem",
+              endFrameIntent: "Hold the problem state",
+              durationSec: 5,
+              transitionHint: "hard cut",
+              continuityConstraints: ["product hidden"],
+            },
+          ],
+        },
+        keyframeManifestPath: null,
+      },
+      queue: {
+        queued: true,
+        reason: "resume_blueprint_execution",
+        continueExecution: true,
+      },
+      nextStage: { canResumeExecution: false, resumePath: null },
+    } as any)
   })
 
   afterEach(async () => {
@@ -233,5 +348,208 @@ describe("TaskReviewPage", () => {
     expect(text).toContain("Slow push-in over the clutter before the product appears")
     expect(text).toContain("1080 × 1920")
     expect(text).toContain("9:16")
+  })
+
+  it("prefers actionable review tasks even when the blueprint is already approved", async () => {
+    vi.mocked(api.listTasks).mockResolvedValueOnce({
+      tasks: [
+        {
+          id: "task_approved",
+          projectId: "project_default",
+          title: "Approved task",
+          modeId: "high_quality",
+          executionMode: "review_required",
+          channelId: "reels",
+          terminalPresetId: "phone_portrait",
+          renderSpecJson: {
+            terminalPresetId: "phone_portrait",
+            width: 1080,
+            height: 1920,
+            aspectRatio: "9:16",
+            safeArea: { topPct: 8, rightPct: 6, bottomPct: 10, leftPct: 6 },
+            compositionGuideline: "主体保持在竖屏中心安全区",
+            motionGuideline: "优先轻推拉",
+          },
+          targetDurationSec: 30,
+          generationMode: "system_enhanced",
+          generationRoute: "multi_scene",
+          routeReason: "target duration exceeds single-shot limit",
+          planningVersion: "v1",
+          blueprintVersion: 2,
+          blueprintStatus: "approved",
+          actualDurationSec: null,
+          status: "waiting_review",
+          progressPct: 66,
+          retryCount: 0,
+          estimatedCostCny: 5,
+          createdAt: "2026-04-20T00:00:00.000Z",
+          updatedAt: "2026-04-20T00:00:00.000Z",
+        },
+      ],
+    } as any)
+
+    vi.mocked(api.getTaskDetail).mockResolvedValueOnce({
+      detail: {
+        taskId: "task_approved",
+        projectId: "project_default",
+        title: "Approved task",
+        script: "Approved script",
+        blueprintVersion: 2,
+        blueprintStatus: "approved",
+        taskRunConfig: {
+          projectId: "project_default",
+          modeId: "high_quality",
+          executionMode: "review_required",
+          channelId: "reels",
+          terminalPresetId: "phone_portrait",
+          renderSpecJson: {
+            terminalPresetId: "phone_portrait",
+            width: 1080,
+            height: 1920,
+            aspectRatio: "9:16",
+            safeArea: { topPct: 8, rightPct: 6, bottomPct: 10, leftPct: 6 },
+            compositionGuideline: "主体保持在竖屏中心安全区",
+            motionGuideline: "优先轻推拉",
+          },
+          targetDurationSec: 30,
+          generationMode: "system_enhanced",
+          generationRoute: "multi_scene",
+          routeReason: "target duration exceeds single-shot limit",
+          planningVersion: "v1",
+          blueprintVersion: 2,
+          blueprintStatus: "approved",
+          imageModel: { id: "image.default", label: "Gemini 3 Pro Image Preview", provider: "openai-compatible" },
+          textModel: { id: "text.default", label: "Claude Opus 4.6", provider: "anthropic-compatible" },
+          videoModel: { id: "video.default", label: "Veo 3.1 Portrait", provider: "openai-compatible" },
+          ttsProvider: "edge-tts",
+          contentLocale: "en",
+          operatorLocale: "zh-CN",
+          requireStoryboardReview: true,
+          requireKeyframeReview: true,
+          budgetLimitCny: 5,
+          aspectRatio: "9:16",
+          slotSnapshots: [],
+        },
+        scenes: [],
+        updatedAt: "2026-04-20T00:00:00.000Z",
+      },
+    } as any)
+
+    vi.mocked(api.getTaskCurrentBlueprint).mockResolvedValueOnce({
+      blueprint: {
+        taskId: "task_approved",
+        version: 2,
+        status: "approved",
+        updatedAt: "2026-04-20T00:00:00.000Z",
+        blueprint: {
+          taskId: "task_approved",
+          projectId: "project_default",
+          version: 2,
+          createdAt: "2026-04-20T00:00:00.000Z",
+          executionMode: "review_required",
+          renderSpec: {
+            terminalPresetId: "phone_portrait",
+            width: 1080,
+            height: 1920,
+            aspectRatio: "9:16",
+            safeArea: { topPct: 8, rightPct: 6, bottomPct: 10, leftPct: 6 },
+            compositionGuideline: "主体保持在竖屏中心安全区",
+            motionGuideline: "优先轻推拉",
+          },
+          globalTheme: "Desk setup refresh",
+          visualStyleGuide: "Premium silver, soft daylight, crisp desk reflections",
+          subjectProfile: "Single hero product",
+          productProfile: "Fast charging dock",
+          backgroundConstraints: ["clean desk"],
+          negativeConstraints: ["no subtitles"],
+          totalVoiceoverScript: "Approved voiceover.",
+          sceneContracts: [],
+        },
+        keyframeManifestPath: null,
+      },
+      review: {
+        taskId: "task_approved",
+        version: 2,
+        decision: "approved",
+        note: null,
+        decidedAt: "2026-04-20T00:00:00.000Z",
+      },
+      nextStage: { canResumeExecution: true, resumePath: "/task-review?taskId=task_approved" },
+    } as any)
+
+    await act(async () => {
+      root.render(
+        createElement(
+          MemoryRouter,
+          { initialEntries: ["/task-review"] },
+          createElement(
+            Routes,
+            null,
+            createElement(Route, { path: "/task-review", element: createElement(TaskReviewPage) }),
+          ),
+        ),
+      )
+    })
+
+    await waitFor(() => {
+      expect(vi.mocked(api.getTaskDetail)).toHaveBeenCalledWith("task_approved")
+    })
+  })
+
+  it("syncs the visible blueprint status after approval and allows resume", async () => {
+    await act(async () => {
+      root.render(
+        createElement(
+          MemoryRouter,
+          { initialEntries: ["/task-review?taskId=task_reviewable"] },
+          createElement(
+            Routes,
+            null,
+            createElement(Route, { path: "/task-review", element: createElement(TaskReviewPage) }),
+          ),
+        ),
+      )
+    })
+
+    await waitFor(() => {
+      expect(container.textContent ?? "").toContain("ready_for_review")
+    })
+
+    const approveButton = Array.from(container.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("审核通过"),
+    )
+    expect(approveButton).toBeTruthy()
+
+    await act(async () => {
+      approveButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }))
+    })
+
+    await waitFor(() => {
+      expect(vi.mocked(api.reviewTaskBlueprint)).toHaveBeenCalledWith(
+        "task_reviewable",
+        3,
+        { decision: "approved" },
+      )
+    })
+
+    await waitFor(() => {
+      const text = container.textContent ?? ""
+      expect(text).toContain("approved")
+      expect(text).not.toContain("ready_for_review")
+    })
+
+    const resumeButton = Array.from(container.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("继续完整视频生成"),
+    )
+    expect(resumeButton).toBeTruthy()
+    expect(resumeButton?.getAttribute("disabled")).toBeNull()
+
+    await act(async () => {
+      resumeButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }))
+    })
+
+    await waitFor(() => {
+      expect(vi.mocked(api.resumeCurrentBlueprint)).toHaveBeenCalledWith("task_reviewable")
+    })
   })
 })

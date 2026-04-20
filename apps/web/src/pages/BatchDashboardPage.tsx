@@ -3,8 +3,7 @@ import { Link, useSearchParams } from "react-router-dom"
 import {
   api,
   buildAssetCenterUrl,
-  buildKeyframeReviewUrl,
-  buildStoryboardReviewUrl,
+  buildTaskReviewUrl,
   type RuntimeStatusResponse,
   type TaskSummary,
 } from "../api"
@@ -24,12 +23,12 @@ function getTaskExceptionLabel(task: TaskSummary) {
     return `蓝图待审 v${task.blueprintVersion}`
   }
 
-  if (task.reviewStage === "storyboard_review") {
-    return `分镜待审 ${task.pendingReviewCount ?? 0} 项`
+  if (task.executionMode === "review_required" && task.blueprintStatus === "approved") {
+    return `蓝图已通过，待继续执行 v${task.blueprintVersion}`
   }
 
-  if (task.reviewStage === "keyframe_review") {
-    return `关键帧待审 ${task.pendingReviewCount ?? 0} 项`
+  if (task.executionMode === "review_required" && task.blueprintStatus === "rejected") {
+    return `蓝图已驳回，待重建 v${task.blueprintVersion}`
   }
 
   if (task.status === "failed") {
@@ -48,24 +47,24 @@ function getTaskActions(task: TaskSummary) {
 
   if (task.executionMode === "review_required" && task.blueprintStatus === "ready_for_review") {
     actions.push({
-      label: `继续任务审核 · v${task.blueprintVersion}`,
-      to: `/task-review?taskId=${task.id}`,
+      label: `进入任务审核 · v${task.blueprintVersion}`,
+      to: buildTaskReviewUrl(task),
       tone: "primary",
     })
   }
 
-  if (task.reviewStage === "storyboard_review") {
+  if (task.executionMode === "review_required" && task.blueprintStatus === "approved") {
     actions.push({
-      label: `继续分镜审阅${task.pendingReviewCount ? ` · ${task.pendingReviewCount}` : ""}`,
-      to: buildStoryboardReviewUrl(task.id),
+      label: `继续完整生成 · v${task.blueprintVersion}`,
+      to: buildTaskReviewUrl(task),
       tone: "primary",
     })
   }
 
-  if (task.reviewStage === "keyframe_review") {
+  if (task.executionMode === "review_required" && task.blueprintStatus === "rejected") {
     actions.push({
-      label: `继续关键帧审阅${task.pendingReviewCount ? ` · ${task.pendingReviewCount}` : ""}`,
-      to: buildKeyframeReviewUrl(task.id),
+      label: `查看驳回蓝图 · v${task.blueprintVersion}`,
+      to: buildTaskReviewUrl(task),
       tone: "primary",
     })
   }
@@ -139,8 +138,12 @@ export function BatchDashboardPage() {
     const failedCount = tasks.filter((task) => task.status === "failed").length
     const enhancedCount = tasks.filter((task) => task.generationMode === "system_enhanced").length
     const durationReadyCount = tasks.filter((task) => task.actualDurationSec != null).length
-    const storyboardReviewCount = tasks.filter((task) => task.reviewStage === "storyboard_review").length
-    const keyframeReviewCount = tasks.filter((task) => task.reviewStage === "keyframe_review").length
+    const blueprintReviewCount = tasks.filter(
+      (task) => task.executionMode === "review_required" && task.blueprintStatus === "ready_for_review",
+    ).length
+    const blueprintResumeCount = tasks.filter(
+      (task) => task.executionMode === "review_required" && task.blueprintStatus === "approved",
+    ).length
     const inToleranceCount = tasks.filter((task) => {
       if (task.actualDurationSec == null) {
         return false
@@ -154,8 +157,8 @@ export function BatchDashboardPage() {
       failedCount,
       enhancedCount,
       durationReadyCount,
-      storyboardReviewCount,
-      keyframeReviewCount,
+      blueprintReviewCount,
+      blueprintResumeCount,
       inToleranceCount,
     }
   }, [tasks])
@@ -165,8 +168,10 @@ export function BatchDashboardPage() {
       sortedTasks
         .filter(
           (task) =>
-            task.reviewStage === "storyboard_review" ||
-            task.reviewStage === "keyframe_review" ||
+            (task.executionMode === "review_required" &&
+              (task.blueprintStatus === "ready_for_review" ||
+                task.blueprintStatus === "approved" ||
+                task.blueprintStatus === "rejected")) ||
             task.status === "failed" ||
             (task.actualDurationSec != null && Math.abs(task.actualDurationSec - task.targetDurationSec) > 2),
         )
@@ -203,8 +208,8 @@ export function BatchDashboardPage() {
             <div className="metric-card"><span>增强模式</span><strong>{metrics.enhancedCount}</strong></div>
             <div className="metric-card"><span>已有成片</span><strong>{metrics.durationReadyCount}</strong></div>
             <div className="metric-card"><span>时长达标</span><strong>{metrics.inToleranceCount}</strong></div>
-            <div className="metric-card"><span>待审分镜</span><strong>{metrics.storyboardReviewCount}</strong></div>
-            <div className="metric-card"><span>待审关键帧</span><strong>{metrics.keyframeReviewCount}</strong></div>
+            <div className="metric-card"><span>待审蓝图</span><strong>{metrics.blueprintReviewCount}</strong></div>
+            <div className="metric-card"><span>待继续执行</span><strong>{metrics.blueprintResumeCount}</strong></div>
           </div>
         </section>
 
@@ -229,12 +234,12 @@ export function BatchDashboardPage() {
                     </div>
                     <span>
                       {task.targetDurationSec}s · {task.planning?.generationRouteLabel ?? "待预判"} · {task.planning?.generationPreferenceLabel ?? "待接入"}
-                      {task.reviewStage === "storyboard_review"
-                        ? ` · 待审分镜(${task.pendingReviewCount ?? 0})`
-                        : task.reviewStage === "keyframe_review"
-                          ? ` · 待审关键帧(${task.pendingReviewCount ?? 0})`
-                          : task.reviewStage === "auto_qa"
-                            ? " · 自动 QA"
+                      {task.executionMode === "review_required" && task.blueprintStatus === "ready_for_review"
+                        ? ` · 待审蓝图(v${task.blueprintVersion})`
+                        : task.executionMode === "review_required" && task.blueprintStatus === "approved"
+                          ? ` · 已通过待继续(v${task.blueprintVersion})`
+                          : task.executionMode === "review_required" && task.blueprintStatus === "rejected"
+                            ? ` · 已驳回(v${task.blueprintVersion})`
                             : ""}
                     </span>
                   </div>
@@ -244,7 +249,7 @@ export function BatchDashboardPage() {
                   </div>
                   <div>
                     <strong>¥{task.estimatedCostCny.toFixed(2)}</strong>
-                    <span>{task.status} · {task.channelId}</span>
+                    <span>{task.status} · {task.channelId} · {getTaskExceptionLabel(task)}</span>
                   </div>
                   <div className="task-item__actions">
                     {actions.map((action, index) => (

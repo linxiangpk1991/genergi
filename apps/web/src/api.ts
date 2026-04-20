@@ -409,14 +409,6 @@ export function buildKeyframePreviewUrl(taskId: string, sceneId: string) {
   return `${API_BASE_URL}/api/tasks/${taskId}/keyframes/${sceneId}/preview`
 }
 
-export function buildStoryboardReviewUrl(taskId?: string, sceneId?: string) {
-  return buildWorkspaceUrl("/storyboard-review", { taskId, sceneId })
-}
-
-export function buildKeyframeReviewUrl(taskId?: string, sceneId?: string) {
-  return buildWorkspaceUrl("/keyframe-review", { taskId, sceneId })
-}
-
 export function buildBatchDashboardUrl(taskId?: string) {
   return buildWorkspaceUrl("/batch-dashboard", { taskId })
 }
@@ -426,19 +418,15 @@ export function buildAssetCenterUrl(taskId?: string) {
 }
 
 export function buildTaskReviewUrl(
-  task: Pick<TaskSummary, "id" | "reviewStage" | "blueprintStatus">,
-  sceneId?: string,
+  task: Pick<TaskSummary, "id" | "executionMode" | "blueprintStatus">,
 ) {
-  if ("blueprintStatus" in task && task.blueprintStatus === "ready_for_review") {
+  if (
+    task.executionMode === "review_required" &&
+    (task.blueprintStatus === "ready_for_review" ||
+      task.blueprintStatus === "approved" ||
+      task.blueprintStatus === "rejected")
+  ) {
     return buildWorkspaceUrl("/task-review", { taskId: task.id })
-  }
-
-  if (task.reviewStage === "keyframe_review") {
-    return buildKeyframeReviewUrl(task.id, sceneId)
-  }
-
-  if (task.reviewStage === "storyboard_review") {
-    return buildStoryboardReviewUrl(task.id, sceneId)
   }
 
   return buildAssetCenterUrl(task.id)
@@ -658,16 +646,6 @@ export const api = {
       method: "POST",
     }),
   getTaskAssets: (taskId: string) => request<{ assets: AssetRecord[] }>(`/api/tasks/${taskId}/assets`),
-  submitStoryboardReview: (taskId: string, sceneId: string, payload: ReviewDecisionPayload) =>
-    request<ReviewMutationResponse>(`/api/tasks/${taskId}/reviews/storyboard_review/${sceneId}`, {
-      method: "POST",
-      body: JSON.stringify(payload),
-    }),
-  submitKeyframeReview: (taskId: string, sceneId: string, payload: ReviewDecisionPayload) =>
-    request<ReviewMutationResponse>(`/api/tasks/${taskId}/reviews/keyframe_review/${sceneId}`, {
-      method: "POST",
-      body: JSON.stringify(payload),
-    }),
   createTask: (payload: CreateTaskPayload) =>
     request<{ task: TaskSummary }>("/api/tasks", {
       method: "POST",

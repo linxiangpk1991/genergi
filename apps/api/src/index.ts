@@ -24,8 +24,6 @@ import {
   readModelDefaults,
   readModelRecords,
   readProviderRecords,
-  reviewDecisionBodySchema,
-  reviewDecisionInputSchema,
   readRuntimeStatus,
   replaceModelDefaults,
   replaceModelRecords,
@@ -36,7 +34,7 @@ import {
 } from "@genergi/shared"
 import { clearSession, getAuthStatus, getSessionUser, loginWithPassword, requireAuth } from "./lib/auth.js"
 import { assertQueueAvailable, enqueueTask, QueueUnavailableError } from "./lib/queue/enqueue.js"
-import { applySceneReviewDecision, createTask, deleteTask, getTaskAsset, getTaskAssets, getTaskDetail, listTasks } from "./lib/task-store.js"
+import { createTask, deleteTask, getTaskAsset, getTaskAssets, getTaskDetail, listTasks } from "./lib/task-store.js"
 import {
   approveTaskBlueprint,
   createTaskBlueprintVersion,
@@ -1662,58 +1660,6 @@ app.get("/api/tasks/:taskId/assets/:assetId/preview", async (c) => {
 
   return sendAssetFile(c, asset, "inline")
 })
-
-app.post(
-  "/api/tasks/:taskId/reviews/storyboard_review/:sceneId",
-  requireAuth(),
-  zValidator("json", reviewDecisionBodySchema),
-  async (c) => {
-    const result = await applySceneReviewDecision(
-      c.req.param("taskId"),
-      {
-        ...c.req.valid("json"),
-        stage: "storyboard_review",
-        sceneId: c.req.param("sceneId"),
-      },
-    )
-
-    if (!result) {
-      const detail = await getTaskDetail(c.req.param("taskId"))
-      return c.json({ message: detail ? "SCENE_NOT_FOUND" : "TASK_NOT_FOUND" }, 404)
-    }
-
-    return c.json({
-      task: enrichSummary(result.summary),
-      detail: enrichDetail(result.detail),
-    })
-  },
-)
-
-app.post(
-  "/api/tasks/:taskId/reviews/keyframe_review/:sceneId",
-  requireAuth(),
-  zValidator("json", reviewDecisionBodySchema),
-  async (c) => {
-    const result = await applySceneReviewDecision(
-      c.req.param("taskId"),
-      {
-        ...c.req.valid("json"),
-        stage: "keyframe_review",
-        sceneId: c.req.param("sceneId"),
-      },
-    )
-
-    if (!result) {
-      const detail = await getTaskDetail(c.req.param("taskId"))
-      return c.json({ message: detail ? "SCENE_NOT_FOUND" : "TASK_NOT_FOUND" }, 404)
-    }
-
-    return c.json({
-      task: enrichSummary(result.summary),
-      detail: enrichDetail(result.detail),
-    })
-  },
-)
 
 app.post(
   "/api/tasks/:taskId/blueprints/:version/review",
