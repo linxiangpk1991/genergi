@@ -453,7 +453,7 @@ A few notes to make it hit:
     expect(inputs[1]?.keyframePath).toBeNull()
   })
 
-  it("keeps scene prompts anchored to the source scenes even if model hints drift", async () => {
+  it("prefers the text model's final scene scripts and prompts when they are already structured", async () => {
     const providers = await import("../../../apps/worker/src/lib/providers")
 
     const baseScenes = [
@@ -518,15 +518,90 @@ A few notes to make it hit:
       },
     })
 
-    expect(canonical[0]?.script).toBe("Explain the BaZi cycle.")
-    expect(canonical[0]?.voiceoverScript).toBe("Explain the BaZi cycle.")
-    expect(canonical[0]?.imagePrompt).toContain("Explain the BaZi cycle.")
-    expect(canonical[0]?.videoPrompt).toContain("Explain the BaZi cycle.")
-    expect(canonical[0]?.imagePrompt).not.toContain("desk lamp")
-    expect(canonical[0]?.videoPrompt).not.toContain("desk lamp")
+    expect(canonical[0]?.script).toBe("Buy this desk lamp now.")
+    expect(canonical[0]?.voiceoverScript).toBe("Buy this desk lamp now.")
+    expect(canonical[0]?.imagePrompt).toBe("A panda mascot with a desk lamp")
+    expect(canonical[0]?.videoPrompt).toBe("Sell the desk lamp with flashy camera moves")
     expect(canonical[0]?.startFrameDescription).toBe("Chinese-style room with a reader at a desk")
-    expect(canonical[0]?.imagePrompt).toContain("Chinese-style room with a reader at a desk")
-    expect(canonical[0]?.videoPrompt).toContain("Ending intent: Close on product CTA.")
+    expect(canonical[0]?.scenePurpose).toBe("Show a panda mascot selling desk products")
+    expect(canonical[0]?.endFrameIntent).toBe("Close on product CTA")
+  })
+
+  it("applies structured planning output as the final narration and prompt contract instead of resetting to the source script", async () => {
+    const providers = await import("../../../apps/worker/src/lib/providers")
+
+    const detail = createTaskDetail({
+      script: "Original source script.",
+      scenes: [
+        {
+          id: "scene_1",
+          index: 0,
+          title: "Scene 1",
+          sceneGoal: "Scene 1",
+          voiceoverScript: "Original source script.",
+          startFrameDescription: "Original frame",
+          script: "Original source script.",
+          imagePrompt: "Original image prompt",
+          videoPrompt: "Original video prompt",
+          startFrameIntent: "Original start intent",
+          endFrameIntent: "Original end intent",
+          durationSec: 15,
+          startLabel: "00:00",
+          endLabel: "00:15",
+          reviewStatus: "pending" as const,
+          keyframeStatus: "pending" as const,
+          continuityConstraints: ["same setting"],
+          reviewNote: null,
+          reviewedAt: null,
+          keyframeReviewNote: null,
+          keyframeReviewedAt: null,
+        },
+      ] as TaskDetail["scenes"],
+    })
+
+    const applied = providers.applyModelPlanningOutput(detail, {
+      generationRoute: "single_shot",
+      targetDurationSec: 15,
+      finalVoiceoverScript: "Model-approved final narration.",
+      visualStyleGuide: "Premium cinematic lighting.",
+      ctaLine: "Tap to learn more.",
+      scenePlan: [
+        {
+          sceneIndex: 0,
+          scenePurpose: "Open with the strongest visual hook",
+          durationSec: 15,
+          script: "Model scene script.",
+          voiceoverScript: "Model scene narration.",
+          startFrameDescription: "A premium product hero shot.",
+          imagePrompt: "Final polished image prompt from the text model.",
+          videoPrompt: "Final polished video prompt from the text model.",
+          startFrameIntent: "Hook instantly",
+          endFrameIntent: "Land on the CTA",
+          transitionHint: "close",
+          continuityConstraints: ["same hero product"],
+        },
+      ],
+      blueprint: {
+        executionMode: "review_required",
+        renderSpec: detail.taskRunConfig.renderSpecJson,
+        globalTheme: "Hero product launch",
+        visualStyleGuide: "Premium cinematic lighting.",
+        subjectProfile: "Single hero product",
+        productProfile: "Desk charger",
+        backgroundConstraints: ["clean premium studio"],
+        negativeConstraints: ["no subtitles"],
+        totalVoiceoverScript: "Model-approved final narration.",
+        sceneContracts: [],
+      },
+    })
+
+    expect(applied.detail.script).toBe("Model-approved final narration.")
+    expect(applied.detail.scenes[0]?.script).toBe("Model scene narration.")
+    expect(applied.detail.scenes[0]?.voiceoverScript).toBe("Model scene narration.")
+    expect(applied.blueprint.totalVoiceoverScript).toBe("Model-approved final narration.")
+    expect(applied.blueprint.sceneContracts[0]?.imagePrompt).toContain("Final polished image prompt from the text model.")
+    expect(applied.blueprint.sceneContracts[0]?.videoPrompt).toContain("Final polished video prompt from the text model.")
+    expect(applied.blueprint.sceneContracts[0]?.videoPrompt).toContain("negative constraints: no subtitles")
   })
 
   it("strips markdown separators and drops trailing incomplete sentence fragments", async () => {

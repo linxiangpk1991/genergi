@@ -32,6 +32,8 @@ describe("worker planning prompt", () => {
     expect(prompt).not.toContain("platform:")
     expect(prompt).toContain("do not add new products, offers, commercial angles, or environments")
     expect(prompt).toContain("preserve the user's original topic, domain, subject, scene, and CTA intent")
+    expect(prompt).toContain("scenePlan.script and scenePlan.voiceoverScript are the final narration draft")
+    expect(prompt).toContain("scenePlan.imagePrompt and scenePlan.videoPrompt are the final downstream prompts")
   })
 
   it("still enforces exact scene count and machine-usable output rules", async () => {

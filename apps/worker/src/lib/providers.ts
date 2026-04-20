@@ -415,56 +415,109 @@ export function buildCanonicalScenePlanFromBaseScenes(
   return scenes.map((scene, index, allScenes) => {
     const plannedScene = planned.scenePlan[index]
     const sceneGoal = plannedScene?.scenePurpose?.trim() || scene.sceneGoal || scene.title
+    const script =
+      plannedScene?.script?.trim() ||
+      plannedScene?.voiceoverScript?.trim() ||
+      scene.script
+    const voiceoverScript =
+      plannedScene?.voiceoverScript?.trim() ||
+      plannedScene?.script?.trim() ||
+      scene.voiceoverScript ||
+      scene.script
     const startFrameDescription =
       plannedScene?.startFrameDescription?.trim() ||
       scene.startFrameDescription ||
       sceneGoal
+    const startFrameIntent =
+      plannedScene?.startFrameIntent?.trim() || scene.startFrameIntent || sceneGoal
+    const endFrameIntent =
+      plannedScene?.endFrameIntent?.trim() ||
+      scene.endFrameIntent ||
+      (index === allScenes.length - 1 ? "Close on the final scene." : `Hand off from scene ${index + 1}.`)
+    const continuityConstraints =
+      plannedScene?.continuityConstraints?.length
+        ? plannedScene.continuityConstraints
+        : scene.continuityConstraints ?? []
+    const durationSec = plannedScene?.durationSec ?? scene.durationSec
     return {
       sceneIndex: scene.index,
       scenePurpose: sceneGoal,
-      durationSec: scene.durationSec,
-      script: scene.script,
-      voiceoverScript: scene.voiceoverScript ?? scene.script,
+      durationSec,
+      script,
+      voiceoverScript,
       startFrameDescription,
-      imagePrompt: buildSourceAnchoredImagePrompt({
-        sceneScript: scene.script,
-        aspectRatio,
-        sceneGoal,
-        startFrameDescription,
-        startFrameIntent: plannedScene?.startFrameIntent?.trim() || scene.startFrameIntent || sceneGoal,
-        continuityConstraints:
-          plannedScene?.continuityConstraints?.length
-            ? plannedScene.continuityConstraints
-            : scene.continuityConstraints ?? [],
-      }),
-      videoPrompt: buildSourceAnchoredVideoPrompt({
-        sceneScript: scene.script,
-        aspectRatio,
-        durationSec: scene.durationSec,
-        sceneGoal,
-        startFrameDescription,
-        startFrameIntent: plannedScene?.startFrameIntent?.trim() || scene.startFrameIntent || sceneGoal,
-        endFrameIntent:
-          plannedScene?.endFrameIntent?.trim() ||
-          scene.endFrameIntent ||
-          (index === allScenes.length - 1 ? "Close on the final scene." : `Hand off from scene ${index + 1}.`),
-        continuityConstraints:
-          plannedScene?.continuityConstraints?.length
-            ? plannedScene.continuityConstraints
-            : scene.continuityConstraints ?? [],
-      }),
-      startFrameIntent: plannedScene?.startFrameIntent?.trim() || scene.startFrameIntent || sceneGoal,
-      endFrameIntent:
-        plannedScene?.endFrameIntent?.trim() ||
-        scene.endFrameIntent ||
-        (index === allScenes.length - 1 ? "Close on the final scene." : `Hand off from scene ${index + 1}.`),
+      imagePrompt:
+        plannedScene?.imagePrompt?.trim() ||
+        buildSourceAnchoredImagePrompt({
+          sceneScript: script,
+          aspectRatio,
+          sceneGoal,
+          startFrameDescription,
+          startFrameIntent,
+          continuityConstraints,
+        }),
+      videoPrompt:
+        plannedScene?.videoPrompt?.trim() ||
+        buildSourceAnchoredVideoPrompt({
+          sceneScript: script,
+          aspectRatio,
+          durationSec,
+          sceneGoal,
+          startFrameDescription,
+          startFrameIntent,
+          endFrameIntent,
+          continuityConstraints,
+        }),
+      startFrameIntent,
+      endFrameIntent,
       transitionHint: normalizeTransitionHint(index, allScenes.length, plannedScene?.transitionHint),
-      continuityConstraints:
-        plannedScene?.continuityConstraints?.length
-          ? plannedScene.continuityConstraints
-          : scene.continuityConstraints ?? [],
+      continuityConstraints,
     }
   })
+}
+
+export function applyModelPlanningOutput(detail: TaskDetail, planned: TextPlanningOutput): {
+  detail: TaskDetail
+  blueprint: PlannedExecutionBlueprint
+  planned: TextPlanningOutput
+} {
+  const sourceScript = detail.script
+  const baseDetail = alignDetailScenes(detail, sourceScript)
+  const canonicalScenePlan = buildCanonicalScenePlanFromBaseScenes(baseDetail.scenes, planned)
+  const finalVoiceoverScript = planned.finalVoiceoverScript.trim() || sourceScript
+  const ctaLine = planned.ctaLine.trim() || canonicalScenePlan.at(-1)?.voiceoverScript || finalVoiceoverScript
+  const canonicalPlanned: TextPlanningOutput = {
+    ...planned,
+    finalVoiceoverScript,
+    ctaLine,
+    scenePlan: canonicalScenePlan,
+    blueprint: {
+      ...planned.blueprint,
+      totalVoiceoverScript: finalVoiceoverScript,
+    },
+  }
+  const blueprint = buildPlannedExecutionBlueprint(baseDetail, canonicalPlanned)
+  const normalizedScenes = buildScenesFromBlueprint(baseDetail, blueprint)
+
+  return {
+    detail: {
+      ...baseDetail,
+      script: finalVoiceoverScript,
+      blueprintVersion: baseDetail.blueprintVersion > 0 ? baseDetail.blueprintVersion : 1,
+      blueprintStatus: baseDetail.blueprintStatus,
+      taskRunConfig: {
+        ...baseDetail.taskRunConfig,
+        blueprintVersion: baseDetail.taskRunConfig.blueprintVersion > 0 ? baseDetail.taskRunConfig.blueprintVersion : 1,
+        blueprintStatus: baseDetail.taskRunConfig.blueprintStatus,
+      },
+      visualStyleGuide: canonicalPlanned.visualStyleGuide,
+      ctaLine: canonicalPlanned.ctaLine,
+      scenes: normalizedScenes,
+      updatedAt: new Date().toISOString(),
+    },
+    blueprint,
+    planned: canonicalPlanned,
+  }
 }
 
 export function buildPlannedExecutionBlueprint(
@@ -1056,6 +1109,9 @@ export function buildPlanningPromptContext(input: {
     "- do not output markdown separators",
     "- do not output what changed and why",
     "- finalVoiceoverScript must be direct voiceover text",
+    "- scenePlan.script and scenePlan.voiceoverScript are the final narration draft for downstream TTS and subtitles",
+    "- scenePlan.imagePrompt and scenePlan.videoPrompt are the final downstream prompts for image and video generation",
+    "- make every scene prompt directly usable by the next model call; do not use placeholders such as TBD, same as above, or generic references",
     "- when route is multi_scene, use the minimum number of scenes needed to satisfy the current model single-shot ceiling",
     input.generationRoute === "single_shot"
       ? "- scenePlan must contain exactly one scene"
@@ -1769,37 +1825,11 @@ async function buildPreparedTaskDetail(detail: TaskDetail): Promise<{
     const structuredAttempt = await requestStructuredPlanning(baseDetail)
     const usedFallback = !structuredAttempt.output
     const planned = structuredAttempt.output ?? buildPlanningFallback(baseDetail)
-    const canonicalScenePlan = buildCanonicalScenePlanFromBaseScenes(baseDetail.scenes, planned)
-    const canonicalPlanned: TextPlanningOutput = {
-      ...planned,
-      finalVoiceoverScript: sourceScript,
-      ctaLine: canonicalScenePlan.at(-1)?.script ?? sourceScript,
-      scenePlan: canonicalScenePlan,
-      blueprint: {
-        ...planned.blueprint,
-        totalVoiceoverScript: sourceScript,
-      },
-    }
-    const blueprint = buildPlannedExecutionBlueprint(baseDetail, canonicalPlanned)
-    const normalizedScenes = buildScenesFromBlueprint(baseDetail, blueprint)
+    const adopted = applyModelPlanningOutput(baseDetail, planned)
 
     return {
-      detail: {
-        ...baseDetail,
-        script: sourceScript,
-        blueprintVersion: baseDetail.blueprintVersion > 0 ? baseDetail.blueprintVersion : 1,
-        blueprintStatus: baseDetail.blueprintStatus,
-        taskRunConfig: {
-          ...baseDetail.taskRunConfig,
-          blueprintVersion: baseDetail.taskRunConfig.blueprintVersion > 0 ? baseDetail.taskRunConfig.blueprintVersion : 1,
-          blueprintStatus: baseDetail.taskRunConfig.blueprintStatus,
-        },
-        visualStyleGuide: canonicalPlanned.visualStyleGuide,
-        ctaLine: canonicalPlanned.ctaLine,
-        scenes: normalizedScenes,
-        updatedAt: new Date().toISOString(),
-      },
-      blueprint,
+      detail: adopted.detail,
+      blueprint: adopted.blueprint,
       planningTrace: {
         sourceScript,
         planningPrompt: structuredAttempt.promptContext,
@@ -1810,7 +1840,7 @@ async function buildPreparedTaskDetail(detail: TaskDetail): Promise<{
           baseUrl: structuredAttempt.baseUrl,
           usedFallback,
           parsedResponse: structuredAttempt.parsedResponse,
-          selectedPlan: canonicalPlanned,
+          selectedPlan: adopted.planned,
         },
       },
     }
