@@ -103,20 +103,6 @@ export type TaskPlanningSnapshot = {
 export type BootstrapResponse = {
   brand: { productName: string; companyName: string; domain: string }
   durationOptions: number[]
-  channels: Array<{ id: string; label: string; description: string }>
-  modes: Array<{
-    id: string
-    label: string
-    description: string
-    budgetLimitCny: number
-    maxSingleShotSec: number
-    executionMode: ExecutionMode
-  }>
-  generationPreferences: Array<{
-    id: GenerationPreferenceId
-    label: string
-    description: string
-  }>
 }
 
 export type RenderSpec = {
@@ -578,10 +564,6 @@ export type CreateTaskPayload = {
   script: string
   terminalPresetId: TerminalPresetId
   targetDurationSec: number
-  modeId?: string
-  channelId?: string
-  generationMode?: GenerationPreferenceId
-  modelOverrides?: Partial<Record<ModelControlSlotType, { modelId?: string; providerId?: string }>>
 }
 
 export const api = {

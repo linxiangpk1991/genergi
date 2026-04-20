@@ -4,15 +4,15 @@ export const featureGuides: HelpFeatureGuide[] = [
   {
     id: "task-launch",
     title: "任务启动",
-    purpose: "发起新的短视频生产任务，并确定内容母本、时长、渠道和生成方式。",
+    purpose: "发起新的短视频生产任务，并只确定内容母本、时长、尺寸和所属项目。",
     whenToUse: "当你准备开始一条新内容生产任务时使用。",
     sections: [
       { title: "这个页面是干什么的", points: ["负责把内容母本转成任务。", "适合确定本次任务的基础方向。"] },
-      { title: "页面主要区域", points: ["内容母本配置区", "本次任务摘要", "任务级高级覆盖"] },
-      { title: "常见操作", points: ["填写任务名称和内容母本", "选择时长与渠道", "必要时展开高级覆盖"] },
-      { title: "常见误区", points: ["不要把技术提示词直接写进内容母本", "不要把临时覆盖当成长期默认"] },
+      { title: "页面主要区域", points: ["内容母本配置区", "尺寸与时长约束", "本次任务摘要"] },
+      { title: "常见操作", points: ["填写任务名称和内容母本", "选择时长和终端尺寸", "确认所属项目后直接提交"] },
+      { title: "常见误区", points: ["不要把技术提示词直接写进内容母本", "不要期待系统替你改题材或换主体"] },
     ],
-    relatedWorkflowIds: ["launch-review-delivery", "model-onboarding-and-defaults"],
+    relatedWorkflowIds: ["launch-review-delivery"],
   },
   {
     id: "task-review",
@@ -69,14 +69,14 @@ export const featureGuides: HelpFeatureGuide[] = [
   {
     id: "model-control-center",
     title: "模型控制中心",
-    purpose: "管理 Provider、Model、默认值和任务级模型覆盖的基线规则。",
+    purpose: "管理 Provider、Model 和默认值基线规则，决定新任务创建时会冻结哪套运行时能力。",
     whenToUse: "当你需要接入新模型、调整默认值或理解模型如何生效时使用。",
     sections: [
       { title: "这个页面是干什么的", points: ["帮助你维护模型接入链路。", "帮助你理解默认值如何影响任务。"] },
       { title: "页面主要区域", points: ["总览", "Provider 管理", "Model Registry", "Defaults Center"] },
       { title: "四个运行时槽位", points: ["文本模型负责规划与改写", "图片模型负责关键帧与静态图", "视频模型负责视频生成", "TTS Provider 负责配音"] },
-      { title: "常见操作", points: ["新增 Provider", "登记 Model", "设置模式默认", "查看覆盖现状"] },
-      { title: "常见误区", points: ["不要用任务覆盖代替默认值治理", "不要把未校验记录当成可用项", "不要把系统理解成旧分镜/旧关键帧双审核链"] },
+      { title: "常见操作", points: ["新增 Provider", "登记 Model", "设置全局默认与模式默认", "确认冻结快照会采用哪套默认值"] },
+      { title: "常见误区", points: ["不要把默认值治理理解成内容改写开关", "不要把未校验记录当成可用项", "不要把系统理解成旧分镜/旧关键帧双审核链"] },
     ],
     relatedWorkflowIds: ["model-onboarding-and-defaults"],
   },

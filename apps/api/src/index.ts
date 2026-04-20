@@ -1113,23 +1113,6 @@ app.get("/api/bootstrap", (c) => {
   return c.json({
     brand: BRAND,
     durationOptions: VIDEO_DURATION_PRESETS,
-    channels: Object.entries(CHANNELS).map(([id, value]) => ({ id, ...value })),
-    generationPreferences: GENERATION_PREFERENCES.map(({ id, label, description }) => ({
-      id,
-      label,
-      description,
-    })),
-    modes: Object.entries(MODE_MODELS).map(([id, mode]) => ({
-      id,
-      label: id === "mass_production" ? "量产模式" : "高质量模式",
-      description:
-        id === "mass_production"
-          ? "侧重效率、批量生产与成本控制"
-          : "侧重品牌表现、审阅质量与最终画面效果",
-      budgetLimitCny: mode.budgetLimitCny,
-      maxSingleShotSec: resolveVideoModelCapability(mode.videoModel.id).maxSingleShotSec,
-      executionMode: mode.executionMode,
-    })),
   })
 })
 

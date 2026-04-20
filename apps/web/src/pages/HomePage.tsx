@@ -148,6 +148,7 @@ export function HomePage() {
   );
   const renderSpec = getRenderSpec(terminalPresetId);
   const selectedExecutionMode = "review_required";
+  const selectedExecutionModeLabel = "审核优先";
 
   const routePreview =
     targetDurationSec <= 8
@@ -331,7 +332,7 @@ export function HomePage() {
             </div>
             <div className="planning-chip">
               <span className="planning-chip__label">执行方式</span>
-              <strong>{selectedExecutionMode}</strong>
+              <strong>{selectedExecutionModeLabel}</strong>
               <span>
                 {selectedExecutionMode === "review_required"
                   ? "关键画面与提示词审核通过后，才继续完整视频生成。"
@@ -359,7 +360,7 @@ export function HomePage() {
             </div>
             <div className="metric-row">
               <span>执行方式</span>
-              <strong>{selectedExecutionMode}</strong>
+              <strong>{selectedExecutionModeLabel}</strong>
             </div>
             <div className="metric-row">
               <span>目标正片长度</span>

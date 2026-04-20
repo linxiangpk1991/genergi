@@ -398,7 +398,7 @@ export function AssetsPage() {
 
           <div className="planning-summary-card">
             <strong>{selectedTask?.planning?.generationRouteLabel ?? "待预判"}</strong>
-            <span>{selectedTask?.planning?.planningSummary ?? "这里会展示 route、时长和生成方式的真实摘要。"}</span>
+            <span>{selectedTask?.planning?.planningSummary ?? "这里会展示分镜路由、目标时长和规划原则的真实摘要。"}</span>
             <div className="planning-summary-tags">
               <span className="pill pill--sm">{selectedTask?.planning?.generationPreferenceLabel ?? "待接入"}</span>
               <span className="pill pill--sm">目标 {selectedTask?.targetDurationSec ?? 0}s</span>
@@ -565,7 +565,7 @@ export function AssetsPage() {
                 <div className="task-item"><strong>失败原因</strong><span>{selectedTask.failureReason}</span></div>
               ) : null}
               <div className="task-item"><strong>分镜路由依据</strong><span>{selectedTask?.routeReason ?? "待接入"}</span></div>
-              <div className="task-item"><strong>内容策略</strong><span>{selectedTask?.planning?.generationPreferenceLabel ?? "待接入"}</span></div>
+              <div className="task-item"><strong>规划原则</strong><span>{selectedTask?.planning?.generationPreferenceLabel ?? "待接入"}</span></div>
               <div className="task-item"><strong>当前链路</strong><span>{getTaskFlowLabel(selectedTask)}</span></div>
               <div className="task-item"><strong>可预览资产</strong><span>{assetStats.previewableCount} 个</span></div>
               <div className="task-item"><strong>已就绪资产</strong><span>{assetStats.readyCount} 个</span></div>

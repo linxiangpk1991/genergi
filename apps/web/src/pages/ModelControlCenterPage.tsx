@@ -143,8 +143,8 @@ export function ModelControlCenterPage() {
             </p>
           </div>
           <div className="planning-summary-tags">
-            <span className="pill pill--sm">六个槽位统一管控</span>
-            <span className="pill pill--sm">任务覆盖 &gt; 模式默认 &gt; 全局默认</span>
+            <span className="pill pill--sm">四个运行时槽位</span>
+            <span className="pill pill--sm">冻结快照 &gt; 模式默认 &gt; 全局默认</span>
           </div>
         </div>
 
@@ -167,11 +167,11 @@ export function ModelControlCenterPage() {
           <div className="model-control-hero__rail">
             <div className="hero-rail-card">
               <strong>先校验，再入池</strong>
-              <span>只有可用记录会出现在选择列表里。</span>
+              <span>只有可用记录会出现在默认值选择列表里。</span>
             </div>
             <div className="hero-rail-card">
               <strong>创建后即冻结</strong>
-              <span>任务创建后继续沿用当时的解析结果。</span>
+              <span>任务创建时会冻结当下有效的默认值解析结果。</span>
             </div>
           </div>
         </div>
@@ -195,7 +195,7 @@ export function ModelControlCenterPage() {
           <div className="stat-card">
             <span>可用模型记录</span>
             <strong>{modelSummary.available}</strong>
-            <small>仅 `available` 才能在任务页覆盖</small>
+            <small>仅 `available` 才能进入默认值选择池</small>
           </div>
           <div className="stat-card">
             <span>异常 / 已弃用</span>
@@ -224,7 +224,7 @@ export function ModelControlCenterPage() {
         <Link className="card model-control-link-card" to="/model-control-center/registry">
           <div className="eyebrow">Step 2</div>
           <h3>Model Registry</h3>
-          <p>为六个槽位分别登记可运行模型，并记录能力元数据和绑定的 provider。</p>
+          <p>为四个运行时槽位登记可运行模型，并记录能力元数据和绑定的 provider。</p>
           <div className="planning-inline">
             <span className={getStatusClass("available")}>{modelSummary.available} 可用</span>
             <span className={getStatusClass("validating")}>{modelSummary.validating} 校验中</span>
@@ -251,22 +251,22 @@ export function ModelControlCenterPage() {
         <div className="precedence-strip">
           <div className="planning-note-card">
             <strong>1. 全局默认</strong>
-            <span>给所有模式提供兜底选择。只有当模式层和任务层都没有指定时才生效。</span>
+            <span>给所有模式提供兜底选择。只有当模式层没有指定时才生效。</span>
           </div>
           <div className="planning-note-card">
             <strong>2. 模式默认</strong>
             <span>给 `量产模式` / `高质量模式` 提供更贴近业务目标的默认组合，会覆盖全局默认。</span>
           </div>
           <div className="planning-note-card">
-            <strong>3. 任务临时覆盖</strong>
-            <span>仅在任务发起时从可选池挑选单次覆盖项，优先级最高，但只影响当前任务。</span>
+            <strong>3. 任务冻结快照</strong>
+            <span>任务创建时会把当下有效的默认值冻结进 taskRunConfig，之后历史任务不再跟随后续默认值变化。</span>
           </div>
         </div>
       </section>
 
       <section className="card">
         <div className="section-header">
-          <h2>六槽位覆盖现状</h2>
+          <h2>四槽位默认值现状</h2>
           <span className="muted">按模式查看当前默认组合。</span>
         </div>
         <div className="summary-list">

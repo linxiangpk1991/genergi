@@ -10,8 +10,8 @@ export const workflowGuides: HelpWorkflowGuide[] = [
       {
         id: "launch",
         title: "任务启动",
-        description: "在任务启动页填写任务名称、内容母本、时长和渠道，发起新任务。",
-        notes: ["先把内容写清楚，再考虑是否需要高级覆盖。"],
+        description: "在任务启动页填写任务名称、内容母本、时长、尺寸和所属项目，发起新任务。",
+        notes: ["先把内容写清楚，再确认输出时长和终端尺寸。"],
       },
       {
         id: "task-review",
@@ -27,7 +27,7 @@ export const workflowGuides: HelpWorkflowGuide[] = [
       },
     ],
     decisionPoints: [
-      "任务启动时先确定时长和生成方式，再决定是否使用高级覆盖。",
+      "任务启动时只需要确定内容母本、时长和终端尺寸，系统会按保真优先的单一路径规划分镜。",
       "任务审核通过后，任务才会继续完整视频生成；审核驳回则需要重建蓝图。",
       "交付资产里优先看最终视频，再决定是否需要继续回查中间产物。",
     ],
@@ -35,9 +35,9 @@ export const workflowGuides: HelpWorkflowGuide[] = [
   },
   {
     id: "model-onboarding-and-defaults",
-    title: "模型接入 -> 模型登记 -> 默认值设置 -> 任务覆盖",
-    summary: "适合理解模型控制中心的完整使用顺序，以及默认值和任务覆盖如何生效。",
-    audienceNote: "最适合模型接入、调参和运营配置负责人。",
+    title: "模型接入 -> 模型登记 -> 默认值设置",
+    summary: "适合理解模型控制中心的稳定基线如何形成，以及新任务创建时会冻结哪套默认值。",
+    audienceNote: "最适合模型接入、调参与系统配置负责人。",
     stages: [
       {
         id: "provider",
@@ -48,28 +48,22 @@ export const workflowGuides: HelpWorkflowGuide[] = [
       {
         id: "registry",
         title: "登记 Model",
-        description: "把可运行模型按槽位登记到 Model Registry，并绑定对应 Provider。",
+        description: "把可运行模型按四个运行时槽位登记到 Model Registry，并绑定对应 Provider。",
         notes: ["当前只维护四个运行时槽位：文本、图片、视频、TTS。", "不要再按草图/终稿去理解图片和视频模型。"],
       },
       {
         id: "defaults",
         title: "设置默认值",
         description: "在 Defaults Center 中设置全局默认和模式默认，形成稳定基线。",
-        notes: ["模式默认会覆盖全局默认。"],
-      },
-      {
-        id: "override",
-        title: "任务覆盖",
-        description: "某条任务需要临时切换模型时，再在任务启动页做单次覆盖。",
-        notes: ["覆盖只影响当前任务，创建后会被冻结。"],
+        notes: ["模式默认会覆盖全局默认。", "任务创建时只会冻结当下有效的默认值，不再在任务页做临时覆盖。"],
       },
     ],
     decisionPoints: [
-      "只有通过校验的 Provider 和 Model 才会进入可选池。",
-      "默认值优先级固定：任务覆盖 > 模式默认 > 全局默认。",
-      "任务创建后冻结快照，后续默认值变化不会影响历史任务。",
+      "只有通过校验的 Provider 和 Model 才会进入默认值可选池。",
+      "默认值优先级固定：模式默认 > 全局默认；任务创建后会冻结为任务快照。",
+      "后续再调整默认值，不会回写已经创建的历史任务。",
     ],
-    relatedFeatureIds: ["model-control-center", "task-launch"],
+    relatedFeatureIds: ["model-control-center"],
   },
   {
     id: "failure-triage",

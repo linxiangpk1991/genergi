@@ -136,7 +136,8 @@ export function BatchDashboardPage() {
     const runningCount = tasks.filter((task) => task.status === "running").length
     const completedCount = tasks.filter((task) => task.status === "completed").length
     const failedCount = tasks.filter((task) => task.status === "failed").length
-    const enhancedCount = tasks.filter((task) => task.generationMode === "system_enhanced").length
+    const sourceLockedCount = tasks.filter((task) => task.generationMode === "user_locked").length
+    const legacyEnhancedCount = tasks.filter((task) => task.generationMode === "system_enhanced").length
     const durationReadyCount = tasks.filter((task) => task.actualDurationSec != null).length
     const blueprintReviewCount = tasks.filter(
       (task) => task.executionMode === "review_required" && task.blueprintStatus === "ready_for_review",
@@ -155,7 +156,8 @@ export function BatchDashboardPage() {
       runningCount,
       completedCount,
       failedCount,
-      enhancedCount,
+      sourceLockedCount,
+      legacyEnhancedCount,
       durationReadyCount,
       blueprintReviewCount,
       blueprintResumeCount,
@@ -205,7 +207,7 @@ export function BatchDashboardPage() {
             <div className="metric-card"><span>运行中</span><strong>{metrics.runningCount}</strong></div>
             <div className="metric-card"><span>已完成</span><strong>{metrics.completedCount}</strong></div>
             <div className="metric-card"><span>异常任务</span><strong>{metrics.failedCount}</strong></div>
-            <div className="metric-card"><span>增强模式</span><strong>{metrics.enhancedCount}</strong></div>
+            <div className="metric-card"><span>保真优先</span><strong>{metrics.sourceLockedCount}</strong></div>
             <div className="metric-card"><span>已有成片</span><strong>{metrics.durationReadyCount}</strong></div>
             <div className="metric-card"><span>时长达标</span><strong>{metrics.inToleranceCount}</strong></div>
             <div className="metric-card"><span>待审蓝图</span><strong>{metrics.blueprintReviewCount}</strong></div>
@@ -283,7 +285,7 @@ export function BatchDashboardPage() {
             <div className="task-list compact-list">
               <div className="task-item"><strong>多段成片</strong><span>{tasks.filter((task) => task.generationRoute === "multi_scene").length} 条任务</span></div>
               <div className="task-item"><strong>忠于原脚本</strong><span>{tasks.filter((task) => task.generationMode === "user_locked").length} 条任务</span></div>
-              <div className="task-item"><strong>启用系统增强</strong><span>{metrics.enhancedCount} 条任务</span></div>
+              <div className="task-item"><strong>历史增强任务</strong><span>{metrics.legacyEnhancedCount} 条任务</span></div>
             </div>
           </section>
 

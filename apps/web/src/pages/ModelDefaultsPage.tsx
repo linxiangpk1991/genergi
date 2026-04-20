@@ -200,13 +200,13 @@ export function ModelDefaultsPage() {
             <div className="eyebrow">Defaults Center</div>
             <h2>默认值中心</h2>
             <p className="section-note">
-              这里不负责“模拟解析”，而是直接展示和提交真实默认值配置。最终生效顺序永远是任务覆盖 &gt; 模式默认 &gt; 全局默认。
+              这里不负责“模拟解析”，而是直接展示和提交真实默认值配置。任务创建时会把当前有效值冻结为任务快照。
             </p>
           </div>
           <div className="planning-summary-tags">
             <span className="pill pill--sm">全局兜底</span>
             <span className="pill pill--sm">模式覆盖</span>
-            <span className="pill pill--sm">任务页临时覆盖</span>
+            <span className="pill pill--sm">创建时冻结</span>
           </div>
         </div>
 
@@ -219,12 +219,12 @@ export function ModelDefaultsPage() {
       <section className="card">
         <div className="section-header">
           <h3>优先级说明</h3>
-          <span className="muted">默认值生效顺序</span>
+          <span className="muted">冻结关系说明</span>
         </div>
         <div className="precedence-strip">
           <div className="planning-note-card">
-            <strong>任务覆盖</strong>
-            <span>只影响本次任务，优先级最高，创建后会被冻结到 taskRunConfig。</span>
+            <strong>任务冻结快照</strong>
+            <span>任务创建时会把当前有效默认值冻结到 taskRunConfig，之后历史任务不再跟随后续默认值变化。</span>
           </div>
           <div className="planning-note-card">
             <strong>模式默认</strong>
@@ -298,7 +298,7 @@ export function ModelDefaultsPage() {
         <section key={modeId} className="card">
           <div className="section-header">
             <h3>{label}</h3>
-            <span className="muted">模式层会覆盖全局默认，但仍可被任务页单次覆盖</span>
+            <span className="muted">模式层会覆盖全局默认，并在任务创建时被冻结进任务快照</span>
           </div>
 
           {loading ? (

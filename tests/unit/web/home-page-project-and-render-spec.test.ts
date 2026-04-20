@@ -13,7 +13,6 @@ vi.mock("../../../apps/web/src/api", async () => {
       bootstrap: vi.fn(),
       listTasks: vi.fn(),
       listProjects: vi.fn(),
-      getSelectableModelPools: vi.fn(),
       createTask: vi.fn(),
     },
   }
@@ -23,7 +22,6 @@ import {
   api,
   type BootstrapResponse,
   type ProjectRecord,
-  type SelectableModelPoolsResponse,
 } from "../../../apps/web/src/api"
 import { HomePage } from "../../../apps/web/src/pages/HomePage"
 
@@ -63,32 +61,6 @@ function createBootstrapResponse(): BootstrapResponse {
       domain: "ai.genergius.com",
     },
     durationOptions: [15, 30, 45, 60],
-    channels: [
-      { id: "tiktok", label: "TikTok", description: "短节奏、强钩子、英语优先" },
-      { id: "reels", label: "Instagram Reels", description: "视觉感更强" },
-    ],
-    modes: [
-      {
-        id: "mass_production",
-        label: "量产模式",
-        description: "量产",
-        budgetLimitCny: 3,
-        maxSingleShotSec: 8,
-        executionMode: "automated",
-      },
-      {
-        id: "high_quality",
-        label: "高质量模式",
-        description: "高质",
-        budgetLimitCny: 5,
-        maxSingleShotSec: 8,
-        executionMode: "review_required",
-      },
-    ],
-    generationPreferences: [
-      { id: "user_locked", label: "忠于原脚本", description: "保留原始表达" },
-      { id: "system_enhanced", label: "启用系统增强", description: "增强传播表达" },
-    ],
   }
 }
 
@@ -117,42 +89,6 @@ function createProjects(): ProjectRecord[] {
   ]
 }
 
-function createSelectablePoolsResponse(): SelectableModelPoolsResponse {
-  return {
-    modeId: "mass_production",
-    pools: {
-      textModel: {
-        slotType: "textModel",
-        options: [{ recordId: "text-default", displayName: "Claude Opus 4.6", providerDisplayName: "Anthropic" }],
-        globalDefaultId: "text-default",
-        modeDefaultId: "text-default",
-        effectiveId: "text-default",
-      },
-      imageModel: {
-        slotType: "imageModel",
-        options: [{ recordId: "image-default", displayName: "Gemini 3 Pro Image Preview", providerDisplayName: "OpenAI Compatible" }],
-        globalDefaultId: "image-default",
-        modeDefaultId: "image-default",
-        effectiveId: "image-default",
-      },
-      videoModel: {
-        slotType: "videoModel",
-        options: [{ recordId: "video-default", displayName: "Veo 3.1 Portrait", providerDisplayName: "OpenAI Compatible" }],
-        globalDefaultId: "video-default",
-        modeDefaultId: "video-default",
-        effectiveId: "video-default",
-      },
-      ttsProvider: {
-        slotType: "ttsProvider",
-        options: [{ recordId: "provider_edge_tts", displayName: "Edge TTS", providerDisplayName: "edge-tts" }],
-        globalDefaultId: "provider_edge_tts",
-        modeDefaultId: "provider_edge_tts",
-        effectiveId: "provider_edge_tts",
-      },
-    },
-  }
-}
-
 describe("HomePage project and terminal preset flow", () => {
   let container: HTMLDivElement
   let root: Root
@@ -166,7 +102,6 @@ describe("HomePage project and terminal preset flow", () => {
     vi.mocked(api.bootstrap).mockResolvedValue(createBootstrapResponse())
     vi.mocked(api.listTasks).mockResolvedValue({ tasks: [] })
     vi.mocked(api.listProjects).mockResolvedValue({ projects: createProjects() })
-    vi.mocked(api.getSelectableModelPools).mockResolvedValue(createSelectablePoolsResponse())
     vi.mocked(api.createTask).mockResolvedValue({
       task: {
         id: "task_created",
@@ -186,7 +121,7 @@ describe("HomePage project and terminal preset flow", () => {
           motionGuideline: "允许横向环境展开",
         },
         targetDurationSec: 30,
-        generationMode: "system_enhanced",
+        generationMode: "user_locked",
         generationRoute: "multi_scene",
         routeReason: "target duration exceeds single-shot limit",
         planningVersion: "v1",
@@ -249,7 +184,7 @@ describe("HomePage project and terminal preset flow", () => {
 
     await waitFor(() => {
       const text = container.textContent ?? ""
-      expect(text).toContain("review_required")
+      expect(text).toContain("审核优先")
       expect(text).toContain("2048 × 1536")
       expect(text).toContain("4:3")
       expect(text).toContain("保真优先")
