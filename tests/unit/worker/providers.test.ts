@@ -327,6 +327,10 @@ A few notes to make it hit:
     expect(blueprint.renderSpec.height).toBe(1920)
     expect(blueprint.sceneContracts[0]?.imagePrompt).toContain("1080x1920")
     expect(blueprint.sceneContracts[0]?.videoPrompt).toContain("input frame")
+    expect(blueprint.sceneContracts[0]?.imagePrompt).toContain("subject anchor: Single desk hero")
+    expect(blueprint.sceneContracts[0]?.videoPrompt).toContain("background anchor: clean desk")
+    expect(blueprint.sceneContracts[0]?.videoPrompt).toContain("negative constraints: no subtitles")
+    expect(blueprint.sceneContracts[0]?.videoPrompt).toContain("continuity constraints: product hidden")
   })
 
   it("builds scene video inputs from keyframe manifests and falls back honestly when frames are missing", async () => {

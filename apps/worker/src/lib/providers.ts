@@ -307,6 +307,42 @@ function normalizeTransitionHint(index: number, total: number, fallback?: string
   return "cut"
 }
 
+function buildConsistencyAnchorText(input: {
+  subjectProfile: string
+  productProfile: string
+  backgroundConstraints: string[]
+  negativeConstraints: string[]
+  continuityConstraints: string[]
+}) {
+  const lines = [
+    `subject anchor: ${input.subjectProfile}`,
+    `content anchor: ${input.productProfile}`,
+    `background anchor: ${input.backgroundConstraints.length ? input.backgroundConstraints.join(" / ") : "keep one stable environment"}`,
+    `negative constraints: ${input.negativeConstraints.length ? input.negativeConstraints.join(" / ") : "none"}`,
+  ]
+
+  if (input.continuityConstraints.length) {
+    lines.push(`continuity constraints: ${input.continuityConstraints.join(" / ")}`)
+  }
+
+  return lines.join(". ")
+}
+
+function applyConsistencyAnchorsToPrompt(
+  prompt: string,
+  input: {
+    subjectProfile: string
+    productProfile: string
+    backgroundConstraints: string[]
+    negativeConstraints: string[]
+    continuityConstraints: string[]
+  },
+) {
+  const base = prompt.trim()
+  const anchorText = buildConsistencyAnchorText(input)
+  return [base, anchorText].filter(Boolean).join(" ")
+}
+
 function parseSceneDurationValue(value: unknown, fallback: number) {
   if (typeof value === "number" && Number.isFinite(value) && value > 0) {
     return Math.round(value)
@@ -376,8 +412,20 @@ export function buildPlannedExecutionBlueprint(
     sceneGoal: scene.scenePurpose,
     voiceoverScript: scene.voiceoverScript,
     startFrameDescription: scene.startFrameDescription,
-    imagePrompt: scene.imagePrompt,
-    videoPrompt: scene.videoPrompt,
+    imagePrompt: applyConsistencyAnchorsToPrompt(scene.imagePrompt, {
+      subjectProfile: planned.blueprint.subjectProfile,
+      productProfile: planned.blueprint.productProfile,
+      backgroundConstraints: planned.blueprint.backgroundConstraints,
+      negativeConstraints: planned.blueprint.negativeConstraints,
+      continuityConstraints: scene.continuityConstraints ?? [],
+    }),
+    videoPrompt: applyConsistencyAnchorsToPrompt(scene.videoPrompt, {
+      subjectProfile: planned.blueprint.subjectProfile,
+      productProfile: planned.blueprint.productProfile,
+      backgroundConstraints: planned.blueprint.backgroundConstraints,
+      negativeConstraints: planned.blueprint.negativeConstraints,
+      continuityConstraints: scene.continuityConstraints ?? [],
+    }),
     startFrameIntent: scene.startFrameIntent,
     endFrameIntent: scene.endFrameIntent,
     durationSec: scene.durationSec,
@@ -1454,10 +1502,10 @@ function buildPlanningFallback(detail: TaskDetail): TextPlanningOutput {
       renderSpec: detail.taskRunConfig.renderSpecJson,
       globalTheme: detail.title,
       visualStyleGuide: "Preserve the original subject, scene, and semantic intent with minimal structural cleanup.",
-      subjectProfile: "Maintain one consistent subject profile across all scenes.",
-      productProfile: "Keep product presentation consistent across all scenes.",
-      backgroundConstraints: [],
-      negativeConstraints: ["No subtitles", "No watermark", "No UI elements"],
+      subjectProfile: "Keep the same primary subject or speaker implied by the source script across every scene. Do not invent a new mascot, toy, or unrelated character.",
+      productProfile: "Only depict a product, service, report, or offer if the source script explicitly mentions one. Do not substitute a different product category.",
+      backgroundConstraints: ["Keep one stable environment unless the source script explicitly changes location."],
+      negativeConstraints: ["Do not introduce unrelated products", "Do not change the topic domain", "No subtitles", "No watermark", "No UI elements"],
       totalVoiceoverScript: finalVoiceoverScript,
       sceneContracts: [],
     },
