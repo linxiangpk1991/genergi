@@ -453,6 +453,80 @@ A few notes to make it hit:
     expect(inputs[1]?.keyframePath).toBeNull()
   })
 
+  it("keeps scene prompts anchored to the source scenes even if model hints drift", async () => {
+    const providers = await import("../../../apps/worker/src/lib/providers")
+
+    const baseScenes = [
+      {
+        id: "scene_1",
+        index: 0,
+        title: "Scene 1",
+        sceneGoal: "Scene 1",
+        voiceoverScript: "Explain the BaZi cycle.",
+        startFrameDescription: "A calm Chinese-style reading desk.",
+        script: "Explain the BaZi cycle.",
+        imagePrompt: "Explain the BaZi cycle. Create a 9:16 key visual that matches this exact beat of the script.",
+        videoPrompt: "Explain the BaZi cycle. Generate a 9:16 short-form social video shot for this exact script beat.",
+        startFrameIntent: "Explain the cycle",
+        endFrameIntent: "Hold on the reading desk",
+        durationSec: 8,
+        startLabel: "00:00",
+        endLabel: "00:08",
+        reviewStatus: "pending" as const,
+        keyframeStatus: "pending" as const,
+        continuityConstraints: ["same room"],
+        reviewNote: null,
+        reviewedAt: null,
+        keyframeReviewNote: null,
+        keyframeReviewedAt: null,
+      },
+    ]
+
+    const canonical = providers.buildCanonicalScenePlanFromBaseScenes(baseScenes as any, {
+      generationRoute: "multi_scene",
+      targetDurationSec: 8,
+      finalVoiceoverScript: "Explain the BaZi cycle.",
+      visualStyleGuide: "Preserve original tone.",
+      ctaLine: "Link in bio.",
+      scenePlan: [
+        {
+          sceneIndex: 0,
+          scenePurpose: "Show a panda mascot selling desk products",
+          durationSec: 8,
+          script: "Buy this desk lamp now.",
+          voiceoverScript: "Buy this desk lamp now.",
+          startFrameDescription: "Chinese-style room with a reader at a desk",
+          imagePrompt: "A panda mascot with a desk lamp",
+          videoPrompt: "Sell the desk lamp with flashy camera moves",
+          startFrameIntent: "Sell product",
+          endFrameIntent: "Close on product CTA",
+          transitionHint: "open",
+          continuityConstraints: ["same room"],
+        },
+      ],
+      blueprint: {
+        executionMode: "review_required",
+        renderSpec: createTaskDetail().taskRunConfig.renderSpecJson,
+        globalTheme: "BaZi",
+        visualStyleGuide: "Preserve original tone.",
+        subjectProfile: "Reader at desk",
+        productProfile: "BaZi report",
+        backgroundConstraints: ["Chinese-style room"],
+        negativeConstraints: ["no product swap"],
+        totalVoiceoverScript: "Explain the BaZi cycle.",
+        sceneContracts: [],
+      },
+    })
+
+    expect(canonical[0]?.script).toBe("Explain the BaZi cycle.")
+    expect(canonical[0]?.voiceoverScript).toBe("Explain the BaZi cycle.")
+    expect(canonical[0]?.imagePrompt).toContain("Explain the BaZi cycle.")
+    expect(canonical[0]?.videoPrompt).toContain("Explain the BaZi cycle.")
+    expect(canonical[0]?.imagePrompt).not.toContain("desk lamp")
+    expect(canonical[0]?.videoPrompt).not.toContain("desk lamp")
+    expect(canonical[0]?.startFrameDescription).toBe("Chinese-style room with a reader at a desk")
+  })
+
   it("strips markdown separators and drops trailing incomplete sentence fragments", async () => {
     const providers = await import("../../../apps/worker/src/lib/providers")
 

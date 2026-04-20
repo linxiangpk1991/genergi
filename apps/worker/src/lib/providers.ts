@@ -361,7 +361,7 @@ function parseSceneDurationValue(value: unknown, fallback: number) {
   return fallback
 }
 
-function buildCanonicalScenePlanFromBaseScenes(
+export function buildCanonicalScenePlanFromBaseScenes(
   scenes: StoryboardScene[],
   planned: TextPlanningOutput,
 ) {
@@ -372,13 +372,6 @@ function buildCanonicalScenePlanFromBaseScenes(
       plannedScene?.startFrameDescription?.trim() ||
       scene.startFrameDescription ||
       sceneGoal
-    const visualPromptBase =
-      plannedScene?.imagePrompt?.trim() ||
-      scene.imagePrompt
-    const videoPromptBase =
-      plannedScene?.videoPrompt?.trim() ||
-      scene.videoPrompt
-
     return {
       sceneIndex: scene.index,
       scenePurpose: sceneGoal,
@@ -386,8 +379,8 @@ function buildCanonicalScenePlanFromBaseScenes(
       script: scene.script,
       voiceoverScript: scene.voiceoverScript ?? scene.script,
       startFrameDescription,
-      imagePrompt: visualPromptBase,
-      videoPrompt: videoPromptBase,
+      imagePrompt: scene.imagePrompt,
+      videoPrompt: scene.videoPrompt,
       startFrameIntent: plannedScene?.startFrameIntent?.trim() || scene.startFrameIntent || sceneGoal,
       endFrameIntent:
         plannedScene?.endFrameIntent?.trim() ||
