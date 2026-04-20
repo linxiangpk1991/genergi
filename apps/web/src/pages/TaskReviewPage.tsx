@@ -21,7 +21,7 @@ function formatRenderSpec(detail: TaskDetail | null, blueprint: TaskBlueprintRec
 }
 
 export function TaskReviewPage() {
-  const [searchParams] = useSearchParams()
+  const [searchParams, setSearchParams] = useSearchParams()
   const routeTaskId = searchParams.get("taskId") ?? ""
 
   const [tasks, setTasks] = useState<TaskSummary[]>([])
@@ -31,6 +31,26 @@ export function TaskReviewPage() {
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState("")
+
+  const actionableTasks = useMemo(
+    () =>
+      tasks.filter(
+        (task) =>
+          task.executionMode === "review_required" &&
+          (task.blueprintStatus === "ready_for_review" ||
+            task.blueprintStatus === "approved" ||
+            task.blueprintStatus === "rejected"),
+      ),
+    [tasks],
+  )
+
+  const taskOptions = actionableTasks.length ? actionableTasks : tasks
+
+  function syncTaskRoute(taskId: string, replace = true) {
+    const nextSearchParams = new URLSearchParams(searchParams)
+    nextSearchParams.set("taskId", taskId)
+    setSearchParams(nextSearchParams, { replace })
+  }
 
   function applyBlueprintStatus(taskId: string, status: TaskBlueprintRecord["status"]) {
     setDetail((current) =>
@@ -70,13 +90,14 @@ export function TaskReviewPage() {
 
         const selectedTaskId =
           routeTaskId ||
-          taskResult.tasks.find(
-            (task) =>
-              task.executionMode === "review_required" &&
-              (task.blueprintStatus === "ready_for_review" ||
-                task.blueprintStatus === "approved" ||
-                task.blueprintStatus === "rejected"),
-          )?.id ||
+          taskResult.tasks
+            .find(
+              (task) =>
+                task.executionMode === "review_required" &&
+                (task.blueprintStatus === "ready_for_review" ||
+                  task.blueprintStatus === "approved" ||
+                  task.blueprintStatus === "rejected"),
+            )?.id ||
           taskResult.tasks[0]?.id
         if (!selectedTaskId) {
           setDetail(null)
@@ -84,6 +105,10 @@ export function TaskReviewPage() {
           setReview(null)
           setLoading(false)
           return
+        }
+
+        if (!routeTaskId) {
+          syncTaskRoute(selectedTaskId, true)
         }
 
         const [detailResult, blueprintResult] = await Promise.all([
@@ -183,6 +208,27 @@ export function TaskReviewPage() {
 
       <div className="workspace-grid">
         <section className="card card--main">
+          {taskOptions.length ? (
+            <>
+              <label className="field-label">任务选择</label>
+              <select
+                className="input"
+                value={detail?.taskId ?? routeTaskId ?? taskOptions[0]?.id ?? ""}
+                onChange={(event) => {
+                  setLoading(true)
+                  setError("")
+                  syncTaskRoute(event.target.value, false)
+                }}
+              >
+                {taskOptions.map((task) => (
+                  <option key={task.id} value={task.id}>
+                    {task.title} · {task.projectId} · {task.blueprintStatus}
+                  </option>
+                ))}
+              </select>
+            </>
+          ) : null}
+
           <div className="section-header">
             <h2>蓝图总览</h2>
             <div className="section-actions">

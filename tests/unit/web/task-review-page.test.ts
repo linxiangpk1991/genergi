@@ -552,4 +552,292 @@ describe("TaskReviewPage", () => {
       expect(vi.mocked(api.resumeCurrentBlueprint)).toHaveBeenCalledWith("task_reviewable")
     })
   })
+
+  it("lets operators switch between multiple actionable review tasks", async () => {
+    vi.mocked(api.listTasks).mockResolvedValue({
+      tasks: [
+        {
+          id: "task_reviewable",
+          projectId: "project_default",
+          title: "Reviewable task",
+          modeId: "high_quality",
+          executionMode: "review_required",
+          channelId: "reels",
+          terminalPresetId: "phone_portrait",
+          renderSpecJson: {
+            terminalPresetId: "phone_portrait",
+            width: 1080,
+            height: 1920,
+            aspectRatio: "9:16",
+            safeArea: { topPct: 8, rightPct: 6, bottomPct: 10, leftPct: 6 },
+            compositionGuideline: "主体保持在竖屏中心安全区",
+            motionGuideline: "优先轻推拉",
+          },
+          targetDurationSec: 30,
+          generationMode: "system_enhanced",
+          generationRoute: "multi_scene",
+          routeReason: "target duration exceeds single-shot limit",
+          planningVersion: "v1",
+          blueprintVersion: 3,
+          blueprintStatus: "ready_for_review",
+          actualDurationSec: null,
+          status: "waiting_review",
+          progressPct: 66,
+          retryCount: 0,
+          estimatedCostCny: 5,
+          createdAt: "2026-04-20T00:00:00.000Z",
+          updatedAt: "2026-04-20T00:00:00.000Z",
+        },
+        {
+          id: "task_second",
+          projectId: "project_campaign",
+          title: "Second review task",
+          modeId: "high_quality",
+          executionMode: "review_required",
+          channelId: "reels",
+          terminalPresetId: "tablet_landscape",
+          renderSpecJson: {
+            terminalPresetId: "tablet_landscape",
+            width: 2048,
+            height: 1536,
+            aspectRatio: "4:3",
+            safeArea: { topPct: 7, rightPct: 6, bottomPct: 7, leftPct: 6 },
+            compositionGuideline: "适合横向场景展开",
+            motionGuideline: "允许横向环境展开",
+          },
+          targetDurationSec: 15,
+          generationMode: "system_enhanced",
+          generationRoute: "multi_scene",
+          routeReason: "target duration exceeds single-shot limit",
+          planningVersion: "v1",
+          blueprintVersion: 1,
+          blueprintStatus: "approved",
+          actualDurationSec: null,
+          status: "waiting_review",
+          progressPct: 45,
+          retryCount: 0,
+          estimatedCostCny: 4,
+          createdAt: "2026-04-20T00:00:00.000Z",
+          updatedAt: "2026-04-20T00:00:00.000Z",
+        },
+      ],
+    } as any)
+
+    vi.mocked(api.getTaskDetail).mockImplementation(async (taskId: string) => {
+      if (taskId === "task_second") {
+        return {
+          detail: {
+            taskId: "task_second",
+            projectId: "project_campaign",
+            title: "Second review task",
+            script: "Second script",
+            blueprintVersion: 1,
+            blueprintStatus: "approved",
+            taskRunConfig: {
+              projectId: "project_campaign",
+              modeId: "high_quality",
+              executionMode: "review_required",
+              channelId: "reels",
+              terminalPresetId: "tablet_landscape",
+              renderSpecJson: {
+                terminalPresetId: "tablet_landscape",
+                width: 2048,
+                height: 1536,
+                aspectRatio: "4:3",
+                safeArea: { topPct: 7, rightPct: 6, bottomPct: 7, leftPct: 6 },
+                compositionGuideline: "适合横向场景展开",
+                motionGuideline: "允许横向环境展开",
+              },
+              targetDurationSec: 15,
+              generationMode: "system_enhanced",
+              generationRoute: "multi_scene",
+              routeReason: "target duration exceeds single-shot limit",
+              planningVersion: "v1",
+              blueprintVersion: 1,
+              blueprintStatus: "approved",
+              imageModel: { id: "image.default", label: "Gemini 3 Pro Image Preview", provider: "openai-compatible" },
+              textModel: { id: "text.default", label: "Claude Opus 4.6", provider: "anthropic-compatible" },
+              videoModel: { id: "video.default", label: "Veo 3.1 Portrait", provider: "openai-compatible" },
+              ttsProvider: "edge-tts",
+              contentLocale: "en",
+              operatorLocale: "zh-CN",
+              requireStoryboardReview: true,
+              requireKeyframeReview: true,
+              budgetLimitCny: 5,
+              aspectRatio: "4:3",
+              slotSnapshots: [],
+            },
+            scenes: [],
+            updatedAt: "2026-04-20T00:00:00.000Z",
+          },
+        } as any
+      }
+
+      return {
+        detail: {
+          taskId: "task_reviewable",
+          projectId: "project_default",
+          title: "Reviewable task",
+          script: "Full script",
+          blueprintVersion: 3,
+          blueprintStatus: "ready_for_review",
+          taskRunConfig: {
+            projectId: "project_default",
+            modeId: "high_quality",
+            executionMode: "review_required",
+            channelId: "reels",
+            terminalPresetId: "phone_portrait",
+            renderSpecJson: {
+              terminalPresetId: "phone_portrait",
+              width: 1080,
+              height: 1920,
+              aspectRatio: "9:16",
+              safeArea: { topPct: 8, rightPct: 6, bottomPct: 10, leftPct: 6 },
+              compositionGuideline: "主体保持在竖屏中心安全区",
+              motionGuideline: "优先轻推拉",
+            },
+            targetDurationSec: 30,
+            generationMode: "system_enhanced",
+            generationRoute: "multi_scene",
+            routeReason: "target duration exceeds single-shot limit",
+            planningVersion: "v1",
+            blueprintVersion: 3,
+            blueprintStatus: "ready_for_review",
+            imageModel: { id: "image.default", label: "Gemini 3 Pro Image Preview", provider: "openai-compatible" },
+            textModel: { id: "text.default", label: "Claude Opus 4.6", provider: "anthropic-compatible" },
+            videoModel: { id: "video.default", label: "Veo 3.1 Portrait", provider: "openai-compatible" },
+            ttsProvider: "edge-tts",
+            contentLocale: "en",
+            operatorLocale: "zh-CN",
+            requireStoryboardReview: true,
+            requireKeyframeReview: true,
+            budgetLimitCny: 5,
+            aspectRatio: "9:16",
+            slotSnapshots: [],
+          },
+          scenes: [],
+          updatedAt: "2026-04-20T00:00:00.000Z",
+        },
+      } as any
+    })
+
+    vi.mocked(api.getTaskCurrentBlueprint).mockImplementation(async (taskId: string) => {
+      if (taskId === "task_second") {
+        return {
+          blueprint: {
+            taskId: "task_second",
+            version: 1,
+            status: "approved",
+            updatedAt: "2026-04-20T00:00:00.000Z",
+            blueprint: {
+              taskId: "task_second",
+              projectId: "project_campaign",
+              version: 1,
+              createdAt: "2026-04-20T00:00:00.000Z",
+              executionMode: "review_required",
+              renderSpec: {
+                terminalPresetId: "tablet_landscape",
+                width: 2048,
+                height: 1536,
+                aspectRatio: "4:3",
+                safeArea: { topPct: 7, rightPct: 6, bottomPct: 7, leftPct: 6 },
+                compositionGuideline: "适合横向场景展开",
+                motionGuideline: "允许横向环境展开",
+              },
+              globalTheme: "Campaign task",
+              visualStyleGuide: "Warm retail setup",
+              subjectProfile: "Product set",
+              productProfile: "Charging dock",
+              backgroundConstraints: ["clean shelf"],
+              negativeConstraints: ["no subtitles"],
+              totalVoiceoverScript: "Second task voiceover.",
+              sceneContracts: [],
+            },
+            keyframeManifestPath: null,
+          },
+          review: {
+            taskId: "task_second",
+            version: 1,
+            decision: "approved",
+            note: null,
+            decidedAt: "2026-04-20T00:00:00.000Z",
+          },
+          nextStage: { canResumeExecution: true, resumePath: "/task-review?taskId=task_second" },
+        } as any
+      }
+
+      return {
+        blueprint: {
+          taskId: "task_reviewable",
+          version: 3,
+          status: "ready_for_review",
+          updatedAt: "2026-04-20T00:00:00.000Z",
+          blueprint: {
+            taskId: "task_reviewable",
+            projectId: "project_default",
+            version: 3,
+            createdAt: "2026-04-20T00:00:00.000Z",
+            executionMode: "review_required",
+            renderSpec: {
+              terminalPresetId: "phone_portrait",
+              width: 1080,
+              height: 1920,
+              aspectRatio: "9:16",
+              safeArea: { topPct: 8, rightPct: 6, bottomPct: 10, leftPct: 6 },
+              compositionGuideline: "主体保持在竖屏中心安全区",
+              motionGuideline: "优先轻推拉",
+            },
+            globalTheme: "Desk setup refresh",
+            visualStyleGuide: "Premium silver",
+            subjectProfile: "Single hero product",
+            productProfile: "Fast charging dock",
+            backgroundConstraints: ["clean desk"],
+            negativeConstraints: ["no subtitles"],
+            totalVoiceoverScript: "First task voiceover.",
+            sceneContracts: [],
+          },
+          keyframeManifestPath: null,
+        },
+        review: null,
+        nextStage: { canResumeExecution: false, resumePath: null },
+      } as any
+    })
+
+    await act(async () => {
+      root.render(
+        createElement(
+          MemoryRouter,
+          { initialEntries: ["/task-review"] },
+          createElement(
+            Routes,
+            null,
+            createElement(Route, { path: "/task-review", element: createElement(TaskReviewPage) }),
+          ),
+        ),
+      )
+    })
+
+    await waitFor(() => {
+      expect(vi.mocked(api.getTaskDetail)).toHaveBeenCalledWith("task_reviewable")
+    })
+
+    const select = container.querySelector("select") as HTMLSelectElement | null
+    expect(select).toBeTruthy()
+
+    await act(async () => {
+      select!.value = "task_second"
+      select!.dispatchEvent(new Event("change", { bubbles: true }))
+    })
+
+    await waitFor(() => {
+      expect(vi.mocked(api.getTaskDetail)).toHaveBeenCalledWith("task_second")
+      expect(vi.mocked(api.getTaskCurrentBlueprint)).toHaveBeenCalledWith("task_second")
+    })
+
+    await waitFor(() => {
+      const text = container.textContent ?? ""
+      expect(text).toContain("Second review task")
+      expect(text).toContain("Second task voiceover.")
+    })
+  })
 })
