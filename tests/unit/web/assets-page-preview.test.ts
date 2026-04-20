@@ -168,4 +168,66 @@ describe("AssetsPage inline preview", () => {
       expect(container.textContent ?? "").toContain("Original source script.")
     })
   })
+
+  it("separates failure reason from scene routing basis on failed tasks", async () => {
+    vi.mocked(api.listTasks).mockResolvedValueOnce({
+      tasks: [
+        {
+          id: "task_failed",
+          projectId: "project_default",
+          title: "Failed asset task",
+          modeId: "high_quality",
+          executionMode: "review_required",
+          channelId: "reels",
+          terminalPresetId: "phone_portrait",
+          renderSpecJson: {
+            terminalPresetId: "phone_portrait",
+            width: 1080,
+            height: 1920,
+            aspectRatio: "9:16",
+            safeArea: { topPct: 8, rightPct: 6, bottomPct: 10, leftPct: 6 },
+            compositionGuideline: "主体保持在竖屏中心安全区",
+            motionGuideline: "优先轻推拉",
+          },
+          targetDurationSec: 30,
+          generationMode: "system_enhanced",
+          generationRoute: "multi_scene",
+          routeReason: "target duration 30s exceeds the current model single-shot limit of 8s",
+          planningVersion: "v1",
+          blueprintVersion: 1,
+          blueprintStatus: "queued_for_video",
+          actualDurationSec: null,
+          status: "failed",
+          progressPct: 65,
+          retryCount: 1,
+          estimatedCostCny: 4.2,
+          failureReason: "Scene 2 video generation timeout",
+          createdAt: "2026-04-20T00:00:00.000Z",
+          updatedAt: "2026-04-20T00:00:00.000Z",
+        },
+      ],
+    } as any)
+
+    await act(async () => {
+      root.render(
+        createElement(
+          MemoryRouter,
+          { initialEntries: ["/asset-center?taskId=task_failed"] },
+          createElement(
+            Routes,
+            null,
+            createElement(Route, { path: "/asset-center", element: createElement(AssetsPage) }),
+          ),
+        ),
+      )
+    })
+
+    await waitFor(() => {
+      const text = container.textContent ?? ""
+      expect(text).toContain("失败原因")
+      expect(text).toContain("Scene 2 video generation timeout")
+      expect(text).toContain("分镜路由依据")
+      expect(text).toContain("target duration 30s exceeds the current model single-shot limit of 8s")
+    })
+  })
 })

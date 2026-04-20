@@ -448,6 +448,7 @@ export function normalizeTaskSummaryRecord(
     blueprintVersion?: number
     blueprintStatus?: BlueprintStatus
     actualDurationSec?: number | null
+    failureReason?: string | null
     reviewStage?: ReviewStageId | null
     pendingReviewCount?: number
     reviewUpdatedAt?: string | null
@@ -467,6 +468,7 @@ export function normalizeTaskSummaryRecord(
     blueprintVersion: typeof task.blueprintVersion === "number" && task.blueprintVersion >= 0 ? task.blueprintVersion : 0,
     blueprintStatus: normalizeBlueprintStatus(task.blueprintStatus),
     actualDurationSec: task.actualDurationSec ?? null,
+    failureReason: normalizeNullableString(task.failureReason),
     ...normalizeReviewSummaryRecord(task),
   }
 }
@@ -477,6 +479,7 @@ export function normalizeTaskDetailRecord(
     actualDurationSec?: number | null
     blueprintVersion?: number
     blueprintStatus?: BlueprintStatus
+    failureReason?: string | null
     reviewStage?: ReviewStageId | null
     pendingReviewCount?: number
     reviewUpdatedAt?: string | null
@@ -534,6 +537,7 @@ export function normalizeTaskDetailRecord(
         : taskRunConfig.blueprintVersion ?? 0,
     blueprintStatus: normalizeBlueprintStatus(detail.blueprintStatus ?? taskRunConfig.blueprintStatus),
     actualDurationSec: detail.actualDurationSec ?? null,
+    failureReason: normalizeNullableString(detail.failureReason),
     scenes: Array.isArray(detail.scenes)
       ? detail.scenes.map((scene) => normalizeStoryboardScene(scene))
       : [],
@@ -563,6 +567,7 @@ export function seedTaskSummaries(): TaskSummary[] {
       blueprintVersion: 0,
       blueprintStatus: "pending_generation",
       actualDurationSec: null,
+      failureReason: null,
       status: "running",
       progressPct: 40,
       retryCount: 0,
@@ -588,6 +593,7 @@ export function seedTaskSummaries(): TaskSummary[] {
       blueprintVersion: 0,
       blueprintStatus: "pending_generation",
       actualDurationSec: null,
+      failureReason: null,
       status: "failed",
       progressPct: 62,
       retryCount: 2,

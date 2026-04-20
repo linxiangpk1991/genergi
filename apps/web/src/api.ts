@@ -211,6 +211,7 @@ export type TaskSummary = {
   blueprintVersion: number
   blueprintStatus: BlueprintStatus
   actualDurationSec: number | null
+  failureReason?: string | null
   status: string
   progressPct: number
   retryCount: number
@@ -254,6 +255,7 @@ export type TaskDetail = {
   script: string
   blueprintVersion: number
   blueprintStatus: BlueprintStatus
+  failureReason?: string | null
   taskRunConfig: {
     projectId: string
     modeId: string

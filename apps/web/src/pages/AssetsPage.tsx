@@ -561,7 +561,10 @@ export function AssetsPage() {
           <section className="card card--compact">
             <h3>规划依据</h3>
             <div className="task-list compact-list">
-              <div className="task-item"><strong>路由原因</strong><span>{selectedTask?.routeReason ?? "待接入"}</span></div>
+              {selectedTask?.status === "failed" && selectedTask?.failureReason ? (
+                <div className="task-item"><strong>失败原因</strong><span>{selectedTask.failureReason}</span></div>
+              ) : null}
+              <div className="task-item"><strong>分镜路由依据</strong><span>{selectedTask?.routeReason ?? "待接入"}</span></div>
               <div className="task-item"><strong>内容策略</strong><span>{selectedTask?.planning?.generationPreferenceLabel ?? "待接入"}</span></div>
               <div className="task-item"><strong>当前链路</strong><span>{getTaskFlowLabel(selectedTask)}</span></div>
               <div className="task-item"><strong>可预览资产</strong><span>{assetStats.previewableCount} 个</span></div>

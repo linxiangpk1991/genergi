@@ -364,6 +364,7 @@ const worker = new Worker(
       await updateTaskSummary(taskId, (task: TaskSummary) => ({
         ...task,
         status: "running",
+        failureReason: null,
         progressPct: 20,
         updatedAt: new Date().toISOString(),
       }))
@@ -374,6 +375,7 @@ const worker = new Worker(
       await updateTaskSummary(taskId, (task: TaskSummary) => ({
         ...task,
         status: "running",
+        failureReason: null,
         progressPct: 65,
         updatedAt: new Date().toISOString(),
       }))
@@ -391,6 +393,7 @@ const worker = new Worker(
       await updateTaskSummary(taskId, (task: TaskSummary) => ({
         ...task,
         status: "completed",
+        failureReason: null,
         progressPct: 100,
         updatedAt: new Date().toISOString(),
       }))
@@ -403,10 +406,19 @@ const worker = new Worker(
       await updateTaskSummary(taskId, (task: TaskSummary) => ({
         ...task,
         status: "failed",
+        failureReason: message,
         progressPct: Math.min(task.progressPct, 65),
         retryCount: task.retryCount + 1,
         updatedAt: new Date().toISOString(),
       }))
+      const latestDetail = await readTaskDetail(taskId)
+      if (latestDetail) {
+        await upsertTaskDetail({
+          ...latestDetail,
+          failureReason: message,
+          updatedAt: new Date().toISOString(),
+        })
+      }
       await writeWorkerHeartbeat(`Last failed ${taskId}: ${message}`, "degraded")
       console.error(`[worker] ${taskId} => failed`, error)
       throw error

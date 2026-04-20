@@ -607,6 +607,7 @@ export async function createTask(input: CreateTaskInput): Promise<{ task: TaskSu
     blueprintVersion: 1,
     blueprintStatus: "pending_generation",
     actualDurationSec: null,
+    failureReason: null,
     scenes: buildStoryboardScenes({
       script: input.script,
       targetDurationSec: input.targetDurationSec,
@@ -634,6 +635,7 @@ export async function createTask(input: CreateTaskInput): Promise<{ task: TaskSu
     blueprintVersion: detail.blueprintVersion,
     blueprintStatus: detail.blueprintStatus,
     actualDurationSec: null,
+    failureReason: null,
     status: "queued",
     progressPct: 0,
     retryCount: 0,
