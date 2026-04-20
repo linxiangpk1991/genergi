@@ -30,8 +30,9 @@ import { concatVideos, extractKeyframeFromVideo, getMediaDurationSeconds, muxNar
 const gatewayBaseUrl = process.env.GENERGI_MEDIA_GATEWAY_BASE_URL ?? "https://open.xiaojingai.com"
 const gatewayApiKey = process.env.GENERGI_MEDIA_GATEWAY_API_KEY ?? ""
 const gatewayImageGenerationPaths = ["/v1/images/generations", "/v1/image/generations"]
-const REVIEW_REQUIRED_KEYFRAME_TIMEOUT_MS = 300000
-const DEGRADABLE_KEYFRAME_TIMEOUT_MS = 30000
+const IMAGE_GATEWAY_REQUEST_TIMEOUT_MS = 240000
+const REVIEW_REQUIRED_KEYFRAME_TIMEOUT_MS = 240000
+const DEGRADABLE_KEYFRAME_TIMEOUT_MS = 240000
 
 type PlanningTraceArtifact = {
   sourceScript: string
@@ -818,7 +819,7 @@ async function requestGatewayImageGeneration(input: {
       try {
         const response = await axios.post(`${gatewayBaseUrl}${endpoint}`, payload, {
           headers: buildGatewayHeaders(),
-          timeout: 120000,
+          timeout: IMAGE_GATEWAY_REQUEST_TIMEOUT_MS,
         })
         return { endpoint, data: response.data }
       } catch (error) {
@@ -849,7 +850,7 @@ async function pollGatewayImageGeneration(endpoint: string, generationId: string
       headers: {
         Authorization: `Bearer ${gatewayApiKey}`,
       },
-      timeout: 120000,
+      timeout: IMAGE_GATEWAY_REQUEST_TIMEOUT_MS,
     })
     const ref = extractImageReference(response.data)
     if (ref) {
@@ -2151,7 +2152,10 @@ export async function createKeyframeBundle(input: {
   taskId: string
   detail: TaskDetail
   model: string
-}) {
+}, deps: {
+  createGeminiNativeImageArtifact?: typeof createGeminiNativeImageArtifact
+  createGatewayImageArtifact?: typeof createGatewayImageArtifact
+} = {}) {
   const dir = ensureTaskDir(input.taskId)
   const keyframeDir = path.join(dir, "keyframes")
   mkdirSync(keyframeDir, { recursive: true })
@@ -2169,36 +2173,41 @@ export async function createKeyframeBundle(input: {
     remoteTaskId: string | null
   }> = []
   const imageRuntime = await resolveImageGenerationRuntime(input.detail, input.model)
-  for (const scene of input.detail.scenes) {
-    const prompt = buildKeyframePrompt(scene, aspectRatio)
-    const generated =
-      imageRuntime.kind === "gemini-native"
-        ? await createGeminiNativeImageArtifact({
-            baseUrl: imageRuntime.baseUrl,
-            apiKey: imageRuntime.apiKey,
-            model: imageRuntime.providerModelId,
-            prompt,
-          })
-        : await createGatewayImageArtifact({
-            model: imageRuntime.model,
-            prompt,
-            size: "1024x1024",
-          })
+  const createGeminiArtifact = deps.createGeminiNativeImageArtifact ?? createGeminiNativeImageArtifact
+  const createGatewayArtifact = deps.createGatewayImageArtifact ?? createGatewayImageArtifact
+  const createdFrames = await Promise.all(
+    input.detail.scenes.map(async (scene) => {
+      const prompt = buildKeyframePrompt(scene, aspectRatio)
+      const generated =
+        imageRuntime.kind === "gemini-native"
+          ? await createGeminiArtifact({
+              baseUrl: imageRuntime.baseUrl,
+              apiKey: imageRuntime.apiKey,
+              model: imageRuntime.providerModelId,
+              prompt,
+            })
+          : await createGatewayArtifact({
+              model: imageRuntime.model,
+              prompt,
+              size: "1024x1024",
+            })
 
-    const fileName = `scene-${String(scene.index + 1).padStart(2, "0")}.${generated.extension}`
-    const filePath = path.join(keyframeDir, fileName)
-    await fs.writeFile(filePath, generated.bytes)
-    frames.push({
-      sceneId: scene.id,
-      sceneIndex: scene.index,
-      title: scene.title,
-      prompt,
-      fileName,
-      filePath,
-      model: input.model,
-      remoteTaskId: generated.generationId,
-    })
-  }
+      const fileName = `scene-${String(scene.index + 1).padStart(2, "0")}.${generated.extension}`
+      const filePath = path.join(keyframeDir, fileName)
+      await fs.writeFile(filePath, generated.bytes)
+      return {
+        sceneId: scene.id,
+        sceneIndex: scene.index,
+        title: scene.title,
+        prompt,
+        fileName,
+        filePath,
+        model: input.model,
+        remoteTaskId: generated.generationId,
+      }
+    }),
+  )
+  frames.push(...createdFrames)
 
   const manifestPath = path.join(keyframeDir, "manifest.json")
   const manifest = {

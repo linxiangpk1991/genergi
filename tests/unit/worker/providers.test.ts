@@ -823,11 +823,11 @@ Here's the thing. In Chinese destiny analysis, there's a pattern called "late bl
       continueExecution: false,
     })
 
-    expect(policy.timeoutMs).toBe(300000)
+    expect(policy.timeoutMs).toBe(240000)
     expect(policy.onTimeoutMessage).toBe("Image generation timed out before review assets were ready")
   })
 
-  it("keeps automated keyframe generation on the short fallback timeout path", async () => {
+  it("raises the automated keyframe timeout ceiling to the same 4 minute window", async () => {
     const providers = await import("../../../apps/worker/src/lib/providers")
 
     const policy = providers.resolveKeyframeGenerationTimeoutPolicy({
@@ -840,8 +840,100 @@ Here's the thing. In Chinese destiny analysis, there's a pattern called "late bl
       continueExecution: false,
     })
 
-    expect(policy.timeoutMs).toBe(30000)
+    expect(policy.timeoutMs).toBe(240000)
     expect(policy.onTimeoutMessage).toBe("Image generation timeout, switching to video-derived keyframe")
+  })
+
+  it("generates keyframes for multiple scenes concurrently instead of one-by-one", async () => {
+    const providers = await import("../../../apps/worker/src/lib/providers")
+
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "genergi-keyframe-concurrency-"))
+    process.env.GENERGI_DATA_DIR = tempDir
+
+    const detail = createTaskDetail({
+      taskId: "task_keyframe_concurrency",
+      scenes: [
+        {
+          id: "scene_1",
+          index: 0,
+          title: "Scene 1",
+          sceneGoal: "Scene 1",
+          voiceoverScript: "Scene one narration.",
+          startFrameDescription: "Scene one frame",
+          script: "Scene one narration.",
+          imagePrompt: "Scene one final image prompt.",
+          videoPrompt: "Scene one video prompt.",
+          startFrameIntent: "Start one",
+          endFrameIntent: "End one",
+          durationSec: 8,
+          startLabel: "00:00",
+          endLabel: "00:08",
+          reviewStatus: "pending",
+          keyframeStatus: "pending",
+          continuityConstraints: [],
+          reviewNote: null,
+          reviewedAt: null,
+          keyframeReviewNote: null,
+          keyframeReviewedAt: null,
+        },
+        {
+          id: "scene_2",
+          index: 1,
+          title: "Scene 2",
+          sceneGoal: "Scene 2",
+          voiceoverScript: "Scene two narration.",
+          startFrameDescription: "Scene two frame",
+          script: "Scene two narration.",
+          imagePrompt: "Scene two final image prompt.",
+          videoPrompt: "Scene two video prompt.",
+          startFrameIntent: "Start two",
+          endFrameIntent: "End two",
+          durationSec: 8,
+          startLabel: "00:08",
+          endLabel: "00:16",
+          reviewStatus: "pending",
+          keyframeStatus: "pending",
+          continuityConstraints: [],
+          reviewNote: null,
+          reviewedAt: null,
+          keyframeReviewNote: null,
+          keyframeReviewedAt: null,
+        },
+      ],
+    })
+
+    const started: string[] = []
+    const releaseQueue: Array<() => void> = []
+
+    const bundlePromise = providers.createKeyframeBundle(
+      {
+        taskId: detail.taskId,
+        detail,
+        model: detail.taskRunConfig.imageModel.id,
+      },
+      {
+        createGatewayImageArtifact: async ({ prompt }) => {
+          started.push(prompt)
+          await new Promise<void>((resolve) => {
+            releaseQueue.push(resolve)
+          })
+          return {
+            bytes: Buffer.from(prompt, "utf8"),
+            extension: "png",
+            generationId: null,
+          }
+        },
+      },
+    )
+
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(started).toHaveLength(2)
+    releaseQueue.forEach((resolve) => resolve())
+
+    const bundle = await bundlePromise
+    expect(bundle.frameCount).toBe(2)
   })
 
   it("writes planning trace files and exposes them as supporting assets", async () => {
