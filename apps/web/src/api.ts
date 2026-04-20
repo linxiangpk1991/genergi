@@ -576,10 +576,10 @@ export type CreateTaskPayload = {
   projectId: string
   title: string
   script: string
-  modeId: string
-  channelId: string
   terminalPresetId: TerminalPresetId
   targetDurationSec: number
+  modeId?: string
+  channelId?: string
   generationMode?: GenerationPreferenceId
   modelOverrides?: Partial<Record<ModelControlSlotType, { modelId?: string; providerId?: string }>>
 }

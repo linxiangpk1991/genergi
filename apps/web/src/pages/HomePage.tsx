@@ -3,18 +3,9 @@ import {
   api,
   buildAssetCenterUrl,
   buildBatchDashboardUrl,
-  type ExecutionMode,
-  MODEL_CONTROL_MODE_LABELS,
-  MODEL_CONTROL_SLOT_LABELS,
-  MODEL_CONTROL_SLOT_ORDER,
   type BootstrapResponse,
-  type GenerationPreferenceId,
-  type ModelControlModeId,
-  type ModelControlSlotType,
   type ProjectRecord,
   type RenderSpec,
-  type SelectableModelOption,
-  type SelectableModelPoolsResponse,
   type TerminalPresetId,
   type TaskSummary,
 } from "../api";
@@ -23,36 +14,8 @@ function formatCurrency(value: number) {
   return `¥${value.toFixed(2)}`;
 }
 
-function getPreferenceLabel(preference: GenerationPreferenceId) {
-  return preference === "system_enhanced" ? "启用系统增强" : "忠于原脚本";
-}
-
-function getPreferenceSummary(preference: GenerationPreferenceId) {
-  return preference === "system_enhanced"
-    ? "系统会保留主题方向，但主动把表达整理成更适合短视频传播的版本。"
-    : "系统会尽量保留你原始内容的表达方式，只做最小必要的整理。";
-}
-
 function getCreateTaskNotice(task: TaskSummary) {
-  return task.executionMode === "review_required"
-    ? `任务“${task.title}”已提交到渲染队列。关键画面生成完成后，会进入任务审核队列。`
-    : `任务“${task.title}”已提交到渲染队列。系统将继续自动生成成片。`;
-}
-
-function getChannelLabel(channelId: string) {
-  if (channelId === "tiktok") {
-    return "TikTok";
-  }
-
-  if (channelId === "reels") {
-    return "Instagram Reels";
-  }
-
-  if (channelId === "shorts") {
-    return "YouTube Shorts";
-  }
-
-  return channelId;
+  return `任务“${task.title}”已提交到渲染队列。关键画面生成完成后，会进入任务审核队列。`;
 }
 
 const TERMINAL_PRESET_OPTIONS: Array<{
@@ -114,70 +77,11 @@ const TERMINAL_PRESET_OPTIONS: Array<{
   },
 ];
 
-function getDefaultTerminalPresetId(channelId: string): TerminalPresetId {
-  return channelId === "tiktok" || channelId === "reels" || channelId === "shorts"
-    ? "phone_portrait"
-    : "phone_portrait";
-}
-
 function getRenderSpec(terminalPresetId: TerminalPresetId): RenderSpec {
   return (
     TERMINAL_PRESET_OPTIONS.find((item) => item.id === terminalPresetId)?.renderSpec ??
     TERMINAL_PRESET_OPTIONS[0].renderSpec
   );
-}
-
-function pruneOverrides(
-  current: Partial<Record<ModelControlSlotType, string>>,
-  selectable: SelectableModelPoolsResponse | null,
-) {
-  if (!selectable) {
-    return {};
-  }
-
-  return MODEL_CONTROL_SLOT_ORDER.reduce<
-    Partial<Record<ModelControlSlotType, string>>
-  >((accumulator, slot) => {
-    const selectedId = current[slot];
-    if (!selectedId) {
-      return accumulator;
-    }
-
-    const exists = selectable.pools[slot]?.options.some(
-      (option) => option.recordId === selectedId,
-    );
-    if (exists) {
-      accumulator[slot] = selectedId;
-    }
-
-    return accumulator;
-  }, {});
-}
-
-function findOption(
-  selectable: SelectableModelPoolsResponse | null,
-  slot: ModelControlSlotType,
-  recordId?: string | null,
-) {
-  if (!selectable || !recordId) {
-    return null;
-  }
-
-  return (
-    selectable.pools[slot]?.options.find(
-      (option) => option.recordId === recordId,
-    ) ?? null
-  );
-}
-
-function describeOption(option: SelectableModelOption | null) {
-  if (!option) {
-    return "未设置";
-  }
-
-  return option.providerDisplayName
-    ? `${option.displayName} / ${option.providerDisplayName}`
-    : option.displayName;
 }
 
 export function HomePage() {
@@ -187,21 +91,9 @@ export function HomePage() {
   const [title, setTitle] = useState("");
   const [script, setScript] = useState("");
   const [projectId, setProjectId] = useState("project_default");
-  const [modeId, setModeId] = useState<ModelControlModeId>("mass_production");
-  const [channelId, setChannelId] = useState("tiktok");
   const [terminalPresetId, setTerminalPresetId] =
     useState<TerminalPresetId>("phone_portrait");
   const [targetDurationSec, setTargetDurationSec] = useState(30);
-  const [generationPreference, setGenerationPreference] =
-    useState<GenerationPreferenceId>("user_locked");
-  const [selectablePools, setSelectablePools] =
-    useState<SelectableModelPoolsResponse | null>(null);
-  const [modelOverrides, setModelOverrides] = useState<
-    Partial<Record<ModelControlSlotType, string>>
-  >({});
-  const [overridesOpen, setOverridesOpen] = useState(false);
-  const [overrideLoading, setOverrideLoading] = useState(false);
-  const [overrideError, setOverrideError] = useState("");
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
@@ -229,9 +121,6 @@ export function HomePage() {
             bootstrapRes.durationOptions[0] ??
             30,
         );
-        setGenerationPreference(
-          bootstrapRes.generationPreferences[0]?.id ?? "user_locked",
-        );
       } catch (err) {
         setError(err instanceof Error ? err.message : "加载失败");
       } finally {
@@ -253,76 +142,22 @@ export function HomePage() {
 
     return () => window.clearInterval(timer);
   }, []);
-
-  useEffect(() => {
-    if (!bootstrap) {
-      return;
-    }
-
-    let cancelled = false;
-
-    async function loadSelectablePools() {
-      setOverrideLoading(true);
-      setOverrideError("");
-
-      try {
-        const response = await api.getSelectableModelPools(modeId);
-        if (cancelled) {
-          return;
-        }
-
-        setSelectablePools(response);
-        setModelOverrides((current) => pruneOverrides(current, response));
-      } catch (err) {
-        if (cancelled) {
-          return;
-        }
-
-        setSelectablePools(null);
-        setModelOverrides({});
-        setOverrideError(
-          err instanceof Error ? err.message : "高级覆盖池加载失败",
-        );
-      } finally {
-        if (!cancelled) {
-          setOverrideLoading(false);
-        }
-      }
-    }
-
-    void loadSelectablePools();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [bootstrap, modeId]);
-
-  useEffect(() => {
-    setTerminalPresetId(getDefaultTerminalPresetId(channelId));
-  }, [channelId]);
-
-  const selectedMode = useMemo(
-    () => bootstrap?.modes.find((mode) => mode.id === modeId) ?? null,
-    [bootstrap, modeId],
-  );
   const selectedProject = useMemo(
     () => projects.find((project) => project.id === projectId) ?? null,
     [projects, projectId],
   );
-  const selectedExecutionMode: ExecutionMode =
-    selectedMode?.executionMode ?? "automated";
   const renderSpec = getRenderSpec(terminalPresetId);
+  const selectedExecutionMode = "review_required";
 
   const routePreview =
-    targetDurationSec <= (selectedMode?.maxSingleShotSec ?? 8)
+    targetDurationSec <= 8
       ? "单条成片"
       : "多段成片";
   const routePreviewDetail =
     routePreview === "单条成片"
       ? "这次内容会优先保持一条完整表达，减少切换感。"
       : "这次内容会按多段组织后再合成为完整成片，优先保证表达稳定。";
-  const planningSummary = getPreferenceSummary(generationPreference);
-  const overrideCount = Object.values(modelOverrides).filter(Boolean).length;
+  const planningSummary = "系统只会按母本保真优先做结构化分镜，不会主动改变主题、人物、场景和内容领域。";
   const taskStatusSummary = useMemo(() => {
     const runningCount = tasks.filter(
       (task) => task.status === "running",
@@ -341,44 +176,6 @@ export function HomePage() {
     [tasks],
   );
 
-  const effectiveSlotSummary = useMemo(
-    () =>
-      MODEL_CONTROL_SLOT_ORDER.map((slot) => {
-        const pool = selectablePools?.pools?.[slot];
-        const overrideId = modelOverrides[slot];
-        const overrideOption = findOption(selectablePools, slot, overrideId);
-        const modeDefaultOption = findOption(
-          selectablePools,
-          slot,
-          pool?.modeDefaultId ?? null,
-        );
-        const globalDefaultOption = findOption(
-          selectablePools,
-          slot,
-          pool?.globalDefaultId ?? null,
-        );
-        const effectiveOption =
-          overrideOption ??
-          findOption(
-            selectablePools,
-            slot,
-            pool?.effectiveId ??
-              pool?.modeDefaultId ??
-              pool?.globalDefaultId ??
-              null,
-          );
-
-        return {
-          slot,
-          overrideOption,
-          modeDefaultOption,
-          globalDefaultOption,
-          effectiveOption,
-        };
-      }),
-    [modelOverrides, selectablePools],
-  );
-
   async function handleCreateTask() {
     if (!title.trim() || !script.trim()) {
       setNotice("");
@@ -387,48 +184,23 @@ export function HomePage() {
       return;
     }
 
-    if (overrideLoading) {
-      setNotice("");
-      setCreatedTask(null);
-      setError("高级覆盖池还在刷新，请稍等加载完成后再提交。");
-      return;
-    }
-
     setSubmitting(true);
     setError("");
     setNotice("");
     setCreatedTask(null);
     try {
-      const overridePayload = Object.fromEntries(
-        Object.entries(modelOverrides)
-          .filter((entry): entry is [ModelControlSlotType, string] =>
-            Boolean(entry[1]),
-          )
-          .map(([slot, modelId]) => [
-            slot,
-            slot === "ttsProvider" ? { providerId: modelId } : { modelId },
-          ]),
-      );
-
       const result = await api.createTask({
         title,
         script,
         projectId,
-        modeId,
-        channelId,
         terminalPresetId,
         targetDurationSec,
-        generationMode: generationPreference,
-        modelOverrides: Object.keys(overridePayload).length
-          ? overridePayload
-          : undefined,
       });
       setTasks((current) => [result.task, ...current]);
       setNotice(getCreateTaskNotice(result.task));
       setCreatedTask(result.task);
       setTitle("");
       setScript("");
-      setModelOverrides({});
     } catch (err) {
       setError(err instanceof Error ? err.message : "创建任务失败");
     } finally {
@@ -447,14 +219,12 @@ export function HomePage() {
           <div className="eyebrow">GENERGI Command Center</div>
           <h1>新建生产任务</h1>
           <p>
-            先把想表达的内容写清楚，系统会负责把它整理成可执行的脚本、画面和成片链路。
+            先把内容母本写清楚，再只用时长和尺寸约束系统。平台会按保真优先的单一路径生成蓝图、关键画面和成片。
           </p>
         </div>
         <div className="topbar-actions">
-          <span className="pill">{MODEL_CONTROL_MODE_LABELS[modeId]}</span>
-          <span className="pill pill--accent">
-            {getChannelLabel(channelId)}
-          </span>
+          <span className="pill">单一路径</span>
+          <span className="pill pill--accent">审核优先</span>
         </div>
       </header>
 
@@ -478,7 +248,7 @@ export function HomePage() {
         <section className="card card--main">
           <h2>内容母本配置</h2>
           <p className="section-note">
-            你只需要描述这条视频想讲什么、想给人什么感觉、最后希望用户做什么，系统会完成后续生产规划。
+            你只需要描述这条视频想讲什么。系统只负责结构化拆分和镜头化表达，不会主动改题材、换人物或替你重写内容方向。
           </p>
 
           <label className="field-label">任务名称</label>
@@ -496,54 +266,6 @@ export function HomePage() {
             onChange={(e) => setScript(e.target.value)}
             placeholder="直接写你要表达的内容、卖点、情绪和转化目标，不需要手动写技术提示词。"
           />
-
-          <label className="field-label">生产模式</label>
-          <div className="mode-grid" role="radiogroup">
-            {bootstrap?.modes.map((mode) => (
-              <button
-                key={mode.id}
-                className={
-                  mode.id === modeId
-                    ? "mode-card mode-card--active"
-                    : "mode-card"
-                }
-                onClick={() => setModeId(mode.id as ModelControlModeId)}
-                type="button"
-                role="radio"
-                aria-checked={mode.id === modeId}
-              >
-                <div className="mode-title">{mode.label}</div>
-                <div className="mode-description">{mode.description}</div>
-                <div className="mode-budget">
-                  预算上限 {formatCurrency(mode.budgetLimitCny)} · 单段上限{" "}
-                  {mode.maxSingleShotSec}s
-                </div>
-              </button>
-            ))}
-          </div>
-
-          <label className="field-label">生成方式</label>
-          <div className="generation-grid" role="radiogroup">
-            {(bootstrap?.generationPreferences ?? []).map((option) => (
-              <button
-                key={option.id}
-                className={
-                  generationPreference === option.id
-                    ? "generation-card generation-card--active"
-                    : "generation-card"
-                }
-                onClick={() => setGenerationPreference(option.id)}
-                type="button"
-                role="radio"
-                aria-checked={generationPreference === option.id}
-              >
-                <div className="generation-card__title">{option.label}</div>
-                <div className="generation-card__desc">
-                  {option.description}
-                </div>
-              </button>
-            ))}
-          </div>
 
           <label className="field-label">正片总时长</label>
           <div className="mode-grid" role="radiogroup">
@@ -564,27 +286,6 @@ export function HomePage() {
                 <div className="mode-description">
                   用于控制最终成片节奏与信息密度
                 </div>
-              </button>
-            ))}
-          </div>
-
-          <label className="field-label">目标渠道</label>
-          <div className="channel-list" role="radiogroup">
-            {bootstrap?.channels.map((channel) => (
-              <button
-                key={channel.id}
-                className={
-                  channelId === channel.id
-                    ? "channel-card channel-card--active"
-                    : "channel-card"
-                }
-                onClick={() => setChannelId(channel.id)}
-                type="button"
-                role="radio"
-                aria-checked={channelId === channel.id}
-              >
-                <strong>{channel.label}</strong>
-                <span>{channel.description}</span>
               </button>
             ))}
           </div>
@@ -624,8 +325,8 @@ export function HomePage() {
               <span>{routePreviewDetail}</span>
             </div>
             <div className="planning-chip">
-              <span className="planning-chip__label">内容处理方式</span>
-              <strong>{getPreferenceLabel(generationPreference)}</strong>
+              <span className="planning-chip__label">文本规划原则</span>
+              <strong>保真优先</strong>
               <span>{planningSummary}</span>
             </div>
             <div className="planning-chip">
@@ -653,10 +354,8 @@ export function HomePage() {
               <strong>{selectedProject?.name ?? "未选择"}</strong>
             </div>
             <div className="metric-row">
-              <span>生产模式</span>
-              <strong>
-                {selectedMode?.label ?? MODEL_CONTROL_MODE_LABELS[modeId]}
-              </strong>
+              <span>任务路径</span>
+              <strong>单一路径</strong>
             </div>
             <div className="metric-row">
               <span>执行方式</span>
@@ -667,15 +366,8 @@ export function HomePage() {
               <strong>{targetDurationSec}s</strong>
             </div>
             <div className="metric-row">
-              <span>生成方式</span>
-              <strong>{getPreferenceLabel(generationPreference)}</strong>
-            </div>
-            <div className="metric-row">
-              <span>目标渠道</span>
-              <strong>
-                {bootstrap?.channels.find((channel) => channel.id === channelId)
-                  ?.label ?? channelId}
-              </strong>
+              <span>文本规划原则</span>
+              <strong>保真优先</strong>
             </div>
             <div className="metric-row">
               <span>成片组织</span>
@@ -696,41 +388,31 @@ export function HomePage() {
               <strong>{renderSpec.aspectRatio}</strong>
             </div>
             <div className="metric-row">
-              <span>模式预算上限</span>
-              <strong>
-                {formatCurrency(selectedMode?.budgetLimitCny ?? 0)}
-              </strong>
-            </div>
-            <div className="metric-row">
-              <span>任务级覆盖</span>
-              <strong>
-                {overrideCount ? `${overrideCount} 项` : "未启用"}
-              </strong>
+              <span>默认执行链</span>
+              <strong>关键画面审核后继续完整生成</strong>
             </div>
             <div className="muted">{planningSummary}</div>
           </section>
 
           <section className="card card--compact">
-            <h3>默认链路提醒</h3>
+            <h3>系统约束</h3>
             <div className="task-list compact-list">
               <div className="task-item">
-                <strong>优先级固定</strong>
+                <strong>内容保真优先</strong>
                 <span>
-                  任务覆盖 &gt; 模式默认 &gt;
-                  全局默认。没有临时覆盖时，系统会按模式默认解析。
+                  系统只允许按母本做结构化拆分，不会主动增强钩子、改写 CTA 或切换内容题材。
                 </span>
               </div>
               <div className="task-item">
-                <strong>可选池受校验状态约束</strong>
+                <strong>尺寸和时长仍然生效</strong>
                 <span>
-                  高级覆盖只展示 `available` 记录。无论是模型还是
-                  TTS，都不会把草稿或失效项放进下拉框。
+                  系统会基于目标时长和当前模型单段上限决定单条成片或多分镜编排，但不会改变内容主题。
                 </span>
               </div>
               <div className="task-item">
-                <strong>创建后会冻结</strong>
+                <strong>创建后冻结</strong>
                 <span>
-                  任务一旦创建，最终解析结果会冻结进任务快照，后续默认值变化不会回写历史任务。
+                  任务创建后会冻结到统一的审核优先链路，后续不会因为默认值变化而回写历史任务。
                 </span>
               </div>
             </div>
@@ -783,217 +465,12 @@ export function HomePage() {
         </aside>
       </div>
 
-      <section className="card card--advanced">
-        <div className="section-header">
-          <h2>任务级高级覆盖</h2>
-          <button
-            className="ghost-button"
-            onClick={() => setOverridesOpen((current) => !current)}
-            type="button"
-          >
-            {overridesOpen ? "收起高级覆盖" : "展开高级覆盖"}
-          </button>
-        </div>
-
-        <div className="precedence-strip">
-          <div className="planning-note-card">
-            <strong>模式默认先确定基线</strong>
-            <span>
-              {MODEL_CONTROL_MODE_LABELS[modeId]} 会先决定每个槽位的默认解。
-            </span>
-          </div>
-          <div className="planning-note-card">
-            <strong>只允许真实可选池</strong>
-            <span>
-              高级覆盖下拉框只读取 `available` 记录，不支持手输临时 ID。
-            </span>
-          </div>
-          <div className="planning-note-card">
-            <strong>只提交改动项</strong>
-            <span>
-              提交任务时只带有值的覆盖项，留空槽位继续走模式默认 / 全局默认。
-            </span>
-          </div>
-        </div>
-
-        {overridesOpen ? (
-          <div className="override-panel">
-            {overrideError ? (
-              <div className="alert">
-                模型控制面接口当前不可用，无法提供高级覆盖池：{overrideError}
-              </div>
-            ) : null}
-
-            {overrideLoading ? (
-              <div className="empty-inline">
-                正在加载 {MODEL_CONTROL_MODE_LABELS[modeId]} 的真实可选池...
-              </div>
-            ) : null}
-
-            {!overrideLoading && selectablePools ? (
-              <div className="override-grid">
-                {MODEL_CONTROL_SLOT_ORDER.map((slot) => {
-                  const pool = selectablePools.pools[slot];
-                  const overrideId = modelOverrides[slot] ?? "";
-                  const overrideOption = findOption(
-                    selectablePools,
-                    slot,
-                    overrideId,
-                  );
-                  const effectiveOption =
-                    overrideOption ??
-                    findOption(
-                      selectablePools,
-                      slot,
-                      pool?.effectiveId ??
-                        pool?.modeDefaultId ??
-                        pool?.globalDefaultId ??
-                        null,
-                    );
-
-                  return (
-                    <div
-                      key={slot}
-                      className={
-                        overrideOption
-                          ? "slot-override-card slot-override-card--overridden"
-                          : "slot-override-card"
-                      }
-                    >
-                      <div className="slot-override-card__header">
-                        <div>
-                          <strong>{MODEL_CONTROL_SLOT_LABELS[slot]}</strong>
-                          <div className="muted">
-                            当前可选 {pool?.options.length ?? 0} 项
-                          </div>
-                        </div>
-                        <span
-                          className={
-                            overrideOption
-                              ? "pill pill--sm pill--accent"
-                              : "pill pill--sm"
-                          }
-                        >
-                          {overrideOption ? "已覆盖" : "默认链路"}
-                        </span>
-                      </div>
-
-                      <select
-                        className="input"
-                        value={overrideId}
-                        onChange={(event) =>
-                          setModelOverrides((current) => ({
-                            ...current,
-                            [slot]: event.target.value,
-                          }))
-                        }
-                      >
-                        <option value="">不覆盖，使用默认解析</option>
-                        {(pool?.options ?? []).map((option) => (
-                          <option key={option.recordId} value={option.recordId}>
-                            {describeOption(option)}
-                          </option>
-                        ))}
-                      </select>
-
-                      <div className="slot-override-card__summary">
-                        <span>
-                          全局默认：
-                          {describeOption(
-                            findOption(
-                              selectablePools,
-                              slot,
-                              pool?.globalDefaultId ?? null,
-                            ),
-                          )}
-                        </span>
-                        <span>
-                          模式默认：
-                          {describeOption(
-                            findOption(
-                              selectablePools,
-                              slot,
-                              pool?.modeDefaultId ?? null,
-                            ),
-                          )}
-                        </span>
-                        <span>最终生效：{describeOption(effectiveOption)}</span>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            ) : null}
-
-            <div className="planning-summary-card">
-              <strong>当前有效摘要</strong>
-              <span>下面展示每个槽位的来源和最终会提交给后端解析的结果。</span>
-              <div className="summary-list">
-                {effectiveSlotSummary.map((item) => (
-                  <div key={item.slot} className="summary-row">
-                    <strong>{MODEL_CONTROL_SLOT_LABELS[item.slot]}</strong>
-                    <div className="summary-row__detail">
-                      <span>
-                        全局默认：{describeOption(item.globalDefaultOption)}
-                      </span>
-                      <span>
-                        模式默认：{describeOption(item.modeDefaultOption)}
-                      </span>
-                      <span>
-                        任务覆盖：{describeOption(item.overrideOption)}
-                      </span>
-                      <span>
-                        最终生效：{describeOption(item.effectiveOption)}
-                      </span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="action-row">
-              <button
-                className="ghost-button"
-                onClick={() => setModelOverrides({})}
-                type="button"
-              >
-                清空任务级覆盖
-              </button>
-              <span className="muted">
-                当前仅会提交 {overrideCount} 个显式覆盖槽位。
-              </span>
-            </div>
-          </div>
-        ) : (
-          <div className="planning-notes">
-            <div className="planning-note-card">
-              <strong>默认路径更适合大多数任务</strong>
-              <span>
-                不展开高级覆盖时，系统会直接使用当前模式的默认槽位配置。
-              </span>
-            </div>
-            <div className="planning-note-card">
-              <strong>只有在你明确知道要替换哪一段时再覆盖</strong>
-              <span>
-                例如只想切换文案模型或视频模型，就只改对应槽位，其他保持默认。
-              </span>
-            </div>
-            <div className="planning-note-card">
-              <strong>高级覆盖不等于永久改默认</strong>
-              <span>
-                它只影响当前任务；要改全局或模式默认，请去模型控制中心。
-              </span>
-            </div>
-          </div>
-        )}
-      </section>
       <div className="sticky-action-bar">
         <button
           className="ghost-button"
           onClick={() => {
             setTitle("");
             setScript("");
-            setModelOverrides({});
           }}
           type="button"
         >
@@ -1001,15 +478,13 @@ export function HomePage() {
         </button>
         <button
           className="primary-button"
-          disabled={submitting || overrideLoading}
+          disabled={submitting}
           onClick={handleCreateTask}
           type="button"
         >
           {submitting
             ? "创建中..."
-            : overrideLoading
-              ? "等待覆盖池刷新..."
-              : "启动渲染队列"}
+            : "启动渲染队列"}
         </button>
       </div>
     </>

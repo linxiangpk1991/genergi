@@ -572,28 +572,30 @@ export async function createTask(input: CreateTaskInput): Promise<{ task: TaskSu
     throw new Error("PROJECT_NOT_FOUND")
   }
   const tasks = await listTasks()
-  const estimate = estimateCost(input.modeId)
+  const modeId = "high_quality" as const
+  const channelId = ((project.defaultChannelIds[0] ?? "tiktok") as "tiktok" | "reels" | "shorts")
+  const generationMode = "user_locked" as const
+  const estimate = estimateCost(modeId)
   const timestamp = now()
   let taskRunConfig = buildDefaultTaskRunConfig(
-    input.modeId,
-    input.channelId,
+    modeId,
+    channelId,
     input.targetDurationSec,
-    input.generationMode,
+    generationMode,
     {
       projectId: input.projectId,
       terminalPresetId: input.terminalPresetId,
     },
   )
   const resolvedSlots = await resolveEffectiveSlots({
-    modeId: input.modeId,
-    taskOverrides: input.modelOverrides,
+    modeId,
   })
   taskRunConfig = mapResolvedSlotsToTaskConfig(
     {
       ...taskRunConfig,
       blueprintVersion: 1,
       blueprintStatus: "pending_generation",
-      modelOverrides: input.modelOverrides,
+      modelOverrides: undefined,
     },
     resolvedSlots,
   )
@@ -622,13 +624,13 @@ export async function createTask(input: CreateTaskInput): Promise<{ task: TaskSu
     id: taskId,
     projectId: input.projectId,
     title: input.title,
-    modeId: input.modeId,
+    modeId,
     executionMode: taskRunConfig.executionMode,
-    channelId: input.channelId,
+    channelId,
     terminalPresetId: taskRunConfig.terminalPresetId,
     renderSpecJson: taskRunConfig.renderSpecJson,
     targetDurationSec: input.targetDurationSec,
-    generationMode: input.generationMode,
+    generationMode,
     generationRoute: taskRunConfig.generationRoute,
     routeReason: taskRunConfig.routeReason,
     planningVersion: taskRunConfig.planningVersion,

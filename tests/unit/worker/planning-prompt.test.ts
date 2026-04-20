@@ -1,13 +1,23 @@
 import { describe, expect, it } from "vitest"
 
 describe("worker planning prompt", () => {
-  it("builds a user-locked planning prompt without system enhancement keywords", async () => {
+  it("builds a fidelity-first planning prompt without enhancement language", async () => {
     const providers = await import("../../../apps/worker/src/lib/providers")
 
     const prompt = providers.buildPlanningPromptContext({
       originalScript: "A user-supplied whole-video script.",
+      projectId: "project_default",
       targetDurationSec: 30,
       platform: "tiktok",
+      executionMode: "review_required",
+      terminalPresetId: "phone_portrait",
+      renderSpec: {
+        width: 1080,
+        height: 1920,
+        aspectRatio: "9:16",
+        compositionGuideline: "Keep the subject centered",
+        motionGuideline: "Prefer slow push-ins",
+      },
       generationMode: "user_locked",
       generationRoute: "multi_scene",
       routeReason: "target duration exceeds single-shot capability",
@@ -18,16 +28,29 @@ describe("worker planning prompt", () => {
     expect(prompt).toContain("A user-supplied whole-video script.")
     expect(prompt).toContain("generation route: multi_scene")
     expect(prompt).not.toContain("stronger hook")
-    expect(prompt).toContain("preserve the user's original wording and tone as much as possible")
+    expect(prompt).not.toContain("generation mode:")
+    expect(prompt).not.toContain("platform:")
+    expect(prompt).toContain("do not add new products, offers, commercial angles, or environments")
+    expect(prompt).toContain("preserve the user's original topic, domain, subject, scene, and CTA intent")
   })
 
-  it("builds a system-enhanced planning prompt with enhancement keywords and explicit output rules", async () => {
+  it("still enforces exact scene count and machine-usable output rules", async () => {
     const providers = await import("../../../apps/worker/src/lib/providers")
 
     const prompt = providers.buildPlanningPromptContext({
       originalScript: "A user-supplied whole-video script.",
+      projectId: "project_default",
       targetDurationSec: 15,
       platform: "reels",
+      executionMode: "review_required",
+      terminalPresetId: "phone_portrait",
+      renderSpec: {
+        width: 1080,
+        height: 1920,
+        aspectRatio: "9:16",
+        compositionGuideline: "Keep the subject centered",
+        motionGuideline: "Prefer slow push-ins",
+      },
       generationMode: "system_enhanced",
       generationRoute: "multi_scene",
       routeReason: "current model max single-shot length is 8 seconds",
@@ -35,12 +58,9 @@ describe("worker planning prompt", () => {
       enhancementKeywords: ["stronger hook", "native pacing", "clear CTA"],
     })
 
-    expect(prompt).toContain("stronger hook")
-    expect(prompt).toContain("native pacing")
-    expect(prompt).toContain("clear CTA")
     expect(prompt).toContain("do not output explanations")
     expect(prompt).toContain("exactly 2 scenes")
-    expect(prompt).toContain("you may strengthen the hook, pacing, and CTA")
+    expect(prompt).toContain("finalVoiceoverScript must be direct voiceover text")
   })
 
   it("rejects planning output that includes commentary instead of machine-usable fields", async () => {
@@ -107,11 +127,36 @@ describe("worker planning prompt", () => {
         finalVoiceoverScript: "Valid script.",
         visualStyleGuide: "Native pacing.",
         ctaLine: "Link in bio.",
+        blueprint: {
+          executionMode: "review_required",
+          renderSpec: {
+            terminalPresetId: "phone_portrait",
+            width: 1080,
+            height: 1920,
+            aspectRatio: "9:16",
+            safeArea: { topPct: 8, rightPct: 6, bottomPct: 10, leftPct: 6 },
+            compositionGuideline: "Keep the subject centered",
+            motionGuideline: "Prefer slow push-ins",
+          },
+          globalTheme: "Theme",
+          visualStyleGuide: "Native pacing.",
+          subjectProfile: "Single subject",
+          productProfile: "Consistent product",
+          backgroundConstraints: [],
+          negativeConstraints: [],
+          totalVoiceoverScript: "Valid script.",
+          sceneContracts: [
+            { id: "scene_1", index: 0, sceneGoal: "Hook", voiceoverScript: "A", startFrameDescription: "A", imagePrompt: "A", videoPrompt: "A", startFrameIntent: "A", endFrameIntent: "A", durationSec: 4, transitionHint: "cut", continuityConstraints: [] },
+            { id: "scene_2", index: 1, sceneGoal: "Body", voiceoverScript: "B", startFrameDescription: "B", imagePrompt: "B", videoPrompt: "B", startFrameIntent: "B", endFrameIntent: "B", durationSec: 4, transitionHint: "cut", continuityConstraints: [] },
+            { id: "scene_3", index: 2, sceneGoal: "Body", voiceoverScript: "C", startFrameDescription: "C", imagePrompt: "C", videoPrompt: "C", startFrameIntent: "C", endFrameIntent: "C", durationSec: 4, transitionHint: "cut", continuityConstraints: [] },
+            { id: "scene_4", index: 3, sceneGoal: "CTA", voiceoverScript: "D", startFrameDescription: "D", imagePrompt: "D", videoPrompt: "D", startFrameIntent: "D", endFrameIntent: "D", durationSec: 3, transitionHint: "close", continuityConstraints: [] },
+          ],
+        },
         scenePlan: [
-          { sceneIndex: 0, scenePurpose: "Hook", durationSec: 4, script: "A", imagePrompt: "A", videoPrompt: "A", transitionHint: "cut" },
-          { sceneIndex: 1, scenePurpose: "Body", durationSec: 4, script: "B", imagePrompt: "B", videoPrompt: "B", transitionHint: "cut" },
-          { sceneIndex: 2, scenePurpose: "Body", durationSec: 4, script: "C", imagePrompt: "C", videoPrompt: "C", transitionHint: "cut" },
-          { sceneIndex: 3, scenePurpose: "CTA", durationSec: 3, script: "D", imagePrompt: "D", videoPrompt: "D", transitionHint: "close" },
+          { sceneIndex: 0, scenePurpose: "Hook", durationSec: 4, script: "A", voiceoverScript: "A", startFrameDescription: "A", imagePrompt: "A", videoPrompt: "A", startFrameIntent: "A", endFrameIntent: "A", transitionHint: "cut" },
+          { sceneIndex: 1, scenePurpose: "Body", durationSec: 4, script: "B", voiceoverScript: "B", startFrameDescription: "B", imagePrompt: "B", videoPrompt: "B", startFrameIntent: "B", endFrameIntent: "B", transitionHint: "cut" },
+          { sceneIndex: 2, scenePurpose: "Body", durationSec: 4, script: "C", voiceoverScript: "C", startFrameDescription: "C", imagePrompt: "C", videoPrompt: "C", startFrameIntent: "C", endFrameIntent: "C", transitionHint: "cut" },
+          { sceneIndex: 3, scenePurpose: "CTA", durationSec: 3, script: "D", voiceoverScript: "D", startFrameDescription: "D", imagePrompt: "D", videoPrompt: "D", startFrameIntent: "D", endFrameIntent: "D", transitionHint: "close" },
         ],
       },
       {
@@ -129,37 +174,4 @@ describe("worker planning prompt", () => {
     expect(result.reason).toContain("scene count")
   })
 
-  it("rejects system-enhanced output when it stays too close to the original wording", async () => {
-    const providers = await import("../../../apps/worker/src/lib/providers")
-
-    const result = providers.validatePlanningOutput(
-      {
-        generationRoute: "multi_scene",
-        targetDurationSec: 15,
-        finalVoiceoverScript:
-          "A wooden desk is messy with cables everywhere. A compact charger appears and instantly organizes the setup.",
-        visualStyleGuide: "System enhanced social-video pacing.",
-        ctaLine: "Upgrade your desk today.",
-        scenePlan: [
-          { sceneIndex: 0, scenePurpose: "Hook", durationSec: 8, script: "A wooden desk is messy with cables everywhere.", imagePrompt: "A", videoPrompt: "A", transitionHint: "cut" },
-          { sceneIndex: 1, scenePurpose: "CTA", durationSec: 7, script: "A compact charger appears and instantly organizes the setup.", imagePrompt: "B", videoPrompt: "B", transitionHint: "close" },
-        ],
-      },
-      {
-        generationRoute: "multi_scene",
-        targetDurationSec: 15,
-        maxSceneCount: 2,
-        maxSingleShotSec: 8,
-        generationMode: "system_enhanced",
-        originalScript:
-          "A wooden desk is messy with cables everywhere. A compact charger appears and instantly organizes the setup.",
-      },
-    )
-
-    expect(result.ok).toBe(false)
-    if (result.ok) {
-      throw new Error("expected validation failure")
-    }
-    expect(result.reason).toContain("too close")
-  })
 })

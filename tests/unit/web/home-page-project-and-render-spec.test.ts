@@ -233,15 +233,6 @@ describe("HomePage project and terminal preset flow", () => {
       )
     })
 
-    const highQualityButton = Array.from(container.querySelectorAll("button")).find((button) =>
-      button.textContent?.includes("高质量模式"),
-    )
-    expect(highQualityButton).toBeTruthy()
-
-    await act(async () => {
-      highQualityButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }))
-    })
-
     const selects = Array.from(container.querySelectorAll("select")) as HTMLSelectElement[]
     const projectSelect = selects.find((select) => Array.from(select.options).some((option) => option.value === "project_campaign"))
     const terminalPresetSelect = selects.find((select) => Array.from(select.options).some((option) => option.value === "tablet_landscape"))
@@ -261,6 +252,8 @@ describe("HomePage project and terminal preset flow", () => {
       expect(text).toContain("review_required")
       expect(text).toContain("2048 × 1536")
       expect(text).toContain("4:3")
+      expect(text).toContain("保真优先")
+      expect(text).toContain("单一路径")
     })
 
     const submitButton = Array.from(container.querySelectorAll("button")).find((button) =>
@@ -289,10 +282,12 @@ describe("HomePage project and terminal preset flow", () => {
       title: "Campaign launch",
       projectId: "project_campaign",
       terminalPresetId: "tablet_landscape",
-      modeId: "high_quality",
-      channelId: "tiktok",
-      generationMode: "user_locked",
+      targetDurationSec: 30,
     })
     expect(payload).not.toHaveProperty("aspectRatio")
+    expect(payload).not.toHaveProperty("modeId")
+    expect(payload).not.toHaveProperty("channelId")
+    expect(payload).not.toHaveProperty("generationMode")
+    expect(payload).not.toHaveProperty("modelOverrides")
   })
 })

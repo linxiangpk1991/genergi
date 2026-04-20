@@ -858,21 +858,8 @@ export function buildPlanningPromptContext(input: {
     input.generationRoute === "multi_scene"
       ? input.maxSceneCount ?? resolveSceneCountForDurationWithLimit(input.targetDurationSec, input.maxSingleShotSec)
       : 1
-  const modeInstruction =
-    input.generationMode === "user_locked"
-      ? [
-          "- preserve the user's original wording and tone as much as possible",
-          "- do not change the core phrasing unless it is necessary for grammar or timing",
-          "- keep the planning close to the original content structure",
-        ]
-      : [
-          "- you may strengthen the hook, pacing, and CTA while preserving the original theme",
-          "- use the enhancement keywords to make the output more platform-native and more direct",
-          "- prefer stronger contrast, clearer transitions, and higher conversion clarity",
-        ]
   return [
     `project id: ${input.projectId}`,
-    `platform: ${input.platform}`,
     `execution mode: ${input.executionMode}`,
     `terminal preset: ${input.terminalPresetId}`,
     `render size: ${input.renderSpec.width}x${input.renderSpec.height}`,
@@ -880,17 +867,18 @@ export function buildPlanningPromptContext(input: {
     `composition guideline: ${input.renderSpec.compositionGuideline}`,
     `motion guideline: ${input.renderSpec.motionGuideline}`,
     `target duration: ${input.targetDurationSec}s`,
-    `generation mode: ${input.generationMode}`,
     `generation route: ${input.generationRoute}`,
     `route reason: ${input.routeReason}`,
     `model single-shot ceiling: ${input.maxSingleShotSec}s`,
-    input.enhancementKeywords.length
-      ? `enhancement keywords: ${input.enhancementKeywords.join(", ")}`
-      : "enhancement keywords: none",
     "original script:",
     input.originalScript,
     "output requirements:",
-    ...modeInstruction,
+    "- preserve the user's original topic, domain, subject, scene, and CTA intent",
+    "- do not add new products, offers, commercial angles, or environments that are not present in the original script",
+    "- do not replace the original topic with a different marketing angle",
+    "- keep the planning close to the original content order unless duration compression requires minimal restructuring",
+    "- if the script implies a recurring character, subject, or room, keep it consistent across all scenes",
+    "- compress and structure the original script; do not rewrite it into a different concept",
     "- return machine-usable JSON only",
     "- do not output explanations",
     "- do not output markdown separators",
@@ -1091,14 +1079,6 @@ export function validatePlanningOutput(
     return { ok: false, reason: "scenePlan contains invalid scene entries" }
   }
 
-  if (
-    expected.generationMode === "system_enhanced" &&
-    expected.originalScript &&
-    normalizeForComparison(output.finalVoiceoverScript) === normalizeForComparison(expected.originalScript)
-  ) {
-    return { ok: false, reason: "system-enhanced output is too close to the original wording" }
-  }
-
   return { ok: true, value: output }
 }
 
@@ -1262,10 +1242,7 @@ function alignDetailScenes(detail: TaskDetail, script: string): TaskDetail {
 }
 
 function buildPlanningFallback(detail: TaskDetail): TextPlanningOutput {
-  const finalVoiceoverScript =
-    detail.taskRunConfig.generationMode === "system_enhanced"
-      ? buildSystemEnhancedFallbackScript(detail.script, detail.taskRunConfig.targetDurationSec)
-      : detail.script
+  const finalVoiceoverScript = detail.script
   const scenes = buildStoryboardScenes({
     script: finalVoiceoverScript,
     targetDurationSec: detail.taskRunConfig.targetDurationSec ?? 30,
@@ -1280,10 +1257,7 @@ function buildPlanningFallback(detail: TaskDetail): TextPlanningOutput {
     generationRoute: detail.taskRunConfig.generationRoute,
     targetDurationSec: detail.taskRunConfig.targetDurationSec,
     finalVoiceoverScript,
-    visualStyleGuide:
-      detail.taskRunConfig.generationMode === "system_enhanced"
-        ? "System enhanced social-video pacing."
-        : "Preserve original tone with minimal structural cleanup.",
+    visualStyleGuide: "Preserve the original subject, scene, and semantic intent with minimal structural cleanup.",
     ctaLine: scenes.at(-1)?.script ?? finalVoiceoverScript,
     scenePlan: scenes.map((scene) => ({
       sceneIndex: scene.index,
@@ -1303,10 +1277,7 @@ function buildPlanningFallback(detail: TaskDetail): TextPlanningOutput {
       executionMode: detail.taskRunConfig.executionMode,
       renderSpec: detail.taskRunConfig.renderSpecJson,
       globalTheme: detail.title,
-      visualStyleGuide:
-        detail.taskRunConfig.generationMode === "system_enhanced"
-          ? "System enhanced social-video pacing."
-          : "Preserve original tone with minimal structural cleanup.",
+      visualStyleGuide: "Preserve the original subject, scene, and semantic intent with minimal structural cleanup.",
       subjectProfile: "Maintain one consistent subject profile across all scenes.",
       productProfile: "Keep product presentation consistent across all scenes.",
       backgroundConstraints: [],
@@ -1320,7 +1291,7 @@ function buildPlanningFallback(detail: TaskDetail): TextPlanningOutput {
     generationRoute: detail.taskRunConfig.generationRoute,
     targetDurationSec: detail.taskRunConfig.targetDurationSec,
     finalVoiceoverScript,
-    visualStyleGuide: detail.taskRunConfig.generationMode === "system_enhanced" ? "System enhanced social-video pacing." : "Preserve original tone with minimal structural cleanup.",
+    visualStyleGuide: "Preserve the original subject, scene, and semantic intent with minimal structural cleanup.",
     ctaLine: scenes.at(-1)?.script ?? finalVoiceoverScript,
     scenePlan: scenes.map((scene) => ({
       sceneIndex: scene.index,
