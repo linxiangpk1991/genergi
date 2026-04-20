@@ -3,8 +3,10 @@ import { Link, useSearchParams } from "react-router-dom"
 import {
   api,
   buildAssetCenterUrl,
+  buildAssetPreviewUrl,
   buildKeyframePreviewUrl,
   buildBatchDashboardUrl,
+  type AssetRecord,
   type TaskBlueprintRecord,
   type TaskBlueprintReviewRecord,
   type TaskDetail,
@@ -29,6 +31,10 @@ function isActionableReviewTask(task: TaskSummary) {
   )
 }
 
+function findAsset(assets: AssetRecord[], assetType: AssetRecord["assetType"]) {
+  return assets.find((asset) => asset.assetType === assetType) ?? null
+}
+
 export function TaskReviewPage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const routeTaskId = searchParams.get("taskId") ?? ""
@@ -37,6 +43,7 @@ export function TaskReviewPage() {
   const [detail, setDetail] = useState<TaskDetail | null>(null)
   const [blueprint, setBlueprint] = useState<TaskBlueprintRecord | null>(null)
   const [review, setReview] = useState<TaskBlueprintReviewRecord | null>(null)
+  const [sourceScript, setSourceScript] = useState("")
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState("")
@@ -106,9 +113,10 @@ export function TaskReviewPage() {
           syncTaskRoute(selectedTaskId, true)
         }
 
-        const [detailResult, blueprintResult] = await Promise.all([
+        const [detailResult, blueprintResult, assetsResult] = await Promise.all([
           api.getTaskDetail(selectedTaskId),
           api.getTaskCurrentBlueprint(selectedTaskId),
+          api.getTaskAssets(selectedTaskId),
         ])
         if (!active) {
           return
@@ -117,12 +125,31 @@ export function TaskReviewPage() {
         setDetail(detailResult.detail)
         setBlueprint(blueprintResult.blueprint)
         setReview(blueprintResult.review)
+        const sourceAsset = findAsset(assetsResult.assets, "source_script")
+        if (sourceAsset) {
+          try {
+            const response = await fetch(buildAssetPreviewUrl(sourceAsset.taskId, sourceAsset.id))
+            const text = await response.text()
+            if (active && response.ok) {
+              setSourceScript(text)
+            } else if (active) {
+              setSourceScript("")
+            }
+          } catch {
+            if (active) {
+              setSourceScript("")
+            }
+          }
+        } else {
+          setSourceScript("")
+        }
         setError("")
       } catch (loadError) {
         if (!active) {
           return
         }
         setError(loadError instanceof Error ? loadError.message : "审核蓝图加载失败")
+        setSourceScript("")
       } finally {
         if (active) {
           setLoading(false)
@@ -293,6 +320,11 @@ export function TaskReviewPage() {
           </div>
 
           <section className="planning-summary-card">
+            <strong>母本原文</strong>
+            <span>{sourceScript || "当前没有留档的母本原文。"}</span>
+          </section>
+
+          <section className="planning-summary-card">
             <strong>总旁白稿</strong>
             <span>{blueprint?.blueprint.totalVoiceoverScript ?? detail?.script ?? "暂无旁白稿"}</span>
           </section>
@@ -300,6 +332,20 @@ export function TaskReviewPage() {
           <section className="planning-summary-card">
             <strong>全局风格</strong>
             <span>{blueprint?.blueprint.visualStyleGuide ?? detail?.visualStyleGuide ?? "暂无风格指引"}</span>
+          </section>
+
+          <section className="planning-summary-card">
+            <strong>一致性契约</strong>
+            <span>
+              主体：{blueprint?.blueprint.subjectProfile ?? "--"} ·
+              物料：{blueprint?.blueprint.productProfile ?? "--"}
+            </span>
+            <span>
+              背景约束：{blueprint?.blueprint.backgroundConstraints?.join(" / ") || "无"}
+            </span>
+            <span>
+              禁止项：{blueprint?.blueprint.negativeConstraints?.join(" / ") || "无"}
+            </span>
           </section>
 
           <div className="task-list">
@@ -336,6 +382,12 @@ export function TaskReviewPage() {
                   <label className="field-label">视频提示词</label>
                   <div className="review-content">{scene.videoPrompt}</div>
                 </div>
+                <div className="review-block">
+                  <label className="field-label">连续性约束</label>
+                  <div className="review-content">
+                    {scene.continuityConstraints.length ? scene.continuityConstraints.join(" / ") : "当前没有额外连续性约束"}
+                  </div>
+                </div>
               </section>
             )) ?? <div className="empty-inline">当前蓝图还没有分镜契约。</div>}
           </div>
@@ -356,6 +408,10 @@ export function TaskReviewPage() {
               <div className="task-item">
                 <strong>最新审核</strong>
                 <span>{review ? `${review.decision} · ${review.decidedAt}` : "暂无"}</span>
+              </div>
+              <div className="task-item">
+                <strong>母本留档</strong>
+                <span>{sourceScript ? "已加载" : "暂无"}</span>
               </div>
             </div>
           </section>

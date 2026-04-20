@@ -14,6 +14,7 @@ vi.mock("../../../apps/web/src/api", async () => {
       listTasks: vi.fn(),
       getTaskDetail: vi.fn(),
       getTaskCurrentBlueprint: vi.fn(),
+      getTaskAssets: vi.fn(),
       reviewTaskBlueprint: vi.fn(),
       resumeCurrentBlueprint: vi.fn(),
     },
@@ -199,6 +200,38 @@ describe("TaskReviewPage", () => {
       nextStage: { canResumeExecution: false, resumePath: null },
     } as any)
 
+    vi.mocked(api.getTaskAssets).mockResolvedValue({
+      assets: [
+        {
+          id: "task_reviewable_source",
+          taskId: "task_reviewable",
+          assetType: "source_script",
+          label: "任务母本",
+          status: "ready",
+          path: "/tmp/source-script.txt",
+          createdAt: "2026-04-20T00:00:00.000Z",
+          fileName: "source-script.txt",
+          directoryName: "/tmp",
+          displayPath: "/tmp/source-script.txt",
+          extension: ".txt",
+          mimeType: "text/plain; charset=utf-8",
+          sizeBytes: 30,
+          sizeLabel: "30 B",
+          exists: true,
+          isDirectory: false,
+          previewable: true,
+          previewKind: "text",
+          modifiedAt: "2026-04-20T00:00:00.000Z",
+          downloadFileName: "source-script.txt",
+        },
+      ],
+    } as any)
+
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      text: async () => "Original source script.",
+    } as any)
+
     vi.mocked(api.reviewTaskBlueprint).mockResolvedValue({
       blueprint: {
         taskId: "task_reviewable",
@@ -348,6 +381,10 @@ describe("TaskReviewPage", () => {
     expect(text).toContain("Slow push-in over the clutter before the product appears")
     expect(text).toContain("1080 × 1920")
     expect(text).toContain("9:16")
+    expect(text).toContain("母本原文")
+    expect(text).toContain("Original source script.")
+    expect(text).toContain("一致性契约")
+    expect(text).toContain("主体：Single hero product")
   })
 
   it("prefers actionable review tasks even when the blueprint is already approved", async () => {
