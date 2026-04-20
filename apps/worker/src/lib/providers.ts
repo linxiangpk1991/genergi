@@ -307,6 +307,65 @@ function normalizeTransitionHint(index: number, total: number, fallback?: string
   return "cut"
 }
 
+function parseSceneDurationValue(value: unknown, fallback: number) {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return Math.round(value)
+  }
+
+  if (typeof value === "string") {
+    const match = value.match(/(\d+(?:\.\d+)?)/)
+    if (match?.[1]) {
+      const parsed = Number.parseFloat(match[1])
+      if (Number.isFinite(parsed) && parsed > 0) {
+        return Math.round(parsed)
+      }
+    }
+  }
+
+  return fallback
+}
+
+function buildCanonicalScenePlanFromBaseScenes(
+  scenes: StoryboardScene[],
+  planned: TextPlanningOutput,
+) {
+  return scenes.map((scene, index, allScenes) => {
+    const plannedScene = planned.scenePlan[index]
+    const sceneGoal = plannedScene?.scenePurpose?.trim() || scene.sceneGoal || scene.title
+    const startFrameDescription =
+      plannedScene?.startFrameDescription?.trim() ||
+      scene.startFrameDescription ||
+      sceneGoal
+    const visualPromptBase =
+      plannedScene?.imagePrompt?.trim() ||
+      scene.imagePrompt
+    const videoPromptBase =
+      plannedScene?.videoPrompt?.trim() ||
+      scene.videoPrompt
+
+    return {
+      sceneIndex: scene.index,
+      scenePurpose: sceneGoal,
+      durationSec: scene.durationSec,
+      script: scene.script,
+      voiceoverScript: scene.voiceoverScript ?? scene.script,
+      startFrameDescription,
+      imagePrompt: visualPromptBase,
+      videoPrompt: videoPromptBase,
+      startFrameIntent: plannedScene?.startFrameIntent?.trim() || scene.startFrameIntent || sceneGoal,
+      endFrameIntent:
+        plannedScene?.endFrameIntent?.trim() ||
+        scene.endFrameIntent ||
+        (index === allScenes.length - 1 ? "Close on the final scene." : `Hand off from scene ${index + 1}.`),
+      transitionHint: normalizeTransitionHint(index, allScenes.length, plannedScene?.transitionHint),
+      continuityConstraints:
+        plannedScene?.continuityConstraints?.length
+          ? plannedScene.continuityConstraints
+          : scene.continuityConstraints ?? [],
+    }
+  })
+}
+
 export function buildPlannedExecutionBlueprint(
   detail: TaskDetail,
   planned: TextPlanningOutput,
@@ -898,6 +957,16 @@ export function validatePlanningOutput(
     targetDurationSec: number
     maxSceneCount?: number
     maxSingleShotSec?: number
+    executionMode?: "automated" | "review_required"
+    renderSpec?: {
+      terminalPresetId: "phone_portrait" | "phone_landscape" | "tablet_portrait" | "tablet_landscape"
+      width: number
+      height: number
+      aspectRatio: string
+      safeArea: { topPct: number; rightPct: number; bottomPct: number; leftPct: number }
+      compositionGuideline: string
+      motionGuideline: string
+    }
     generationMode?: "user_locked" | "system_enhanced"
     originalScript?: string
   },
@@ -911,13 +980,33 @@ export function validatePlanningOutput(
     return { ok: false, reason: "commentary field is not allowed in planning output" }
   }
 
+  const scenePlanRaw =
+    raw &&
+    typeof raw === "object" &&
+    Array.isArray((raw as { scenePlan?: unknown[] }).scenePlan)
+      ? (raw as { scenePlan: unknown[] }).scenePlan
+      : null
+
+  const usesLegacySceneFields =
+    Array.isArray(scenePlanRaw) &&
+    scenePlanRaw.some(
+      (scene) =>
+        scene &&
+        typeof scene === "object" &&
+        ("sceneNumber" in scene ||
+          "sceneIndex" in scene ||
+          "duration" in scene ||
+          "purpose" in scene ||
+          "visualDirection" in scene ||
+          "motionNotes" in scene ||
+          "textOverlay" in scene),
+    )
+
   const normalizedRaw =
     raw &&
     typeof raw === "object" &&
-    Array.isArray((raw as { scenePlan?: unknown[] }).scenePlan) &&
-    (raw as { scenePlan: unknown[] }).scenePlan.some(
-      (scene) => scene && typeof scene === "object" && "sceneNumber" in scene,
-    )
+    Array.isArray(scenePlanRaw) &&
+    usesLegacySceneFields
       ? {
           generationRoute:
             (raw as { generationRoute?: unknown }).generationRoute === "single_shot"
@@ -942,16 +1031,22 @@ export function validatePlanningOutput(
           scenePlan: (raw as {
             scenePlan: Array<{
               sceneNumber?: number
+              sceneIndex?: number
+              duration?: string | number
               durationSeconds?: number
               durationSec?: number
               visual?: string
+              visualDirection?: string
               voiceoverSegment?: string
               mood?: string
               camera?: string
+              purpose?: string
               scenePurpose?: string
               script?: string
               imagePrompt?: string
               videoPrompt?: string
+              textOverlay?: string
+              motionNotes?: string
               transitionHint?: string
               startFrameDescription?: string
               voiceoverScript?: string
@@ -961,27 +1056,49 @@ export function validatePlanningOutput(
             }>
           }).scenePlan.map((scene, index, allScenes) => {
             const script = scene.script ?? scene.voiceoverSegment ?? ""
-            const visual = scene.visual ?? script
+            const visual = scene.visualDirection ?? scene.visual ?? script
             const mood = scene.mood ? ` Mood: ${scene.mood}.` : ""
             const camera = scene.camera ? ` Camera: ${scene.camera}.` : ""
+            const motionNotes = scene.motionNotes ? ` Motion: ${scene.motionNotes}.` : ""
+            const overlay = scene.textOverlay ? ` Overlay context: ${scene.textOverlay}.` : ""
+            const normalizedSceneIndex =
+              typeof scene.sceneNumber === "number"
+                ? Math.max(scene.sceneNumber - 1, 0)
+                : typeof scene.sceneIndex === "number"
+                  ? Math.max(scene.sceneIndex - (scene.sceneIndex > 0 ? 1 : 0), 0)
+                  : index
             return {
-              sceneIndex: scene.sceneNumber != null ? Math.max(scene.sceneNumber - 1, 0) : index,
-              scenePurpose: scene.scenePurpose ?? `Scene ${index + 1}`,
-              durationSec: scene.durationSec ?? scene.durationSeconds ?? Math.floor(expected.targetDurationSec / allScenes.length),
+              sceneIndex: normalizedSceneIndex,
+              scenePurpose: scene.scenePurpose ?? scene.purpose ?? `Scene ${index + 1}`,
+              durationSec: parseSceneDurationValue(
+                scene.durationSec ?? scene.durationSeconds ?? scene.duration,
+                Math.floor(expected.targetDurationSec / allScenes.length),
+              ),
               script,
               voiceoverScript: scene.voiceoverScript ?? script,
               startFrameDescription: scene.startFrameDescription ?? visual,
-              imagePrompt: scene.imagePrompt ?? `${visual}${mood}${camera}`.trim(),
+              imagePrompt: scene.imagePrompt ?? `${visual}${mood}${camera}${overlay}`.trim(),
               videoPrompt:
                 scene.videoPrompt ??
-                `${visual}${mood}${camera} Generate a short-form social video shot that matches this exact beat.`.trim(),
-              startFrameIntent: scene.startFrameIntent ?? (scene.scenePurpose ?? `Introduce scene ${index + 1}`),
+                `${visual}${mood}${camera}${motionNotes}${overlay} Generate a short-form social video shot that matches this exact beat.`.trim(),
+              startFrameIntent: scene.startFrameIntent ?? (scene.scenePurpose ?? scene.purpose ?? `Introduce scene ${index + 1}`),
               endFrameIntent: scene.endFrameIntent ?? (index === allScenes.length - 1 ? "Close on the final message" : `Hand off from scene ${index + 1}`),
               transitionHint: scene.transitionHint ?? (index === allScenes.length - 1 ? "close" : "cut"),
               continuityConstraints: Array.isArray(scene.continuityConstraints) ? scene.continuityConstraints : [],
             }
           }),
           blueprint: {
+            executionMode: expected.executionMode ?? "review_required",
+            renderSpec:
+              expected.renderSpec ?? {
+                terminalPresetId: "phone_portrait",
+                width: 1080,
+                height: 1920,
+                aspectRatio: "9:16",
+                safeArea: { topPct: 8, rightPct: 6, bottomPct: 10, leftPct: 6 },
+                compositionGuideline: "Keep the subject centered.",
+                motionGuideline: "Prefer slow push-ins.",
+              },
             globalTheme:
               (raw as { globalTheme?: string }).globalTheme ??
               "Preserve the original content theme with platform-native execution.",
@@ -1002,7 +1119,66 @@ export function validatePlanningOutput(
                 .map((scene) => scene.voiceoverSegment ?? "")
                 .join(" ")
                 .trim()),
-            sceneContracts: [],
+            sceneContracts: ((raw as {
+              scenePlan: Array<{
+                sceneNumber?: number
+                sceneIndex?: number
+                duration?: string | number
+                durationSeconds?: number
+                durationSec?: number
+                visual?: string
+                visualDirection?: string
+                voiceoverSegment?: string
+                mood?: string
+                camera?: string
+                purpose?: string
+                scenePurpose?: string
+                script?: string
+                imagePrompt?: string
+                videoPrompt?: string
+                textOverlay?: string
+                motionNotes?: string
+                transitionHint?: string
+                startFrameDescription?: string
+                voiceoverScript?: string
+                startFrameIntent?: string
+                endFrameIntent?: string
+                continuityConstraints?: string[]
+              }>
+            }).scenePlan.map((scene, index, allScenes) => {
+              const script = scene.script ?? scene.voiceoverSegment ?? ""
+              const visual = scene.visualDirection ?? scene.visual ?? script
+              const mood = scene.mood ? ` Mood: ${scene.mood}.` : ""
+              const camera = scene.camera ? ` Camera: ${scene.camera}.` : ""
+              const motionNotes = scene.motionNotes ? ` Motion: ${scene.motionNotes}.` : ""
+              const overlay = scene.textOverlay ? ` Overlay context: ${scene.textOverlay}.` : ""
+              const normalizedSceneIndex =
+                typeof scene.sceneNumber === "number"
+                  ? Math.max(scene.sceneNumber - 1, 0)
+                  : typeof scene.sceneIndex === "number"
+                    ? Math.max(scene.sceneIndex - (scene.sceneIndex > 0 ? 1 : 0), 0)
+                    : index
+              const durationSec = parseSceneDurationValue(
+                scene.durationSec ?? scene.durationSeconds ?? scene.duration,
+                Math.floor(expected.targetDurationSec / allScenes.length),
+              )
+              return {
+                id: `scene_${normalizedSceneIndex + 1}`,
+                index: normalizedSceneIndex,
+                sceneGoal: scene.scenePurpose ?? scene.purpose ?? `Scene ${index + 1}`,
+                voiceoverScript: scene.voiceoverScript ?? script,
+                startFrameDescription: scene.startFrameDescription ?? visual,
+                imagePrompt: scene.imagePrompt ?? `${visual}${mood}${camera}${overlay}`.trim(),
+                videoPrompt:
+                  scene.videoPrompt ??
+                  `${visual}${mood}${camera}${motionNotes}${overlay} Generate a short-form social video shot that matches this exact beat.`.trim(),
+                startFrameIntent: scene.startFrameIntent ?? (scene.scenePurpose ?? scene.purpose ?? `Introduce scene ${index + 1}`),
+                endFrameIntent: scene.endFrameIntent ?? (index === allScenes.length - 1 ? "Close on the final message" : `Hand off from scene ${index + 1}`),
+                durationSec,
+                transitionHint: scene.transitionHint ?? (index === allScenes.length - 1 ? "close" : "cut"),
+                continuityConstraints: Array.isArray(scene.continuityConstraints) ? scene.continuityConstraints : [],
+              }
+            })),
           },
         }
       : raw
@@ -1424,6 +1600,8 @@ async function requestStructuredPlanning(detail: TaskDetail): Promise<Structured
       targetDurationSec: detail.taskRunConfig.targetDurationSec,
       maxSceneCount,
       maxSingleShotSec: capability.maxSingleShotSec,
+      executionMode: detail.taskRunConfig.executionMode,
+      renderSpec: detail.taskRunConfig.renderSpecJson,
       generationMode: detail.taskRunConfig.generationMode,
       originalScript: detail.script,
     })
@@ -1473,30 +1651,42 @@ async function buildPreparedTaskDetail(detail: TaskDetail): Promise<{
   planningTrace: PlanningTraceArtifact
 }> {
   const sourceScript = detail.script
+  const baseDetail = alignDetailScenes(detail, sourceScript)
   try {
-    const structuredAttempt = await requestStructuredPlanning(detail)
+    const structuredAttempt = await requestStructuredPlanning(baseDetail)
     const usedFallback = !structuredAttempt.output
-    const planned = structuredAttempt.output ?? buildPlanningFallback(detail)
-    const normalizedRewrite = normalizeRewriteToVoiceoverScript(planned.finalVoiceoverScript, detail.taskRunConfig.targetDurationSec ?? 30)
-    const normalizedScenes = buildScenesFromBlueprint(detail, planned.blueprint)
+    const planned = structuredAttempt.output ?? buildPlanningFallback(baseDetail)
+    const canonicalScenePlan = buildCanonicalScenePlanFromBaseScenes(baseDetail.scenes, planned)
+    const canonicalPlanned: TextPlanningOutput = {
+      ...planned,
+      finalVoiceoverScript: sourceScript,
+      ctaLine: canonicalScenePlan.at(-1)?.script ?? sourceScript,
+      scenePlan: canonicalScenePlan,
+      blueprint: {
+        ...planned.blueprint,
+        totalVoiceoverScript: sourceScript,
+      },
+    }
+    const blueprint = buildPlannedExecutionBlueprint(baseDetail, canonicalPlanned)
+    const normalizedScenes = buildScenesFromBlueprint(baseDetail, blueprint)
 
     return {
       detail: {
-        ...detail,
-        script: normalizedRewrite || detail.script,
-        blueprintVersion: detail.blueprintVersion > 0 ? detail.blueprintVersion : 1,
-        blueprintStatus: detail.blueprintStatus,
+        ...baseDetail,
+        script: sourceScript,
+        blueprintVersion: baseDetail.blueprintVersion > 0 ? baseDetail.blueprintVersion : 1,
+        blueprintStatus: baseDetail.blueprintStatus,
         taskRunConfig: {
-          ...detail.taskRunConfig,
-          blueprintVersion: detail.taskRunConfig.blueprintVersion > 0 ? detail.taskRunConfig.blueprintVersion : 1,
-          blueprintStatus: detail.taskRunConfig.blueprintStatus,
+          ...baseDetail.taskRunConfig,
+          blueprintVersion: baseDetail.taskRunConfig.blueprintVersion > 0 ? baseDetail.taskRunConfig.blueprintVersion : 1,
+          blueprintStatus: baseDetail.taskRunConfig.blueprintStatus,
         },
-        visualStyleGuide: planned.visualStyleGuide,
-        ctaLine: planned.ctaLine,
+        visualStyleGuide: canonicalPlanned.visualStyleGuide,
+        ctaLine: canonicalPlanned.ctaLine,
         scenes: normalizedScenes,
         updatedAt: new Date().toISOString(),
       },
-      blueprint: planned.blueprint,
+      blueprint,
       planningTrace: {
         sourceScript,
         planningPrompt: structuredAttempt.promptContext,
@@ -1507,7 +1697,7 @@ async function buildPreparedTaskDetail(detail: TaskDetail): Promise<{
           baseUrl: structuredAttempt.baseUrl,
           usedFallback,
           parsedResponse: structuredAttempt.parsedResponse,
-          selectedPlan: planned,
+          selectedPlan: canonicalPlanned,
         },
       },
     }
