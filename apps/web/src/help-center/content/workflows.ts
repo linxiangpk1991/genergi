@@ -54,13 +54,13 @@ export const workflowGuides: HelpWorkflowGuide[] = [
       {
         id: "defaults",
         title: "设置默认值",
-        description: "在 Defaults Center 中设置全局默认和模式默认，形成稳定基线。",
-        notes: ["模式默认会覆盖全局默认。", "任务创建时只会冻结当下有效的默认值，不再在任务页做临时覆盖。"],
+        description: "在 Defaults Center 中设置全局默认和任务创建默认值，形成稳定基线。",
+        notes: ["任务创建默认值会覆盖全局默认。", "任务创建时只会冻结当下有效的默认值，不再在任务页做临时覆盖。"],
       },
     ],
     decisionPoints: [
       "只有通过校验的 Provider 和 Model 才会进入默认值可选池。",
-      "默认值优先级固定：模式默认 > 全局默认；任务创建后会冻结为任务快照。",
+      "默认值优先级固定：任务创建默认值 > 全局默认；任务创建后会冻结为任务快照。",
       "后续再调整默认值，不会回写已经创建的历史任务。",
     ],
     relatedFeatureIds: ["model-control-center"],

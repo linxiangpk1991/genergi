@@ -75,7 +75,7 @@ export const featureGuides: HelpFeatureGuide[] = [
       { title: "这个页面是干什么的", points: ["帮助你维护模型接入链路。", "帮助你理解默认值如何影响任务。"] },
       { title: "页面主要区域", points: ["总览", "Provider 管理", "Model Registry", "Defaults Center"] },
       { title: "四个运行时槽位", points: ["文本模型负责规划与改写", "图片模型负责关键帧与静态图", "视频模型负责视频生成", "TTS Provider 负责配音"] },
-      { title: "常见操作", points: ["新增 Provider", "登记 Model", "设置全局默认与模式默认", "确认冻结快照会采用哪套默认值"] },
+      { title: "常见操作", points: ["新增 Provider", "登记 Model", "设置全局默认与任务创建默认值", "确认冻结快照会采用哪套默认值"] },
       { title: "常见误区", points: ["不要把默认值治理理解成内容改写开关", "不要把未校验记录当成可用项", "不要把系统理解成旧分镜/旧关键帧双审核链"] },
     ],
     relatedWorkflowIds: ["model-onboarding-and-defaults"],

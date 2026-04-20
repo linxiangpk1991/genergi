@@ -83,7 +83,7 @@ export const releaseTimelineEntries: HelpReleaseEntry[] = [
     affectedFeatureIds: ["model-control-center", "task-launch"],
     operatorNotes: [
       "Provider 和 Model 需要通过校验后才进入可选池。",
-      "默认值采用全局默认、模式默认两层基线；任务创建时冻结快照。",
+      "默认值采用全局默认、任务创建默认值两层基线；任务创建时冻结快照。",
     ],
     workflowChanges: [
       "新增模型接入 -> 登记 -> 默认值的完整控制链。",

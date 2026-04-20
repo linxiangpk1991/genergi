@@ -2,13 +2,15 @@ import { useEffect, useMemo, useState } from "react"
 import { Link, useLocation } from "react-router-dom"
 import {
   api,
-  MODEL_CONTROL_MODE_LABELS,
   MODEL_CONTROL_SLOT_LABELS,
   MODEL_CONTROL_SLOT_ORDER,
   type ModelControlDefaults,
+  type ModelControlModeId,
   type ModelRegistryRecord,
   type ProviderRegistryRecord,
 } from "../api"
+
+const ACTIVE_TASK_CREATION_MODE: ModelControlModeId = "high_quality"
 
 function formatDateTime(value?: string | null) {
   if (!value) {
@@ -61,10 +63,9 @@ function ModelControlNav() {
 
 function getDefaultSelection(
   defaults: ModelControlDefaults | null,
-  modeId: keyof typeof MODEL_CONTROL_MODE_LABELS,
   slot: keyof typeof MODEL_CONTROL_SLOT_LABELS,
 ) {
-  return defaults?.modes?.[modeId]?.[slot] ?? defaults?.global?.[slot] ?? null
+  return defaults?.modes?.[ACTIVE_TASK_CREATION_MODE]?.[slot] ?? defaults?.global?.[slot] ?? null
 }
 
 export function ModelControlCenterPage() {
@@ -139,12 +140,12 @@ export function ModelControlCenterPage() {
             <div className="eyebrow">Model Control Plane</div>
             <h2>模型控制中心</h2>
             <p className="section-note">
-              管理 Provider、Model、全局默认值和模式默认值。
+              管理 Provider、Model、全局默认值和任务创建默认值。
             </p>
           </div>
           <div className="planning-summary-tags">
             <span className="pill pill--sm">四个运行时槽位</span>
-            <span className="pill pill--sm">冻结快照 &gt; 模式默认 &gt; 全局默认</span>
+            <span className="pill pill--sm">冻结快照 &gt; 任务创建默认值 &gt; 全局默认</span>
           </div>
         </div>
 
@@ -235,10 +236,10 @@ export function ModelControlCenterPage() {
         <Link className="card model-control-link-card" to="/model-control-center/defaults">
           <div className="eyebrow">Step 3</div>
           <h3>Defaults Center</h3>
-          <p>设置全局默认值和模式默认值，并明确告诉运营最终生效的是哪一层。</p>
+          <p>设置全局默认值和任务创建默认值，并明确告诉运营新任务真正会用哪套组合。</p>
           <div className="planning-inline">
-            <span className="pill pill--sm">量产模式</span>
-            <span className="pill pill--sm">高质量模式</span>
+            <span className="pill pill--sm">单一路径</span>
+            <span className="pill pill--sm">创建即冻结</span>
           </div>
         </Link>
       </section>
@@ -251,11 +252,11 @@ export function ModelControlCenterPage() {
         <div className="precedence-strip">
           <div className="planning-note-card">
             <strong>1. 全局默认</strong>
-            <span>给所有模式提供兜底选择。只有当模式层没有指定时才生效。</span>
+            <span>给单一路径任务创建提供兜底选择。只有任务创建默认值没有指定时才会生效。</span>
           </div>
           <div className="planning-note-card">
-            <strong>2. 模式默认</strong>
-            <span>给 `量产模式` / `高质量模式` 提供更贴近业务目标的默认组合，会覆盖全局默认。</span>
+            <strong>2. 任务创建默认值</strong>
+            <span>这套默认值就是新任务真正会命中的运行时组合，会覆盖全局兜底。</span>
           </div>
           <div className="planning-note-card">
             <strong>3. 任务冻结快照</strong>
@@ -267,7 +268,7 @@ export function ModelControlCenterPage() {
       <section className="card">
         <div className="section-header">
           <h2>四槽位默认值现状</h2>
-          <span className="muted">按模式查看当前默认组合。</span>
+          <span className="muted">按单一路径任务创建查看当前默认组合。</span>
         </div>
         <div className="summary-list">
           {MODEL_CONTROL_SLOT_ORDER.map((slot) => (
@@ -280,17 +281,12 @@ export function ModelControlCenterPage() {
                     ? `${defaults.global[slot]?.displayName} / ${defaults.global[slot]?.providerDisplayName ?? "未标注 provider"}`
                     : "未设置"}
                 </span>
-                {Object.entries(MODEL_CONTROL_MODE_LABELS).map(([modeId, label]) => {
-                  const selection = getDefaultSelection(defaults, modeId as keyof typeof MODEL_CONTROL_MODE_LABELS, slot)
-                  return (
-                    <span key={modeId}>
-                      {label}：
-                      {selection?.displayName
-                        ? `${selection.displayName} / ${selection.providerDisplayName ?? "未标注 provider"}`
-                        : "未设置"}
-                    </span>
-                  )
-                })}
+                <span>
+                  任务创建默认值：
+                  {getDefaultSelection(defaults, slot)?.displayName
+                    ? `${getDefaultSelection(defaults, slot)?.displayName} / ${getDefaultSelection(defaults, slot)?.providerDisplayName ?? "未标注 provider"}`
+                    : "未设置"}
+                </span>
               </div>
             </div>
           ))}
