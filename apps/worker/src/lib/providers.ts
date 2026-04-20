@@ -281,14 +281,8 @@ function resolvePlanningModelId(runtime: RuntimeGenerationConfig) {
   return snapshotModelId || "claude-opus-4.6"
 }
 
-function buildKeyframePrompt(scene: StoryboardScene, aspectRatio: string) {
-  const basePrompt = scene.imagePrompt.trim() || scene.videoPrompt.trim() || scene.title.trim()
-  const orientation = aspectRatio.includes(":") ? aspectRatio : "9:16"
-  return [
-    basePrompt,
-    `Vertical keyframe for a ${orientation} short-form social video.`,
-    "Cinematic composition, premium product readability, crisp subject separation, no watermark, no UI chrome, no caption text.",
-  ].join(" ")
+export function buildKeyframePrompt(scene: StoryboardScene, _aspectRatio: string) {
+  return scene.imagePrompt.trim() || scene.videoPrompt.trim() || scene.title.trim()
 }
 
 function normalizeTransitionHint(index: number, total: number, fallback?: string) {
@@ -326,21 +320,6 @@ function buildConsistencyAnchorText(input: {
   }
 
   return lines.join(". ")
-}
-
-function applyConsistencyAnchorsToPrompt(
-  prompt: string,
-  input: {
-    subjectProfile: string
-    productProfile: string
-    backgroundConstraints: string[]
-    negativeConstraints: string[]
-    continuityConstraints: string[]
-  },
-) {
-  const base = prompt.trim()
-  const anchorText = buildConsistencyAnchorText(input)
-  return [base, anchorText].filter(Boolean).join(" ")
 }
 
 function buildSourceAnchoredImagePrompt(input: {
@@ -530,20 +509,8 @@ export function buildPlannedExecutionBlueprint(
     sceneGoal: scene.scenePurpose,
     voiceoverScript: scene.voiceoverScript,
     startFrameDescription: scene.startFrameDescription,
-    imagePrompt: applyConsistencyAnchorsToPrompt(scene.imagePrompt, {
-      subjectProfile: planned.blueprint.subjectProfile,
-      productProfile: planned.blueprint.productProfile,
-      backgroundConstraints: planned.blueprint.backgroundConstraints,
-      negativeConstraints: planned.blueprint.negativeConstraints,
-      continuityConstraints: scene.continuityConstraints ?? [],
-    }),
-    videoPrompt: applyConsistencyAnchorsToPrompt(scene.videoPrompt, {
-      subjectProfile: planned.blueprint.subjectProfile,
-      productProfile: planned.blueprint.productProfile,
-      backgroundConstraints: planned.blueprint.backgroundConstraints,
-      negativeConstraints: planned.blueprint.negativeConstraints,
-      continuityConstraints: scene.continuityConstraints ?? [],
-    }),
+    imagePrompt: scene.imagePrompt,
+    videoPrompt: scene.videoPrompt,
     startFrameIntent: scene.startFrameIntent,
     endFrameIntent: scene.endFrameIntent,
     durationSec: scene.durationSec,
@@ -1145,10 +1112,6 @@ export function validatePlanningOutput(
       ok: false
       reason: string
     } {
-  if (raw && typeof raw === "object" && "commentary" in raw) {
-    return { ok: false, reason: "commentary field is not allowed in planning output" }
-  }
-
   const scenePlanRaw =
     raw &&
     typeof raw === "object" &&
@@ -1182,9 +1145,11 @@ export function validatePlanningOutput(
               ? "single_shot"
               : "multi_scene",
           targetDurationSec:
-            (raw as { targetDurationSec?: number; targetDuration?: number }).targetDurationSec ??
-            (raw as { targetDuration?: number }).targetDuration ??
-            expected.targetDurationSec,
+            parseSceneDurationValue(
+              (raw as { targetDurationSec?: number | string; targetDuration?: number | string }).targetDurationSec ??
+                (raw as { targetDuration?: number | string }).targetDuration,
+              expected.targetDurationSec,
+            ),
           finalVoiceoverScript:
             (raw as { finalVoiceoverScript?: string }).finalVoiceoverScript ??
             ((raw as { scenePlan: Array<{ voiceoverSegment?: string }> }).scenePlan
@@ -1196,7 +1161,12 @@ export function validatePlanningOutput(
             "Use the returned visual, mood, and camera notes as the canonical style guide.",
           ctaLine:
             (raw as { ctaLine?: string }).ctaLine ??
-            ((raw as { scenePlan: Array<{ voiceoverSegment?: string }> }).scenePlan.at(-1)?.voiceoverSegment ?? ""),
+            (
+              (raw as { scenePlan: Array<{ voiceoverSegment?: string; voiceoverScript?: string; script?: string }> }).scenePlan.at(-1)?.voiceoverScript ??
+              (raw as { scenePlan: Array<{ voiceoverSegment?: string; voiceoverScript?: string; script?: string }> }).scenePlan.at(-1)?.script ??
+              (raw as { scenePlan: Array<{ voiceoverSegment?: string; voiceoverScript?: string; script?: string }> }).scenePlan.at(-1)?.voiceoverSegment ??
+              ""
+            ),
           scenePlan: (raw as {
             scenePlan: Array<{
               sceneNumber?: number
@@ -1380,50 +1350,6 @@ export function validatePlanningOutput(
           })),
         },
       }
-  if (output.generationRoute !== expected.generationRoute) {
-    return { ok: false, reason: `route mismatch: expected ${expected.generationRoute}, received ${output.generationRoute}` }
-  }
-
-  if (output.targetDurationSec !== expected.targetDurationSec) {
-    return { ok: false, reason: `target duration mismatch: expected ${expected.targetDurationSec}, received ${output.targetDurationSec}` }
-  }
-
-  const totalDuration = output.scenePlan.reduce((sum, scene) => sum + scene.durationSec, 0)
-  if (totalDuration !== expected.targetDurationSec) {
-    return { ok: false, reason: `scene duration total ${totalDuration}s does not match target ${expected.targetDurationSec}s` }
-  }
-
-  if (output.generationRoute === "single_shot" && output.scenePlan.length !== 1) {
-    return { ok: false, reason: "single_shot output must contain exactly one scene" }
-  }
-
-  if (output.generationRoute === "multi_scene" && output.scenePlan.length <= 1) {
-    return { ok: false, reason: "multi_scene output must contain more than one scene" }
-  }
-
-  if (expected.maxSceneCount != null && output.scenePlan.length !== expected.maxSceneCount) {
-    return {
-      ok: false,
-      reason: `scene count mismatch: expected ${expected.maxSceneCount}, received ${output.scenePlan.length}`,
-    }
-  }
-
-  const maxSingleShotSec = expected.maxSingleShotSec
-  if (
-    maxSingleShotSec != null &&
-    output.scenePlan.some((scene) => scene.durationSec > maxSingleShotSec)
-  ) {
-    return {
-      ok: false,
-      reason: `scene duration exceeds current model single-shot limit of ${maxSingleShotSec}s`,
-    }
-  }
-
-  const invalidScene = output.scenePlan.find((scene) => !planningSceneSchema.safeParse(scene).success)
-  if (invalidScene) {
-    return { ok: false, reason: "scenePlan contains invalid scene entries" }
-  }
-
   return { ok: true, value: output }
 }
 
@@ -1821,51 +1747,31 @@ async function buildPreparedTaskDetail(detail: TaskDetail): Promise<{
 }> {
   const sourceScript = detail.script
   const baseDetail = alignDetailScenes(detail, sourceScript)
-  try {
-    const structuredAttempt = await requestStructuredPlanning(baseDetail)
-    const usedFallback = !structuredAttempt.output
-    const planned = structuredAttempt.output ?? buildPlanningFallback(baseDetail)
-    const adopted = applyModelPlanningOutput(baseDetail, planned)
+  const structuredAttempt = await requestStructuredPlanning(baseDetail)
+  if (!structuredAttempt.output) {
+    throw new Error(
+      `TEXT_PLANNING_OUTPUT_UNAVAILABLE: ${structuredAttempt.rawResponse ? "text model response could not be normalized" : "text model returned no usable planning response"}`,
+    )
+  }
 
-    return {
-      detail: adopted.detail,
-      blueprint: adopted.blueprint,
-      planningTrace: {
-        sourceScript,
-        planningPrompt: structuredAttempt.promptContext,
-        planningResponse: structuredAttempt.rawResponse,
-        planningAudit: {
-          provider: structuredAttempt.provider,
-          model: structuredAttempt.model,
-          baseUrl: structuredAttempt.baseUrl,
-          usedFallback,
-          parsedResponse: structuredAttempt.parsedResponse,
-          selectedPlan: adopted.planned,
-        },
+  const adopted = applyModelPlanningOutput(baseDetail, structuredAttempt.output)
+
+  return {
+    detail: adopted.detail,
+    blueprint: adopted.blueprint,
+    planningTrace: {
+      sourceScript,
+      planningPrompt: structuredAttempt.promptContext,
+      planningResponse: structuredAttempt.rawResponse,
+      planningAudit: {
+        provider: structuredAttempt.provider,
+        model: structuredAttempt.model,
+        baseUrl: structuredAttempt.baseUrl,
+        usedFallback: false,
+        parsedResponse: structuredAttempt.parsedResponse,
+        selectedPlan: adopted.planned,
       },
-    }
-  } catch (error) {
-    console.warn(`[worker] structured planning skipped:`, error instanceof Error ? error.message : String(error))
-    const fallbackDetail = alignDetailScenes(detail, detail.script)
-    const fallbackPlan = buildPlanningFallback(fallbackDetail)
-    return {
-      detail: fallbackDetail,
-      blueprint: fallbackPlan.blueprint,
-      planningTrace: {
-        sourceScript,
-        planningPrompt: null,
-        planningResponse: null,
-        planningAudit: {
-          provider: null,
-          model: null,
-          baseUrl: null,
-          usedFallback: true,
-          fallbackReason: error instanceof Error ? error.message : String(error),
-          parsedResponse: null,
-          selectedPlan: fallbackPlan,
-        },
-      },
-    }
+    },
   }
 }
 

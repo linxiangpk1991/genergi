@@ -65,7 +65,7 @@ describe("worker planning prompt", () => {
     expect(prompt).toContain("finalVoiceoverScript must be direct voiceover text")
   })
 
-  it("rejects planning output that includes commentary instead of machine-usable fields", async () => {
+  it("ignores commentary extras when machine-usable fields are present", async () => {
     const providers = await import("../../../apps/worker/src/lib/providers")
 
     const result = providers.validatePlanningOutput(
@@ -112,14 +112,10 @@ describe("worker planning prompt", () => {
       },
     )
 
-    expect(result.ok).toBe(false)
-    if (result.ok) {
-      throw new Error("expected validation failure")
-    }
-    expect(result.reason).toContain("commentary")
+    expect(result.ok).toBe(true)
   })
 
-  it("rejects multi-scene output when the model returns more scenes than the system route allows", async () => {
+  it("accepts the model scene plan even when it differs from prior platform expectations", async () => {
     const providers = await import("../../../apps/worker/src/lib/providers")
 
     const result = providers.validatePlanningOutput(
@@ -169,11 +165,93 @@ describe("worker planning prompt", () => {
       },
     )
 
-    expect(result.ok).toBe(false)
-    if (result.ok) {
-      throw new Error("expected validation failure")
+    expect(result.ok).toBe(true)
+    if (!result.ok) {
+      throw new Error("expected validation success")
     }
-    expect(result.reason).toContain("scene count")
+    expect(result.value.scenePlan).toHaveLength(4)
+  })
+
+  it("accepts legacy N7-style planning output instead of rejecting it and falling back", async () => {
+    const providers = await import("../../../apps/worker/src/lib/providers")
+
+    const result = providers.validatePlanningOutput(
+      {
+        projectId: "project_default",
+        executionMode: "review_required",
+        terminalPreset: "phone_portrait",
+        renderSize: "1080x1920",
+        renderAspectRatio: "9:16",
+        targetDuration: "30s",
+        generationRoute: "multi_scene",
+        routeReason: "target duration 30s exceeds the current model single-shot limit of 8s",
+        modelSingleShotCeiling: "8s",
+        compositionGuideline: "Keep the subject centered",
+        motionGuideline: "Prefer slow push-ins",
+        finalVoiceoverScript:
+          "If you've been working hard for years but still feel stuck. Link in bio. Enter your birth date and time.",
+        scenePlan: [
+          {
+            sceneIndex: 1,
+            duration: "8s",
+            script: "Hook line.",
+            voiceoverScript: "Hook line.",
+            imagePrompt: "A panda in a Chinese-style room.",
+            videoPrompt: "The panda talks directly to camera.",
+          },
+          {
+            sceneIndex: 2,
+            duration: "8s",
+            script: "Body line one.",
+            voiceoverScript: "Body line one.",
+            imagePrompt: "The panda stands beside a bookshelf.",
+            videoPrompt: "The panda gestures gently.",
+          },
+          {
+            sceneIndex: 3,
+            duration: "8s",
+            script: "Body line two.",
+            voiceoverScript: "Body line two.",
+            imagePrompt: "The panda points at a chart.",
+            videoPrompt: "The panda taps the chart.",
+          },
+          {
+            sceneIndex: 4,
+            duration: "6s",
+            script: "CTA line.",
+            voiceoverScript: "CTA line.",
+            imagePrompt: "The panda leans toward camera with a smile.",
+            videoPrompt: "The panda gives a thumbs-up.",
+          },
+        ],
+      },
+      {
+        generationRoute: "multi_scene",
+        targetDurationSec: 30,
+        maxSceneCount: 4,
+        maxSingleShotSec: 8,
+        executionMode: "review_required",
+        renderSpec: {
+          terminalPresetId: "phone_portrait",
+          width: 1080,
+          height: 1920,
+          aspectRatio: "9:16",
+          safeArea: { topPct: 8, rightPct: 6, bottomPct: 10, leftPct: 6 },
+          compositionGuideline: "Keep the subject centered",
+          motionGuideline: "Prefer slow push-ins",
+        },
+        generationMode: "user_locked",
+        originalScript: "ignored",
+      },
+    )
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) {
+      throw new Error("expected validation success")
+    }
+    expect(result.value.targetDurationSec).toBe(30)
+    expect(result.value.ctaLine).toBe("CTA line.")
+    expect(result.value.scenePlan[3]?.imagePrompt).toBe("The panda leans toward camera with a smile.")
   })
 
 })

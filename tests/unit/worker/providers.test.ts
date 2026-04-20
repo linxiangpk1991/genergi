@@ -86,7 +86,7 @@ A few notes to make it hit:
     expect(script).toContain("Call out the pain point hard")
   })
 
-  it("preserves review metadata when rewrite rebuilds scenes with matching stable ids", async () => {
+  it("fails fast instead of silently rewriting from fallback scenes when structured planning is unavailable", async () => {
     const providers = await import("../../../apps/worker/src/lib/providers")
 
     const detail = createTaskDetail({
@@ -137,22 +137,10 @@ A few notes to make it hit:
       >
     }
 
-    const rewritten = (await providers.rewriteTaskWithTextProvider(detail)) as typeof detail
-
-    expect(rewritten.scenes).toHaveLength(2)
-    expect(rewritten.scenes[0].reviewStatus).toBe("rejected")
-    expect(rewritten.scenes[0].keyframeStatus).toBe("approved")
-    expect(rewritten.scenes[0].reviewNote).toBe("Hook still needs stronger contrast.")
-    expect(rewritten.scenes[0].reviewedAt).toBe("2026-04-19T01:00:00.000Z")
-    expect(rewritten.scenes[0].keyframeReviewNote).toBe("Keyframe composition is approved.")
-    expect(rewritten.scenes[0].keyframeReviewedAt).toBe("2026-04-19T02:00:00.000Z")
-    expect(rewritten.scenes[1].reviewStatus).toBe("approved")
-    expect(rewritten.scenes[1].keyframeStatus).toBe("rejected")
-    expect(rewritten.scenes[1].reviewNote).toBe("Approved after copy tweak.")
-    expect(rewritten.scenes[1].keyframeReviewNote).toBe("Need a cleaner final frame.")
+    await expect(providers.rewriteTaskWithTextProvider(detail)).rejects.toThrow("TEXT_PLANNING_OUTPUT_UNAVAILABLE")
   })
 
-  it("falls back to scene index when rewrite scene ids change", async () => {
+  it("does not hide planning failure behind legacy scene-id fallback behavior", async () => {
     const providers = await import("../../../apps/worker/src/lib/providers")
 
     const detail = createTaskDetail({
@@ -203,18 +191,7 @@ A few notes to make it hit:
       >
     }
 
-    const rewritten = (await providers.rewriteTaskWithTextProvider(detail)) as typeof detail
-
-    expect(rewritten.scenes.map((scene) => scene.id)).toEqual(["scene_1", "scene_2"])
-    expect(rewritten.scenes[0].reviewStatus).toBe("approved")
-    expect(rewritten.scenes[0].keyframeStatus).toBe("rejected")
-    expect(rewritten.scenes[0].reviewNote).toBe("Keep the opener pacing.")
-    expect(rewritten.scenes[0].keyframeReviewNote).toBe("Keyframe needs a cleaner crop.")
-    expect(rewritten.scenes[1].reviewStatus).toBe("rejected")
-    expect(rewritten.scenes[1].keyframeStatus).toBe("approved")
-    expect(rewritten.scenes[1].reviewNote).toBe("CTA needs a stronger ask.")
-    expect(rewritten.scenes[1].reviewedAt).toBe("2026-04-19T07:00:00.000Z")
-    expect(rewritten.scenes[1].keyframeReviewedAt).toBe("2026-04-19T08:00:00.000Z")
+    await expect(providers.rewriteTaskWithTextProvider(detail)).rejects.toThrow("TEXT_PLANNING_OUTPUT_UNAVAILABLE")
   })
 
   it("merges latest persisted review metadata back into rewritten scenes for worker upserts", () => {
@@ -325,12 +302,42 @@ A few notes to make it hit:
 
     expect(blueprint.renderSpec.width).toBe(1080)
     expect(blueprint.renderSpec.height).toBe(1920)
-    expect(blueprint.sceneContracts[0]?.imagePrompt).toContain("1080x1920")
-    expect(blueprint.sceneContracts[0]?.videoPrompt).toContain("input frame")
-    expect(blueprint.sceneContracts[0]?.imagePrompt).toContain("subject anchor: Single desk hero")
-    expect(blueprint.sceneContracts[0]?.videoPrompt).toContain("background anchor: clean desk")
-    expect(blueprint.sceneContracts[0]?.videoPrompt).toContain("negative constraints: no subtitles")
-    expect(blueprint.sceneContracts[0]?.videoPrompt).toContain("continuity constraints: product hidden")
+    expect(blueprint.sceneContracts[0]?.imagePrompt).toBe("Phone portrait 1080x1920, cluttered desk, centered subject.")
+    expect(blueprint.sceneContracts[0]?.videoPrompt).toBe("Use the input frame and slowly push into the clutter before reveal.")
+    expect(blueprint.sceneContracts[0]?.continuityConstraints).toEqual(["product hidden"])
+  })
+
+  it("uses the scene image prompt as-is when creating a keyframe prompt", async () => {
+    const providers = await import("../../../apps/worker/src/lib/providers")
+
+    const prompt = providers.buildKeyframePrompt(
+      {
+        id: "scene_1",
+        index: 0,
+        title: "Hook",
+        sceneGoal: "Hook",
+        voiceoverScript: "Voiceover",
+        startFrameDescription: "Start frame",
+        script: "Script",
+        imagePrompt: "A precise final image prompt from the text model.",
+        videoPrompt: "A precise final video prompt from the text model.",
+        startFrameIntent: "Hook instantly",
+        endFrameIntent: "Land the beat",
+        durationSec: 8,
+        startLabel: "00:00",
+        endLabel: "00:08",
+        reviewStatus: "pending",
+        keyframeStatus: "pending",
+        continuityConstraints: [],
+        reviewNote: null,
+        reviewedAt: null,
+        keyframeReviewNote: null,
+        keyframeReviewedAt: null,
+      },
+      "9:16",
+    )
+
+    expect(prompt).toBe("A precise final image prompt from the text model.")
   })
 
   it("builds scene video inputs from keyframe manifests and falls back honestly when frames are missing", async () => {
@@ -601,7 +608,7 @@ A few notes to make it hit:
     expect(applied.blueprint.totalVoiceoverScript).toBe("Model-approved final narration.")
     expect(applied.blueprint.sceneContracts[0]?.imagePrompt).toContain("Final polished image prompt from the text model.")
     expect(applied.blueprint.sceneContracts[0]?.videoPrompt).toContain("Final polished video prompt from the text model.")
-    expect(applied.blueprint.sceneContracts[0]?.videoPrompt).toContain("negative constraints: no subtitles")
+    expect(applied.blueprint.sceneContracts[0]?.videoPrompt).toBe("Final polished video prompt from the text model.")
   })
 
   it("strips markdown separators and drops trailing incomplete sentence fragments", async () => {
