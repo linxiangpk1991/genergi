@@ -116,11 +116,20 @@ function getAssetExtension(assetType: string, fileName: string, isDirectory: boo
     return ".json"
   }
 
+  if (assetType === "planning_audit") {
+    return ".json"
+  }
+
   if (assetType === "subtitles") {
     return ".srt"
   }
 
-  if (assetType === "script") {
+  if (
+    assetType === "script" ||
+    assetType === "source_script" ||
+    assetType === "planning_prompt" ||
+    assetType === "planning_response"
+  ) {
     return ".txt"
   }
 
@@ -134,8 +143,12 @@ function getAssetMimeType(assetType: string, extension: string | null, isDirecto
 
   switch (assetType) {
     case "script":
+    case "source_script":
+    case "planning_prompt":
+    case "planning_response":
       return "text/plain; charset=utf-8"
     case "storyboard":
+    case "planning_audit":
       return "application/json"
     case "subtitles":
       return "application/x-subrip; charset=utf-8"
@@ -186,12 +199,20 @@ function getPreviewKind(assetType: string, extension: string | null, isDirectory
     return "json"
   }
 
-  if (assetType === "audio" || assetType === "video_bundle" || [".mp4", ".mp3", ".wav", ".m4a", ".aac", ".webm"].includes(extension ?? "")) {
+  if (
+    assetType === "audio" ||
+    assetType === "video_bundle" ||
+    assetType === "keyframe_image" ||
+    [".mp4", ".mp3", ".wav", ".m4a", ".aac", ".webm", ".png", ".jpg", ".jpeg", ".webp"].includes(extension ?? "")
+  ) {
     return "media"
   }
 
   if (
     assetType === "script" ||
+    assetType === "source_script" ||
+    assetType === "planning_prompt" ||
+    assetType === "planning_response" ||
     assetType === "subtitles" ||
     [".txt", ".md", ".csv", ".log", ".srt", ".vtt"].includes(extension ?? "")
   ) {

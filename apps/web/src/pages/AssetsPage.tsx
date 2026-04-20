@@ -69,8 +69,13 @@ function sortAssetsForDelivery(assets: AssetRecord[]) {
     subtitles: 1,
     script: 2,
     audio: 3,
-    storyboard: 4,
-    keyframe_bundle: 5,
+    source_script: 4,
+    planning_prompt: 5,
+    planning_response: 6,
+    planning_audit: 7,
+    storyboard: 8,
+    keyframe_bundle: 9,
+    keyframe_image: 10,
   }
 
   return [...assets].sort((left, right) => {
@@ -90,6 +95,10 @@ export function AssetsPage() {
   const [runtime, setRuntime] = useState<RuntimeStatusResponse["runtime"] | null>(null)
   const [selectedTaskId, setSelectedTaskId] = useState("")
   const [assets, setAssets] = useState<AssetRecord[]>([])
+  const [previewAsset, setPreviewAsset] = useState<AssetRecord | null>(null)
+  const [previewText, setPreviewText] = useState("")
+  const [previewLoading, setPreviewLoading] = useState(false)
+  const [previewError, setPreviewError] = useState("")
   const [lastRefreshAt, setLastRefreshAt] = useState<string>("")
   const [isStale, setIsStale] = useState(false)
   const [loadError, setLoadError] = useState("")
@@ -225,6 +234,50 @@ export function AssetsPage() {
   const deliverableAssets = sortedAssets.filter((asset) => ["video_bundle", "subtitles", "script", "audio"].includes(asset.assetType))
   const supportingAssets = sortedAssets.filter((asset) => !["video_bundle", "subtitles", "script", "audio"].includes(asset.assetType))
 
+  useEffect(() => {
+    if (previewAsset && !assets.some((asset) => asset.id === previewAsset.id)) {
+      setPreviewAsset(null)
+      setPreviewText("")
+      setPreviewError("")
+      setPreviewLoading(false)
+    }
+  }, [assets, previewAsset])
+
+  async function openInlinePreview(asset: AssetRecord) {
+    setPreviewAsset(asset)
+    setPreviewError("")
+
+    if (asset.previewKind === "text" || asset.previewKind === "json") {
+      setPreviewLoading(true)
+      try {
+        const response = await fetch(buildAssetPreviewUrl(asset.taskId, asset.id))
+        const content = await response.text()
+        if (!response.ok) {
+          throw new Error(content || `预览失败 (${response.status})`)
+        }
+
+        if (asset.previewKind === "json") {
+          try {
+            setPreviewText(JSON.stringify(JSON.parse(content), null, 2))
+          } catch {
+            setPreviewText(content)
+          }
+        } else {
+          setPreviewText(content)
+        }
+      } catch (error) {
+        setPreviewError(error instanceof Error ? error.message : "文本预览加载失败")
+        setPreviewText("")
+      } finally {
+        setPreviewLoading(false)
+      }
+      return
+    }
+
+    setPreviewLoading(false)
+    setPreviewText("")
+  }
+
   function renderAssetList(title: string, description: string, items: AssetRecord[]) {
     return (
       <section className="asset-section">
@@ -281,14 +334,13 @@ export function AssetsPage() {
                 </div>
                 <div className="asset-item-actions">
                   {asset.previewable ? (
-                    <a
+                    <button
                       className="ghost-button"
-                      href={buildAssetPreviewUrl(asset.taskId, asset.id)}
-                      target="_blank"
-                      rel="noreferrer"
+                      onClick={() => void openInlinePreview(asset)}
+                      type="button"
                     >
                       预览
-                    </a>
+                    </button>
                   ) : (
                     <span className="ghost-button" aria-disabled="true">
                       预览不可用
@@ -405,6 +457,55 @@ export function AssetsPage() {
             <div className="asset-missing-notice">
               {assetStats.missingCount} 个记录指向的文件当前不可访问，列表仍保留元数据以兼容历史资产。
             </div>
+          ) : null}
+
+          {previewAsset ? (
+            <section className="planning-summary-card">
+              <div className="section-header">
+                <div>
+                  <strong>页内预览</strong>
+                  <div className="muted">{previewAsset.label} · {previewAsset.fileName}</div>
+                </div>
+                <button
+                  className="ghost-button"
+                  onClick={() => {
+                    setPreviewAsset(null)
+                    setPreviewText("")
+                    setPreviewError("")
+                    setPreviewLoading(false)
+                  }}
+                  type="button"
+                >
+                  关闭预览
+                </button>
+              </div>
+              {previewLoading ? <div className="muted">正在加载预览...</div> : null}
+              {previewError ? <div className="review-inline-note review-inline-note--danger">{previewError}</div> : null}
+              {!previewLoading && !previewError && (previewAsset.previewKind === "text" || previewAsset.previewKind === "json") ? (
+                <pre className="review-content" style={{ whiteSpace: "pre-wrap", maxHeight: 420, overflow: "auto" }}>{previewText}</pre>
+              ) : null}
+              {!previewLoading && !previewError && previewAsset.mimeType.startsWith("image/") ? (
+                <img
+                  alt={previewAsset.label}
+                  className="visual-preview__image"
+                  src={buildAssetPreviewUrl(previewAsset.taskId, previewAsset.id)}
+                />
+              ) : null}
+              {!previewLoading && !previewError && previewAsset.mimeType.startsWith("video/") ? (
+                <video
+                  controls
+                  className="visual-preview__image"
+                  src={buildAssetPreviewUrl(previewAsset.taskId, previewAsset.id)}
+                />
+              ) : null}
+              {!previewLoading && !previewError && previewAsset.mimeType.startsWith("audio/") ? (
+                <audio
+                  controls
+                  style={{ width: "100%" }}
+                  src={buildAssetPreviewUrl(previewAsset.taskId, previewAsset.id)}
+                />
+              ) : null}
+            </section>
           ) : null}
 
           {renderAssetList("最终交付物", "优先确认成片、字幕、脚本和音频是否已经齐全。", deliverableAssets)}

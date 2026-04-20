@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { afterEach, describe, expect, it, vi } from "vitest"
@@ -680,6 +680,92 @@ Here's the thing. In Chinese destiny analysis, there's a pattern called "late bl
 
     expect(policy.timeoutMs).toBe(30000)
     expect(policy.onTimeoutMessage).toBe("Image generation timeout, switching to video-derived keyframe")
+  })
+
+  it("writes planning trace files and exposes them as supporting assets", async () => {
+    const providers = await import("../../../apps/worker/src/lib/providers")
+
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "genergi-planning-trace-assets-"))
+    process.env.GENERGI_DATA_DIR = tempDir
+
+    const detail = createTaskDetail({
+      taskId: "task_trace_assets",
+      script: "Final rewritten narration.",
+    })
+
+    const taskDir = await providers.writeTaskSourceFiles(detail, {
+      sourceScript: "Original source script.",
+      planningPrompt: "Full planning prompt.",
+      planningResponse: "{\"finalVoiceoverScript\":\"Final rewritten narration.\"}",
+      planningAudit: {
+        provider: "anthropic-compatible",
+        model: "claude-opus-4-6",
+        usedFallback: false,
+      },
+    })
+
+    const assets = await providers.buildTaskDocumentAssetRecords({
+      taskId: detail.taskId,
+      taskDir,
+      createdAt: "2026-04-20T00:00:00.000Z",
+    })
+
+    expect(assets.map((asset) => asset.assetType)).toEqual([
+      "script",
+      "source_script",
+      "planning_prompt",
+      "planning_response",
+      "planning_audit",
+      "storyboard",
+    ])
+  })
+
+  it("builds individual keyframe image assets from the keyframe manifest", async () => {
+    const providers = await import("../../../apps/worker/src/lib/providers")
+
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "genergi-keyframe-image-assets-"))
+    const keyframeDir = path.join(tempDir, "keyframes")
+    await mkdir(keyframeDir, { recursive: true })
+    await writeFile(path.join(keyframeDir, "scene-01.jpg"), "frame-1", "utf8")
+    await writeFile(path.join(keyframeDir, "scene-02.jpg"), "frame-2", "utf8")
+    const manifestPath = path.join(keyframeDir, "manifest.json")
+    await writeFile(
+      manifestPath,
+      JSON.stringify({
+        frames: [
+          {
+            sceneId: "scene_1",
+            sceneIndex: 0,
+            title: "Hook",
+            fileName: "scene-01.jpg",
+            filePath: path.join(keyframeDir, "scene-01.jpg"),
+          },
+          {
+            sceneId: "scene_2",
+            sceneIndex: 1,
+            title: "Reveal",
+            fileName: "scene-02.jpg",
+            filePath: path.join(keyframeDir, "scene-02.jpg"),
+          },
+        ],
+      }),
+      "utf8",
+    )
+
+    const assets = await providers.buildKeyframeAssetRecords({
+      taskId: "task_keyframe_assets",
+      manifestPath,
+      label: "关键帧包",
+      createdAt: "2026-04-20T00:00:00.000Z",
+    })
+
+    expect(assets.map((asset) => asset.assetType)).toEqual([
+      "keyframe_bundle",
+      "keyframe_image",
+      "keyframe_image",
+    ])
+    expect(assets[1]?.path).toContain("scene-01.jpg")
+    expect(assets[2]?.path).toContain("scene-02.jpg")
   })
 
   it("prepares styled subtitles and passes them into final video muxing", async () => {

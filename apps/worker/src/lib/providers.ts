@@ -7,6 +7,7 @@ import axios from "axios"
 
 import {
   buildStoryboardScenes,
+  type AssetRecord,
   readTaskBlueprintRecords,
   mergeSceneReviewMetadata,
   planningSceneSchema,
@@ -31,6 +32,23 @@ const gatewayApiKey = process.env.GENERGI_MEDIA_GATEWAY_API_KEY ?? ""
 const gatewayImageGenerationPaths = ["/v1/images/generations", "/v1/image/generations"]
 const REVIEW_REQUIRED_KEYFRAME_TIMEOUT_MS = 300000
 const DEGRADABLE_KEYFRAME_TIMEOUT_MS = 30000
+
+type PlanningTraceArtifact = {
+  sourceScript: string
+  planningPrompt: string | null
+  planningResponse: string | null
+  planningAudit: Record<string, unknown>
+}
+
+type StructuredPlanningAttempt = {
+  output: TextPlanningOutput | null
+  promptContext: string | null
+  rawResponse: string | null
+  parsedResponse: unknown | null
+  provider: string | null
+  model: string | null
+  baseUrl: string | null
+}
 
 function ensureTaskDir(taskId: string) {
   const root = process.env.GENERGI_DATA_DIR ?? ".data"
@@ -1322,16 +1340,12 @@ function buildPlanningFallback(detail: TaskDetail): TextPlanningOutput {
   }
 }
 
-async function requestStructuredPlanning(detail: TaskDetail): Promise<TextPlanningOutput | null> {
+async function requestStructuredPlanning(detail: TaskDetail): Promise<StructuredPlanningAttempt> {
   const runtime = resolveRuntimeGenerationConfig(detail)
   const provider = runtime.textProvider.trim().toLowerCase()
   const apiKey = process.env.GENERGI_TEXT_API_KEY ?? ""
   const baseUrl = resolveProviderApiBaseUrl(process.env.GENERGI_TEXT_BASE_URL ?? "")
   const model = resolvePlanningModelId(runtime)
-
-  if (!provider || !apiKey || !baseUrl) {
-    return null
-  }
 
   const preference = GENERATION_PREFERENCES.find((item) => item.id === detail.taskRunConfig.generationMode)
   const capability = resolveVideoModelCapability(detail.taskRunConfig.videoModel.id)
@@ -1354,6 +1368,18 @@ async function requestStructuredPlanning(detail: TaskDetail): Promise<TextPlanni
     enhancementKeywords: preference?.keywords ?? [],
     maxSceneCount,
   })
+
+  if (!provider || !apiKey || !baseUrl) {
+    return {
+      output: null,
+      promptContext,
+      rawResponse: null,
+      parsedResponse: null,
+      provider: provider || null,
+      model: model || null,
+      baseUrl: baseUrl || null,
+    }
+  }
 
   const systemPrompt =
     "You are a short-form video director and planner. Return only valid JSON that matches the requested planning structure. Do not explain your decisions."
@@ -1411,7 +1437,15 @@ async function requestStructuredPlanning(detail: TaskDetail): Promise<TextPlanni
     try {
       parsedJson = JSON.parse(extractJsonObject(rawText))
     } catch {
-      continue
+      return {
+        output: null,
+        promptContext,
+        rawResponse: rawText,
+        parsedResponse: null,
+        provider,
+        model,
+        baseUrl,
+      }
     }
 
     const validated = validatePlanningOutput(parsedJson, {
@@ -1424,11 +1458,37 @@ async function requestStructuredPlanning(detail: TaskDetail): Promise<TextPlanni
     })
 
     if (validated.ok) {
-      return validated.value
+      return {
+        output: validated.value,
+        promptContext,
+        rawResponse: rawText,
+        parsedResponse: parsedJson,
+        provider,
+        model,
+        baseUrl,
+      }
+    }
+
+    return {
+      output: null,
+      promptContext,
+      rawResponse: rawText,
+      parsedResponse: parsedJson,
+      provider,
+      model,
+      baseUrl,
     }
   }
 
-  return null
+  return {
+    output: null,
+    promptContext,
+    rawResponse: null,
+    parsedResponse: null,
+    provider,
+    model,
+    baseUrl,
+  }
 }
 
 export async function rewriteTaskWithTextProvider(detail: TaskDetail): Promise<TaskDetail> {
@@ -1439,9 +1499,13 @@ export async function rewriteTaskWithTextProvider(detail: TaskDetail): Promise<T
 async function buildPreparedTaskDetail(detail: TaskDetail): Promise<{
   detail: TaskDetail
   blueprint: PlannedExecutionBlueprint
+  planningTrace: PlanningTraceArtifact
 }> {
+  const sourceScript = detail.script
   try {
-    const planned = (await requestStructuredPlanning(detail)) ?? buildPlanningFallback(detail)
+    const structuredAttempt = await requestStructuredPlanning(detail)
+    const usedFallback = !structuredAttempt.output
+    const planned = structuredAttempt.output ?? buildPlanningFallback(detail)
     const normalizedRewrite = normalizeRewriteToVoiceoverScript(planned.finalVoiceoverScript, detail.taskRunConfig.targetDurationSec ?? 30)
     const normalizedScenes = buildScenesFromBlueprint(detail, planned.blueprint)
 
@@ -1462,6 +1526,19 @@ async function buildPreparedTaskDetail(detail: TaskDetail): Promise<{
         updatedAt: new Date().toISOString(),
       },
       blueprint: planned.blueprint,
+      planningTrace: {
+        sourceScript,
+        planningPrompt: structuredAttempt.promptContext,
+        planningResponse: structuredAttempt.rawResponse,
+        planningAudit: {
+          provider: structuredAttempt.provider,
+          model: structuredAttempt.model,
+          baseUrl: structuredAttempt.baseUrl,
+          usedFallback,
+          parsedResponse: structuredAttempt.parsedResponse,
+          selectedPlan: planned,
+        },
+      },
     }
   } catch (error) {
     console.warn(`[worker] structured planning skipped:`, error instanceof Error ? error.message : String(error))
@@ -1470,6 +1547,20 @@ async function buildPreparedTaskDetail(detail: TaskDetail): Promise<{
     return {
       detail: fallbackDetail,
       blueprint: fallbackPlan.blueprint,
+      planningTrace: {
+        sourceScript,
+        planningPrompt: null,
+        planningResponse: null,
+        planningAudit: {
+          provider: null,
+          model: null,
+          baseUrl: null,
+          usedFallback: true,
+          fallbackReason: error instanceof Error ? error.message : String(error),
+          parsedResponse: null,
+          selectedPlan: fallbackPlan,
+        },
+      },
     }
   }
 }
@@ -1477,6 +1568,7 @@ async function buildPreparedTaskDetail(detail: TaskDetail): Promise<{
 export async function prepareTaskBlueprint(detail: TaskDetail): Promise<{
   detail: TaskDetail
   blueprintRecord: TaskBlueprintRecord
+  planningTrace: PlanningTraceArtifact
 }> {
   const prepared = await buildPreparedTaskDetail(detail)
   const blueprintRecord = await upsertTaskBlueprintSnapshot({
@@ -1510,14 +1602,131 @@ export async function prepareTaskBlueprint(detail: TaskDetail): Promise<{
       updatedAt: new Date().toISOString(),
     },
     blueprintRecord,
+    planningTrace: prepared.planningTrace,
   }
 }
 
-export async function writeTaskSourceFiles(detail: TaskDetail) {
+export async function writeTaskSourceFiles(
+  detail: TaskDetail,
+  planningTrace?: PlanningTraceArtifact,
+) {
   const dir = ensureTaskDir(detail.taskId)
   writeFileSync(path.join(dir, "script.txt"), detail.script, "utf8")
+  if (planningTrace?.sourceScript) {
+    writeFileSync(path.join(dir, "source-script.txt"), planningTrace.sourceScript, "utf8")
+  }
+  if (planningTrace?.planningPrompt) {
+    writeFileSync(path.join(dir, "planning-prompt.txt"), planningTrace.planningPrompt, "utf8")
+  }
+  if (planningTrace?.planningResponse) {
+    writeFileSync(path.join(dir, "planning-response.txt"), planningTrace.planningResponse, "utf8")
+  }
+  if (planningTrace?.planningAudit) {
+    writeFileSync(path.join(dir, "planning-audit.json"), JSON.stringify(planningTrace.planningAudit, null, 2), "utf8")
+  }
   writeFileSync(path.join(dir, "storyboard.json"), JSON.stringify(detail, null, 2), "utf8")
   return dir
+}
+
+async function fileExists(filePath: string) {
+  try {
+    await fs.stat(filePath)
+    return true
+  } catch {
+    return false
+  }
+}
+
+export async function buildTaskDocumentAssetRecords(input: {
+  taskId: string
+  taskDir: string
+  createdAt: string
+}): Promise<AssetRecord[]> {
+  const candidates: Array<{
+    id: string
+    assetType: AssetRecord["assetType"]
+    label: string
+    path: string
+  }> = [
+    { id: `${input.taskId}_script`, assetType: "script", label: "英文脚本", path: path.join(input.taskDir, "script.txt") },
+    { id: `${input.taskId}_source_script`, assetType: "source_script", label: "任务母本", path: path.join(input.taskDir, "source-script.txt") },
+    { id: `${input.taskId}_planning_prompt`, assetType: "planning_prompt", label: "文本规划提示词", path: path.join(input.taskDir, "planning-prompt.txt") },
+    { id: `${input.taskId}_planning_response`, assetType: "planning_response", label: "文本模型原始返回", path: path.join(input.taskDir, "planning-response.txt") },
+    { id: `${input.taskId}_planning_audit`, assetType: "planning_audit", label: "文本规划审计 JSON", path: path.join(input.taskDir, "planning-audit.json") },
+    { id: `${input.taskId}_storyboard`, assetType: "storyboard", label: "分镜 JSON", path: path.join(input.taskDir, "storyboard.json") },
+  ]
+
+  const assets: AssetRecord[] = []
+  for (const candidate of candidates) {
+    if (await fileExists(candidate.path)) {
+      assets.push({
+        id: candidate.id,
+        taskId: input.taskId,
+        assetType: candidate.assetType,
+        label: candidate.label,
+        status: "ready",
+        path: candidate.path,
+        createdAt: input.createdAt,
+      })
+    }
+  }
+
+  return assets
+}
+
+export async function buildKeyframeAssetRecords(input: {
+  taskId: string
+  manifestPath: string
+  label: string
+  createdAt: string
+}): Promise<AssetRecord[]> {
+  const assets: AssetRecord[] = [
+    {
+      id: `${input.taskId}_keyframes`,
+      taskId: input.taskId,
+      assetType: "keyframe_bundle",
+      label: input.label,
+      status: "ready",
+      path: input.manifestPath,
+      createdAt: input.createdAt,
+    },
+  ]
+
+  const rawManifest = await fs.readFile(input.manifestPath, "utf8")
+  const manifest = JSON.parse(rawManifest) as {
+    frames?: Array<{
+      sceneId?: string
+      sceneIndex?: number
+      title?: string
+      fileName?: string
+      filePath?: string
+    }>
+  }
+
+  for (const frame of manifest.frames ?? []) {
+    const sceneId = `${frame.sceneId ?? `scene_${frame.sceneIndex ?? assets.length}`}`.trim()
+    const sceneIndex = typeof frame.sceneIndex === "number" ? frame.sceneIndex : assets.length - 1
+    const imagePath = frame.filePath?.trim()
+      ? frame.filePath.trim()
+      : frame.fileName
+        ? path.join(path.dirname(input.manifestPath), frame.fileName)
+        : null
+    if (!imagePath) {
+      continue
+    }
+
+    assets.push({
+      id: `${input.taskId}_keyframe_${sceneId}`,
+      taskId: input.taskId,
+      assetType: "keyframe_image",
+      label: `关键画面 ${sceneIndex + 1}${frame.title ? ` · ${frame.title}` : ""}`,
+      status: "ready",
+      path: imagePath,
+      createdAt: input.createdAt,
+    })
+  }
+
+  return assets
 }
 
 export async function synthesizeNarration(detail: TaskDetail) {

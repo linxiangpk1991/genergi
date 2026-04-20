@@ -11,6 +11,8 @@ import {
 } from "@genergi/shared"
 import type { AssetRecord, TaskSummary } from "@genergi/shared"
 import {
+  buildKeyframeAssetRecords,
+  buildTaskDocumentAssetRecords,
   buildWorkerRuntimeLabels,
   buildFinalVideoWithNarration,
   createFallbackKeyframeBundleFromVideos,
@@ -91,6 +93,7 @@ async function writeTaskArtifacts(
 
   const prepared = await prepareTaskBlueprint(detail)
   const preparedDetail = await mergeLatestReviewMetadata(prepared.detail)
+  const planningTrace = prepared.planningTrace
   let blueprintRecord = prepared.blueprintRecord
   const runtime = resolveRuntimeGenerationConfig(preparedDetail)
   const runtimeSummary = describeRuntimeGenerationConfig(runtime)
@@ -103,7 +106,7 @@ async function writeTaskArtifacts(
   console.log(`[worker] ${taskId} runtime snapshot => ${runtimeSummary}`)
   await upsertTaskDetail(preparedDetail)
   await writeWorkerHeartbeat(`Preparing source files for ${taskId}`)
-  const taskDir = await writeTaskSourceFiles(preparedDetail)
+  const taskDir = await writeTaskSourceFiles(preparedDetail, planningTrace)
 
   let keyframes:
     | {
@@ -172,40 +175,22 @@ async function writeTaskArtifacts(
 
   if (preparedDetail.taskRunConfig.executionMode === "review_required" && !options.continueExecution) {
     const previewAssets: AssetRecord[] = [
-      {
-        id: `${taskId}_script`,
+      ...await buildTaskDocumentAssetRecords({
         taskId,
-        assetType: "script",
-        label: "英文脚本",
-        status: "ready",
-        path: `${taskDir}/script.txt`,
+        taskDir,
         createdAt: now,
-      },
-      {
-        id: `${taskId}_storyboard`,
-        taskId,
-        assetType: "storyboard",
-        label: "分镜 JSON",
-        status: "ready",
-        path: `${taskDir}/storyboard.json`,
-        createdAt: now,
-      },
+      }),
       ...(keyframes
-        ? [
-            {
-              id: `${taskId}_keyframes`,
-              taskId,
-              assetType: "keyframe_bundle" as const,
-              label: buildWorkerRuntimeLabels(runtime, {
-                sceneCount: preparedDetail.scenes.length,
-                targetDurationSec: preparedDetail.taskRunConfig.targetDurationSec,
-                keyframeCount: keyframes.frameCount,
-              }).keyframes,
-              status: "ready" as const,
-              path: keyframes.manifestPath,
-              createdAt: now,
-            },
-          ]
+        ? await buildKeyframeAssetRecords({
+            taskId,
+            manifestPath: keyframes.manifestPath,
+            label: buildWorkerRuntimeLabels(runtime, {
+              sceneCount: preparedDetail.scenes.length,
+              targetDurationSec: preparedDetail.taskRunConfig.targetDurationSec,
+              keyframeCount: keyframes.frameCount,
+            }).keyframes,
+            createdAt: now,
+          })
         : []),
     ]
 
@@ -305,24 +290,11 @@ async function writeTaskArtifacts(
   }))
 
   const assets: AssetRecord[] = [
-    {
-      id: `${taskId}_script`,
+    ...await buildTaskDocumentAssetRecords({
       taskId,
-      assetType: "script",
-      label: "英文脚本",
-      status: "ready",
-      path: `${taskDir}/script.txt`,
+      taskDir,
       createdAt: now,
-    },
-    {
-      id: `${taskId}_storyboard`,
-      taskId,
-      assetType: "storyboard",
-      label: "分镜 JSON",
-      status: "ready",
-      path: `${taskDir}/storyboard.json`,
-      createdAt: now,
-    },
+    }),
     {
       id: `${taskId}_subtitles`,
       taskId,
@@ -341,19 +313,16 @@ async function writeTaskArtifacts(
       path: narration.audioPath,
       createdAt: now,
     },
-    {
-      id: `${taskId}_keyframes`,
+    ...await buildKeyframeAssetRecords({
       taskId,
-      assetType: "keyframe_bundle",
+      manifestPath: keyframes.manifestPath,
       label: buildWorkerRuntimeLabels(runtime, {
         sceneCount: sceneVideos.length,
         targetDurationSec: preparedDetail.taskRunConfig.targetDurationSec,
         keyframeCount: keyframes.frameCount,
       }).keyframes,
-      status: "ready",
-      path: keyframes.manifestPath,
       createdAt: now,
-    },
+    }),
     {
       id: `${taskId}_video`,
       taskId,

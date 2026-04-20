@@ -311,7 +311,18 @@ export type ReviewMutationResponse = {
 export type AssetRecord = {
   id: string
   taskId: string
-  assetType: "script" | "storyboard" | "subtitles" | "audio" | "keyframe_bundle" | "video_bundle"
+  assetType:
+    | "script"
+    | "source_script"
+    | "planning_prompt"
+    | "planning_response"
+    | "planning_audit"
+    | "storyboard"
+    | "subtitles"
+    | "audio"
+    | "keyframe_bundle"
+    | "keyframe_image"
+    | "video_bundle"
   label: string
   status: "ready" | "pending"
   path: string
