@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   api,
+  buildAssetCenterUrl,
+  buildBatchDashboardUrl,
   type ExecutionMode,
   MODEL_CONTROL_MODE_LABELS,
   MODEL_CONTROL_SLOT_LABELS,
@@ -29,6 +31,12 @@ function getPreferenceSummary(preference: GenerationPreferenceId) {
   return preference === "system_enhanced"
     ? "系统会保留主题方向，但主动把表达整理成更适合短视频传播的版本。"
     : "系统会尽量保留你原始内容的表达方式，只做最小必要的整理。";
+}
+
+function getCreateTaskNotice(task: TaskSummary) {
+  return task.executionMode === "review_required"
+    ? `任务“${task.title}”已提交到渲染队列。关键画面生成完成后，会进入任务审核队列。`
+    : `任务“${task.title}”已提交到渲染队列。系统将继续自动生成成片。`;
 }
 
 function getChannelLabel(channelId: string) {
@@ -197,6 +205,8 @@ export function HomePage() {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [createdTask, setCreatedTask] = useState<TaskSummary | null>(null);
   const [tasksUpdatedAt, setTasksUpdatedAt] = useState<string>("");
 
   useEffect(() => {
@@ -371,17 +381,23 @@ export function HomePage() {
 
   async function handleCreateTask() {
     if (!title.trim() || !script.trim()) {
+      setNotice("");
+      setCreatedTask(null);
       setError("请先填写任务名称和内容母本");
       return;
     }
 
     if (overrideLoading) {
+      setNotice("");
+      setCreatedTask(null);
       setError("高级覆盖池还在刷新，请稍等加载完成后再提交。");
       return;
     }
 
     setSubmitting(true);
     setError("");
+    setNotice("");
+    setCreatedTask(null);
     try {
       const overridePayload = Object.fromEntries(
         Object.entries(modelOverrides)
@@ -408,6 +424,8 @@ export function HomePage() {
           : undefined,
       });
       setTasks((current) => [result.task, ...current]);
+      setNotice(getCreateTaskNotice(result.task));
+      setCreatedTask(result.task);
       setTitle("");
       setScript("");
       setModelOverrides({});
@@ -441,6 +459,20 @@ export function HomePage() {
       </header>
 
       {error ? <div className="alert">{error}</div> : null}
+      {notice && createdTask ? (
+        <section className="planning-summary-card">
+          <strong>提交成功</strong>
+          <span>{notice}</span>
+          <div className="planning-summary-tags">
+            <a className="ghost-button" href={buildBatchDashboardUrl(createdTask.id)}>
+              查看生产看板
+            </a>
+            <a className="ghost-button" href={buildAssetCenterUrl(createdTask.id)}>
+              打开任务资产
+            </a>
+          </div>
+        </section>
+      ) : null}
 
       <div className="workspace-grid">
         <section className="card card--main">

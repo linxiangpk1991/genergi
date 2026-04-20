@@ -276,6 +276,14 @@ describe("HomePage project and terminal preset flow", () => {
       expect(vi.mocked(api.createTask)).toHaveBeenCalledTimes(1)
     })
 
+    await waitFor(() => {
+      const text = container.textContent ?? ""
+      expect(text).toContain("提交成功")
+      expect(text).toContain("任务“Campaign launch”已提交到渲染队列。关键画面生成完成后，会进入任务审核队列。")
+      expect(text).toContain("查看生产看板")
+      expect(text).toContain("打开任务资产")
+    })
+
     const payload = vi.mocked(api.createTask).mock.calls[0]?.[0] as Record<string, unknown>
     expect(payload).toMatchObject({
       title: "Campaign launch",

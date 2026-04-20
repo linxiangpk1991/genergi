@@ -20,6 +20,15 @@ function formatRenderSpec(detail: TaskDetail | null, blueprint: TaskBlueprintRec
   return `${renderSpec.width} × ${renderSpec.height}`
 }
 
+function isActionableReviewTask(task: TaskSummary) {
+  return (
+    task.executionMode === "review_required" &&
+    (task.blueprintStatus === "ready_for_review" ||
+      task.blueprintStatus === "approved" ||
+      task.blueprintStatus === "rejected")
+  )
+}
+
 export function TaskReviewPage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const routeTaskId = searchParams.get("taskId") ?? ""
@@ -33,14 +42,7 @@ export function TaskReviewPage() {
   const [error, setError] = useState("")
 
   const actionableTasks = useMemo(
-    () =>
-      tasks.filter(
-        (task) =>
-          task.executionMode === "review_required" &&
-          (task.blueprintStatus === "ready_for_review" ||
-            task.blueprintStatus === "approved" ||
-            task.blueprintStatus === "rejected"),
-      ),
+    () => tasks.filter((task) => isActionableReviewTask(task)),
     [tasks],
   )
 
@@ -90,14 +92,7 @@ export function TaskReviewPage() {
 
         const selectedTaskId =
           routeTaskId ||
-          taskResult.tasks
-            .find(
-              (task) =>
-                task.executionMode === "review_required" &&
-                (task.blueprintStatus === "ready_for_review" ||
-                  task.blueprintStatus === "approved" ||
-                  task.blueprintStatus === "rejected"),
-            )?.id ||
+          taskResult.tasks.find((task) => isActionableReviewTask(task))?.id ||
           taskResult.tasks[0]?.id
         if (!selectedTaskId) {
           setDetail(null)
@@ -141,6 +136,26 @@ export function TaskReviewPage() {
       active = false
     }
   }, [routeTaskId])
+
+  useEffect(() => {
+    let active = true
+
+    const timer = window.setInterval(() => {
+      void api.listTasks()
+        .then((taskResult) => {
+          if (!active) {
+            return
+          }
+          setTasks(taskResult.tasks)
+        })
+        .catch(() => {})
+    }, 5000)
+
+    return () => {
+      active = false
+      window.clearInterval(timer)
+    }
+  }, [])
 
   const selectedTask = useMemo(
     () => tasks.find((task) => task.id === (detail?.taskId ?? routeTaskId)) ?? null,
