@@ -525,6 +525,8 @@ A few notes to make it hit:
     expect(canonical[0]?.imagePrompt).not.toContain("desk lamp")
     expect(canonical[0]?.videoPrompt).not.toContain("desk lamp")
     expect(canonical[0]?.startFrameDescription).toBe("Chinese-style room with a reader at a desk")
+    expect(canonical[0]?.imagePrompt).toContain("Chinese-style room with a reader at a desk")
+    expect(canonical[0]?.videoPrompt).toContain("Ending intent: Close on product CTA.")
   })
 
   it("strips markdown separators and drops trailing incomplete sentence fragments", async () => {

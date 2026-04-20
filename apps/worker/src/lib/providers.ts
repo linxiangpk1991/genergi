@@ -343,6 +343,52 @@ function applyConsistencyAnchorsToPrompt(
   return [base, anchorText].filter(Boolean).join(" ")
 }
 
+function buildSourceAnchoredImagePrompt(input: {
+  sceneScript: string
+  aspectRatio: string
+  sceneGoal: string
+  startFrameDescription: string
+  startFrameIntent: string
+  continuityConstraints: string[]
+}) {
+  return [
+    input.sceneScript,
+    `Scene goal: ${input.sceneGoal}.`,
+    `Start frame: ${input.startFrameDescription}.`,
+    `Opening intent: ${input.startFrameIntent}.`,
+    `Create a ${input.aspectRatio} key visual that matches this exact beat of the source script.`,
+    input.continuityConstraints.length
+      ? `Continuity constraints: ${input.continuityConstraints.join(" / ")}.`
+      : "Preserve the same primary subject and setting unless the source script explicitly changes them.",
+    "Keep the subject, action, and emotional beat aligned with the source wording. No captions or UI elements.",
+  ].join(" ")
+}
+
+function buildSourceAnchoredVideoPrompt(input: {
+  sceneScript: string
+  aspectRatio: string
+  durationSec: number
+  sceneGoal: string
+  startFrameDescription: string
+  startFrameIntent: string
+  endFrameIntent: string
+  continuityConstraints: string[]
+}) {
+  return [
+    input.sceneScript,
+    `Scene goal: ${input.sceneGoal}.`,
+    `Start frame: ${input.startFrameDescription}.`,
+    `Opening intent: ${input.startFrameIntent}.`,
+    `Ending intent: ${input.endFrameIntent}.`,
+    `Generate a ${input.aspectRatio} short-form social video shot for this exact beat of the source script.`,
+    `Target duration: ${input.durationSec} seconds.`,
+    input.continuityConstraints.length
+      ? `Continuity constraints: ${input.continuityConstraints.join(" / ")}.`
+      : "Preserve the same primary subject and setting unless the source script explicitly changes them.",
+    "The action, visual focus, and pacing must stay faithful to the source beat.",
+  ].join(" ")
+}
+
 function parseSceneDurationValue(value: unknown, fallback: number) {
   if (typeof value === "number" && Number.isFinite(value) && value > 0) {
     return Math.round(value)
@@ -365,6 +411,7 @@ export function buildCanonicalScenePlanFromBaseScenes(
   scenes: StoryboardScene[],
   planned: TextPlanningOutput,
 ) {
+  const aspectRatio = planned.blueprint.renderSpec.aspectRatio
   return scenes.map((scene, index, allScenes) => {
     const plannedScene = planned.scenePlan[index]
     const sceneGoal = plannedScene?.scenePurpose?.trim() || scene.sceneGoal || scene.title
@@ -379,8 +426,33 @@ export function buildCanonicalScenePlanFromBaseScenes(
       script: scene.script,
       voiceoverScript: scene.voiceoverScript ?? scene.script,
       startFrameDescription,
-      imagePrompt: scene.imagePrompt,
-      videoPrompt: scene.videoPrompt,
+      imagePrompt: buildSourceAnchoredImagePrompt({
+        sceneScript: scene.script,
+        aspectRatio,
+        sceneGoal,
+        startFrameDescription,
+        startFrameIntent: plannedScene?.startFrameIntent?.trim() || scene.startFrameIntent || sceneGoal,
+        continuityConstraints:
+          plannedScene?.continuityConstraints?.length
+            ? plannedScene.continuityConstraints
+            : scene.continuityConstraints ?? [],
+      }),
+      videoPrompt: buildSourceAnchoredVideoPrompt({
+        sceneScript: scene.script,
+        aspectRatio,
+        durationSec: scene.durationSec,
+        sceneGoal,
+        startFrameDescription,
+        startFrameIntent: plannedScene?.startFrameIntent?.trim() || scene.startFrameIntent || sceneGoal,
+        endFrameIntent:
+          plannedScene?.endFrameIntent?.trim() ||
+          scene.endFrameIntent ||
+          (index === allScenes.length - 1 ? "Close on the final scene." : `Hand off from scene ${index + 1}.`),
+        continuityConstraints:
+          plannedScene?.continuityConstraints?.length
+            ? plannedScene.continuityConstraints
+            : scene.continuityConstraints ?? [],
+      }),
       startFrameIntent: plannedScene?.startFrameIntent?.trim() || scene.startFrameIntent || sceneGoal,
       endFrameIntent:
         plannedScene?.endFrameIntent?.trim() ||
