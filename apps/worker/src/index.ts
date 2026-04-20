@@ -11,6 +11,7 @@ import {
 } from "@genergi/shared"
 import type { AssetRecord, TaskSummary } from "@genergi/shared"
 import {
+  buildProgressAssetRecords,
   buildKeyframeAssetRecords,
   buildTaskDocumentAssetRecords,
   buildWorkerRuntimeLabels,
@@ -107,6 +108,14 @@ async function writeTaskArtifacts(
   await upsertTaskDetail(preparedDetail)
   await writeWorkerHeartbeat(`Preparing source files for ${taskId}`)
   const taskDir = await writeTaskSourceFiles(preparedDetail, planningTrace)
+  await upsertTaskAssets(
+    taskId,
+    await buildProgressAssetRecords({
+      taskId,
+      taskDir,
+      createdAt: now,
+    }),
+  )
 
   let keyframes:
     | {
@@ -172,6 +181,16 @@ async function writeTaskArtifacts(
     },
   })
   await upsertTaskDetail(blueprintAwareDetail)
+  await upsertTaskAssets(
+    taskId,
+    await buildProgressAssetRecords({
+      taskId,
+      taskDir,
+      createdAt: now,
+      keyframeManifestPath: keyframes?.manifestPath ?? null,
+      keyframeLabel: keyframes ? runtimeLabels.keyframes : null,
+    }),
+  )
 
   if (preparedDetail.taskRunConfig.executionMode === "review_required" && !options.continueExecution) {
     const previewAssets: AssetRecord[] = [

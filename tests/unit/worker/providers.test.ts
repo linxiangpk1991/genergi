@@ -923,6 +923,68 @@ Here's the thing. In Chinese destiny analysis, there's a pattern called "late bl
     expect(assets[2]?.path).toContain("scene-02.jpg")
   })
 
+  it("builds progress asset records so asset center can show generated files before the task finishes", async () => {
+    const providers = await import("../../../apps/worker/src/lib/providers")
+
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "genergi-progress-assets-"))
+    process.env.GENERGI_DATA_DIR = tempDir
+
+    const detail = createTaskDetail({
+      taskId: "task_progress_assets",
+      script: "Final rewritten narration.",
+    })
+
+    const taskDir = await providers.writeTaskSourceFiles(detail, {
+      sourceScript: "Original source script.",
+      planningPrompt: "Full planning prompt.",
+      planningResponse: "{\"finalVoiceoverScript\":\"Final rewritten narration.\"}",
+      planningAudit: {
+        provider: "anthropic-compatible",
+        model: "claude-opus-4-6",
+        usedFallback: false,
+      },
+    })
+
+    const keyframeDir = path.join(tempDir, "keyframes")
+    await mkdir(keyframeDir, { recursive: true })
+    await writeFile(path.join(keyframeDir, "scene-01.jpg"), "frame-1", "utf8")
+    const manifestPath = path.join(keyframeDir, "manifest.json")
+    await writeFile(
+      manifestPath,
+      JSON.stringify({
+        frames: [
+          {
+            sceneId: "scene_1",
+            sceneIndex: 0,
+            title: "Hook",
+            fileName: "scene-01.jpg",
+            filePath: path.join(keyframeDir, "scene-01.jpg"),
+          },
+        ],
+      }),
+      "utf8",
+    )
+
+    const assets = await providers.buildProgressAssetRecords({
+      taskId: detail.taskId,
+      taskDir,
+      createdAt: "2026-04-20T00:00:00.000Z",
+      keyframeManifestPath: manifestPath,
+      keyframeLabel: "关键帧包",
+    })
+
+    expect(assets.map((asset) => asset.assetType)).toEqual([
+      "script",
+      "source_script",
+      "planning_prompt",
+      "planning_response",
+      "planning_audit",
+      "storyboard",
+      "keyframe_bundle",
+      "keyframe_image",
+    ])
+  })
+
   it("prepares styled subtitles and passes them into final video muxing", async () => {
     const providers = await import("../../../apps/worker/src/lib/providers")
 

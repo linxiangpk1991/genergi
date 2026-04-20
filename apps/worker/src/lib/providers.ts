@@ -2033,6 +2033,32 @@ export async function buildKeyframeAssetRecords(input: {
   return assets
 }
 
+export async function buildProgressAssetRecords(input: {
+  taskId: string
+  taskDir: string
+  createdAt: string
+  keyframeManifestPath?: string | null
+  keyframeLabel?: string | null
+}): Promise<AssetRecord[]> {
+  const documentAssets = await buildTaskDocumentAssetRecords({
+    taskId: input.taskId,
+    taskDir: input.taskDir,
+    createdAt: input.createdAt,
+  })
+
+  const keyframeAssets =
+    input.keyframeManifestPath && input.keyframeLabel
+      ? await buildKeyframeAssetRecords({
+          taskId: input.taskId,
+          manifestPath: input.keyframeManifestPath,
+          label: input.keyframeLabel,
+          createdAt: input.createdAt,
+        })
+      : []
+
+  return [...documentAssets, ...keyframeAssets]
+}
+
 export async function synthesizeNarration(detail: TaskDetail) {
   const dir = ensureTaskDir(detail.taskId)
   const runtime = resolveRuntimeGenerationConfig(detail)
