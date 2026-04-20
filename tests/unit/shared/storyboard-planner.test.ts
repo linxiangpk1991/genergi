@@ -17,6 +17,8 @@ describe("storyboard planner", () => {
     expect(scenes[0].script.toLowerCase()).toContain("desk chaos")
     expect(scenes[0].script.toLowerCase()).toContain("charger")
     expect(scenes[1].script.toLowerCase()).toContain("call to action")
+    expect(scenes[0].imagePrompt).toContain("Scene goal:")
+    expect(scenes[0].videoPrompt).toContain("Opening intent:")
   })
 
   it("builds more scenes for longer final durations and keeps timeline labels contiguous", async () => {
@@ -54,5 +56,6 @@ describe("storyboard planner", () => {
     expect(scenes[0].script).toContain("Beat one")
     expect(scenes[0].script).not.toContain("Beat four")
     expect(scenes.at(-1)?.script).toContain("Beat four")
+    expect(scenes[0].videoPrompt).toContain("Ending intent:")
   })
 })
