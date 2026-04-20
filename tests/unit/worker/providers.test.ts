@@ -682,6 +682,61 @@ Here's the thing. In Chinese destiny analysis, there's a pattern called "late bl
     expect(policy.onTimeoutMessage).toBe("Image generation timeout, switching to video-derived keyframe")
   })
 
+  it("prepares styled subtitles and passes them into final video muxing", async () => {
+    const providers = await import("../../../apps/worker/src/lib/providers")
+
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "genergi-final-video-subtitles-"))
+    process.env.GENERGI_DATA_DIR = tempDir
+
+    const sceneOnePath = path.join(tempDir, "scene-1.mp4")
+    const sceneTwoPath = path.join(tempDir, "scene-2.mp4")
+    const narrationPath = path.join(tempDir, "narration.mp3")
+    const subtitlesPath = path.join(tempDir, "subtitles.srt")
+    await writeFile(sceneOnePath, "scene-1", "utf8")
+    await writeFile(sceneTwoPath, "scene-2", "utf8")
+    await writeFile(narrationPath, "audio", "utf8")
+    await writeFile(subtitlesPath, "1\n00:00:00,000 --> 00:00:01,000\nHello\n", "utf8")
+
+    let muxInput: {
+      videoPath: string
+      audioPath: string
+      outputPath: string
+      subtitlePath?: string | null
+    } | null = null
+
+    const result = await providers.buildFinalVideoWithNarration(
+      {
+        taskId: "task_final_subtitles",
+        sourceVideoPaths: [sceneOnePath, sceneTwoPath],
+        narrationPath,
+        subtitlesPath,
+        renderSpec: createTaskDetail().taskRunConfig.renderSpecJson,
+        targetDurationSec: 15,
+      },
+      {
+        concatVideos: async ({ outputPath }) => {
+          await writeFile(outputPath, "stitched", "utf8")
+        },
+        trimVideoDuration: async ({ outputPath }) => {
+          await writeFile(outputPath, "trimmed", "utf8")
+        },
+        writeStyledAssSubtitleFile: async ({ assPath }) => {
+          await writeFile(assPath, "[Script Info]", "utf8")
+          return assPath
+        },
+        muxNarrationIntoVideo: async (input) => {
+          muxInput = input
+          await writeFile(input.outputPath, "final", "utf8")
+        },
+        getMediaDurationSeconds: async () => 14.8,
+      },
+    )
+
+    expect(muxInput?.subtitlePath).toContain("subtitles.ass")
+    expect(result.outputPath).toContain("final-with-audio.mp4")
+    expect(result.actualDurationSec).toBe(14.8)
+  })
+
   it("uses Gemini native image generation for flash-image models that declare gemini transport", async () => {
     const providers = await import("../../../apps/worker/src/lib/providers")
     const { encryptControlPlaneSecret } = await import("../../../apps/api/src/lib/model-control/crypto")

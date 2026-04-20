@@ -1,6 +1,155 @@
-import { copyFile, rm, writeFile } from "node:fs/promises"
+import { copyFile, readFile, rm, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { spawn } from "node:child_process"
+import { parseSync } from "subtitle"
+import type { RenderSpec } from "@genergi/shared"
+
+type MuxNarrationInput = {
+  videoPath: string
+  audioPath: string
+  outputPath: string
+  subtitlePath?: string | null
+}
+
+function toAssTimestamp(milliseconds: number) {
+  const totalCentiseconds = Math.max(0, Math.round(milliseconds / 10))
+  const hours = Math.floor(totalCentiseconds / 360000)
+  const minutes = Math.floor((totalCentiseconds % 360000) / 6000)
+  const seconds = Math.floor((totalCentiseconds % 6000) / 100)
+  const centiseconds = totalCentiseconds % 100
+  return `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}.${String(centiseconds).padStart(2, "0")}`
+}
+
+function escapeAssText(text: string) {
+  return text
+    .replace(/\\/g, "\\\\")
+    .replace(/\{/g, "\\{")
+    .replace(/\}/g, "\\}")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .replace(/\n/g, "\\N")
+}
+
+function resolveAssStyle(renderSpec: RenderSpec) {
+  const fontSize = Math.max(42, Math.round(renderSpec.height * 0.046))
+  const outline = Math.max(3, Math.round(fontSize * 0.08))
+  const marginL = Math.max(48, Math.round(renderSpec.width * (renderSpec.safeArea.leftPct / 100)))
+  const marginR = Math.max(48, Math.round(renderSpec.width * (renderSpec.safeArea.rightPct / 100)))
+  const marginV = Math.max(96, Math.round(renderSpec.height * (renderSpec.safeArea.bottomPct / 100)))
+
+  return {
+    fontSize,
+    outline,
+    marginL,
+    marginR,
+    marginV,
+  }
+}
+
+function escapeFfmpegFilterPath(filePath: string) {
+  return filePath
+    .replace(/\\/g, "/")
+    .replace(/:/g, "\\:")
+    .replace(/'/g, "\\'")
+    .replace(/\[/g, "\\[")
+    .replace(/\]/g, "\\]")
+    .replace(/,/g, "\\,")
+    .replace(/;/g, "\\;")
+}
+
+export function buildAssSubtitleContent(input: {
+  srtContent: string
+  renderSpec: RenderSpec
+}) {
+  const { fontSize, outline, marginL, marginR, marginV } = resolveAssStyle(input.renderSpec)
+  const cues = parseSync(input.srtContent)
+    .filter((node) => node.type === "cue")
+    .map((node) => node.data)
+
+  const dialogueLines = cues.map((cue) => (
+    `Dialogue: 0,${toAssTimestamp(cue.start)},${toAssTimestamp(cue.end)},Default,,0,0,0,,${escapeAssText(cue.text)}`
+  ))
+
+  return [
+    "[Script Info]",
+    "ScriptType: v4.00+",
+    "WrapStyle: 2",
+    "ScaledBorderAndShadow: yes",
+    `PlayResX: ${input.renderSpec.width}`,
+    `PlayResY: ${input.renderSpec.height}`,
+    "",
+    "[V4+ Styles]",
+    "Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding",
+    `Style: Default,Arial,${fontSize},&H00FFFFFF,&H000000FF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,${outline},0,2,${marginL},${marginR},${marginV},1`,
+    "",
+    "[Events]",
+    "Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text",
+    ...dialogueLines,
+    "",
+  ].join("\n")
+}
+
+export async function writeStyledAssSubtitleFile(input: {
+  srtPath: string
+  assPath: string
+  renderSpec: RenderSpec
+}) {
+  const srtContent = await readFile(input.srtPath, "utf8")
+  const assContent = buildAssSubtitleContent({
+    srtContent,
+    renderSpec: input.renderSpec,
+  })
+  await writeFile(input.assPath, assContent, "utf8")
+  return input.assPath
+}
+
+export function buildMuxNarrationCommandArgs(input: MuxNarrationInput) {
+  const baseArgs = [
+    "-y",
+    "-i",
+    input.videoPath,
+    "-i",
+    input.audioPath,
+    "-map",
+    "0:v:0",
+    "-map",
+    "1:a:0",
+  ]
+
+  if (input.subtitlePath) {
+    return [
+      ...baseArgs,
+      "-vf",
+      `ass=${escapeFfmpegFilterPath(input.subtitlePath)}`,
+      "-c:v",
+      "libx264",
+      "-pix_fmt",
+      "yuv420p",
+      "-preset",
+      "medium",
+      "-crf",
+      "18",
+      "-c:a",
+      "aac",
+      "-movflags",
+      "+faststart",
+      "-shortest",
+      input.outputPath,
+    ]
+  }
+
+  return [
+    ...baseArgs,
+    "-c:v",
+    "copy",
+    "-c:a",
+    "aac",
+    "-movflags",
+    "+faststart",
+    "-shortest",
+    input.outputPath,
+  ]
+}
 
 export async function getMediaDurationSeconds(input: {
   mediaPath: string
@@ -152,25 +301,14 @@ export async function muxNarrationIntoVideo(input: {
   videoPath: string
   audioPath: string
   outputPath: string
+  subtitlePath?: string | null
 }) {
   const ffmpegPath = process.env.GENERGI_FFMPEG_PATH || "ffmpeg"
 
   await new Promise<void>((resolve, reject) => {
     const process = spawn(
       ffmpegPath,
-      [
-        "-y",
-        "-i",
-        input.videoPath,
-        "-i",
-        input.audioPath,
-        "-c:v",
-        "copy",
-        "-c:a",
-        "aac",
-        "-shortest",
-        input.outputPath,
-      ],
+      buildMuxNarrationCommandArgs(input),
       { stdio: ["ignore", "pipe", "pipe"] },
     )
 

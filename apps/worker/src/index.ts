@@ -283,6 +283,8 @@ async function writeTaskArtifacts(
     taskId,
     sourceVideoPaths: sceneVideos.map((sceneVideo) => sceneVideo.videoPath),
     narrationPath: narration.audioPath,
+    subtitlesPath: narration.srtPath,
+    renderSpec: preparedDetail.taskRunConfig.renderSpecJson,
     targetDurationSec: preparedDetail.taskRunConfig.targetDurationSec,
   })
   await upsertTaskDetail(

@@ -24,7 +24,7 @@ import {
 } from "@genergi/shared"
 import { GENERATION_PREFERENCES, resolveVideoModelCapability } from "@genergi/config"
 import { EdgeTTS } from "./edge-tts.js"
-import { concatVideos, extractKeyframeFromVideo, getMediaDurationSeconds, muxNarrationIntoVideo, trimVideoDuration } from "./ffmpeg.js"
+import { concatVideos, extractKeyframeFromVideo, getMediaDurationSeconds, muxNarrationIntoVideo, trimVideoDuration, writeStyledAssSubtitleFile } from "./ffmpeg.js"
 
 const gatewayBaseUrl = process.env.GENERGI_MEDIA_GATEWAY_BASE_URL ?? "https://open.xiaojingai.com"
 const gatewayApiKey = process.env.GENERGI_MEDIA_GATEWAY_API_KEY ?? ""
@@ -1881,34 +1881,71 @@ export async function buildFinalVideoWithNarration(input: {
   taskId: string
   sourceVideoPaths: string[]
   narrationPath: string
+  subtitlesPath?: string | null
+  renderSpec?: TaskDetail["taskRunConfig"]["renderSpecJson"] | null
   targetDurationSec: number
-}) {
+}, deps: {
+  concatVideos?: typeof concatVideos
+  trimVideoDuration?: typeof trimVideoDuration
+  writeStyledAssSubtitleFile?: typeof writeStyledAssSubtitleFile
+  muxNarrationIntoVideo?: typeof muxNarrationIntoVideo
+  getMediaDurationSeconds?: typeof getMediaDurationSeconds
+} = {}) {
   const dir = ensureTaskDir(input.taskId)
   const stitchedVideoPath = path.join(dir, "video", "stitched-scenes.mp4")
   const trimmedVideoPath = path.join(dir, "video", "trimmed-scenes.mp4")
   const outputPath = path.join(dir, "video", "final-with-audio.mp4")
+  const subtitlesAssPath = path.join(dir, "subtitles.ass")
+  const concatScenes = deps.concatVideos ?? concatVideos
+  const trimScenes = deps.trimVideoDuration ?? trimVideoDuration
+  const writeAssSubtitles = deps.writeStyledAssSubtitleFile ?? writeStyledAssSubtitleFile
+  const muxFinalVideo = deps.muxNarrationIntoVideo ?? muxNarrationIntoVideo
+  const readDuration = deps.getMediaDurationSeconds ?? getMediaDurationSeconds
   try {
-    await concatVideos({
+    await concatScenes({
       videoPaths: input.sourceVideoPaths,
       outputPath: stitchedVideoPath,
       workingDirectory: path.join(dir, "video"),
     })
-    await trimVideoDuration({
+    await trimScenes({
       videoPath: stitchedVideoPath,
       outputPath: trimmedVideoPath,
       durationSec: input.targetDurationSec,
     })
-    await muxNarrationIntoVideo({
-      videoPath: trimmedVideoPath,
-      audioPath: input.narrationPath,
-      outputPath,
-    })
+    if (input.subtitlesPath && input.renderSpec) {
+      try {
+        await writeAssSubtitles({
+          srtPath: input.subtitlesPath,
+          assPath: subtitlesAssPath,
+          renderSpec: input.renderSpec,
+        })
+        await muxFinalVideo({
+          videoPath: trimmedVideoPath,
+          audioPath: input.narrationPath,
+          subtitlePath: subtitlesAssPath,
+          outputPath,
+        })
+      } catch (error) {
+        console.warn("[worker] subtitle burn-in failed, retrying audio-only mux:", error instanceof Error ? error.message : String(error))
+        await muxFinalVideo({
+          videoPath: trimmedVideoPath,
+          audioPath: input.narrationPath,
+          outputPath,
+        })
+      }
+    } else {
+      await muxFinalVideo({
+        videoPath: trimmedVideoPath,
+        audioPath: input.narrationPath,
+        outputPath,
+      })
+    }
   } catch (error) {
     console.warn("[worker] ffmpeg concat/mux failed, falling back to stitched source video:", error instanceof Error ? error.message : String(error))
     await fs.copyFile(input.sourceVideoPaths[0], outputPath)
   }
   return {
     outputPath,
-    actualDurationSec: await getMediaDurationSeconds({ mediaPath: outputPath }),
+    actualDurationSec: await readDuration({ mediaPath: outputPath }),
   }
 }
