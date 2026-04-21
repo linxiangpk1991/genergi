@@ -10,6 +10,7 @@ import {
   type AssetRecord,
   readTaskBlueprintRecords,
   mergeSceneReviewMetadata,
+  normalizeTaskDetailRecord,
   planningSceneSchema,
   resolveSceneCountForDurationWithLimit,
   resolveSceneReviewDefaults,
@@ -608,6 +609,34 @@ export function buildScenesFromBlueprint(detail: TaskDetail, blueprint: PlannedE
 export async function getCurrentTaskBlueprintRecord(taskId: string): Promise<TaskBlueprintRecord | null> {
   const records = await readTaskBlueprintRecords()
   return (records[taskId] ?? []).slice().sort((left, right) => left.version - right.version).at(-1) ?? null
+}
+
+export async function readKeyframeBundleSnapshot(manifestPath?: string | null) {
+  if (!manifestPath) {
+    return null
+  }
+
+  try {
+    const rawManifest = await fs.readFile(manifestPath, "utf8")
+    const manifest = JSON.parse(rawManifest) as {
+      sceneCount?: number
+      frames?: unknown[]
+    }
+    const frameCount =
+      typeof manifest.sceneCount === "number"
+        ? manifest.sceneCount
+        : Array.isArray(manifest.frames)
+          ? manifest.frames.length
+          : 0
+
+    return {
+      keyframeDir: path.dirname(manifestPath),
+      manifestPath,
+      frameCount,
+    }
+  } catch {
+    return null
+  }
 }
 
 export async function upsertTaskBlueprintSnapshot(input: {
@@ -1855,6 +1884,62 @@ export async function prepareTaskBlueprint(detail: TaskDetail): Promise<{
     },
     blueprintRecord,
     planningTrace: prepared.planningTrace,
+  }
+}
+
+export async function prepareExecutionSource(
+  detail: TaskDetail,
+  options: {
+    continueExecution?: boolean
+    approvedBlueprintRecord?: TaskBlueprintRecord | null
+  } = {},
+): Promise<{
+  detail: TaskDetail
+  blueprintRecord: TaskBlueprintRecord
+  planningTrace: PlanningTraceArtifact | null
+  approvedKeyframes: {
+    keyframeDir: string
+    manifestPath: string
+    frameCount: number
+  } | null
+}> {
+  if (options.continueExecution) {
+    const approvedBlueprintRecord = options.approvedBlueprintRecord ?? await getCurrentTaskBlueprintRecord(detail.taskId)
+    if (approvedBlueprintRecord?.status === "approved") {
+      const rebuiltScenes = buildScenesFromBlueprint(detail, approvedBlueprintRecord.blueprint)
+      const rebuiltDetail = normalizeTaskDetailRecord({
+        ...detail,
+        script: approvedBlueprintRecord.blueprint.totalVoiceoverScript,
+        blueprintVersion: approvedBlueprintRecord.version,
+        blueprintStatus: approvedBlueprintRecord.status,
+        taskRunConfig: {
+          ...detail.taskRunConfig,
+          blueprintVersion: approvedBlueprintRecord.version,
+          blueprintStatus: approvedBlueprintRecord.status,
+        },
+        visualStyleGuide: approvedBlueprintRecord.blueprint.visualStyleGuide,
+        ctaLine:
+          approvedBlueprintRecord.blueprint.sceneContracts.at(-1)?.voiceoverScript ??
+          detail.ctaLine,
+        scenes: rebuiltScenes,
+        updatedAt: new Date().toISOString(),
+      })
+
+      return {
+        detail: rebuiltDetail,
+        blueprintRecord: approvedBlueprintRecord,
+        planningTrace: null,
+        approvedKeyframes: await readKeyframeBundleSnapshot(approvedBlueprintRecord.keyframeManifestPath),
+      }
+    }
+  }
+
+  const prepared = await prepareTaskBlueprint(detail)
+  return {
+    detail: prepared.detail,
+    blueprintRecord: prepared.blueprintRecord,
+    planningTrace: prepared.planningTrace,
+    approvedKeyframes: null,
   }
 }
 

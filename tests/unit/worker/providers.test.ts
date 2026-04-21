@@ -460,6 +460,122 @@ A few notes to make it hit:
     expect(inputs[1]?.keyframePath).toBeNull()
   })
 
+  it("uses the approved blueprint directly for continueExecution instead of rebuilding planning", async () => {
+    const providers = await import("../../../apps/worker/src/lib/providers")
+
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "genergi-approved-blueprint-resume-"))
+    process.env.GENERGI_DATA_DIR = tempDir
+
+    const detail = createTaskDetail({
+      taskId: "task_resume_approved",
+      script: "Original source script that should not be used after approval.",
+      blueprintVersion: 2,
+      blueprintStatus: "approved",
+      taskRunConfig: {
+        ...createTaskDetail().taskRunConfig,
+        blueprintVersion: 2,
+        blueprintStatus: "approved",
+      },
+      scenes: [
+        {
+          id: "scene_1",
+          index: 0,
+          title: "Old scene",
+          sceneGoal: "Old scene",
+          voiceoverScript: "Old scene narration.",
+          startFrameDescription: "Old frame",
+          script: "Old scene narration.",
+          imagePrompt: "Old image prompt.",
+          videoPrompt: "Old video prompt.",
+          startFrameIntent: "Old start",
+          endFrameIntent: "Old end",
+          durationSec: 8,
+          startLabel: "00:00",
+          endLabel: "00:08",
+          reviewStatus: "approved",
+          keyframeStatus: "approved",
+          continuityConstraints: [],
+          reviewNote: null,
+          reviewedAt: null,
+          keyframeReviewNote: null,
+          keyframeReviewedAt: null,
+        },
+      ],
+    })
+
+    const approvedBlueprint = {
+      taskId: detail.taskId,
+      version: 2,
+      status: "approved" as const,
+      createdAt: "2026-04-20T00:00:00.000Z",
+      updatedAt: "2026-04-20T00:00:00.000Z",
+      blueprint: {
+        taskId: detail.taskId,
+        projectId: detail.projectId,
+        version: 2,
+        createdAt: "2026-04-20T00:00:00.000Z",
+        executionMode: "review_required" as const,
+        renderSpec: detail.taskRunConfig.renderSpecJson,
+        globalTheme: "Approved blueprint",
+        visualStyleGuide: "Use the reviewed panda style.",
+        subjectProfile: "Reviewed panda host",
+        productProfile: "BaZi report",
+        backgroundConstraints: ["Chinese-style room"],
+        negativeConstraints: ["no subtitles"],
+        totalVoiceoverScript: "Approved narration from the reviewed blueprint.",
+        sceneContracts: [
+          {
+            id: "scene_1",
+            index: 0,
+            sceneGoal: "Approved scene one",
+            voiceoverScript: "Approved scene one narration.",
+            startFrameDescription: "Approved start frame",
+            imagePrompt: "Approved image prompt from reviewed blueprint.",
+            videoPrompt: "Approved video prompt from reviewed blueprint.",
+            startFrameIntent: "Approved start",
+            endFrameIntent: "Approved end",
+            durationSec: 8,
+            transitionHint: "open",
+            continuityConstraints: ["same panda"],
+          },
+        ],
+      },
+      keyframeManifestPath: path.join(tempDir, "manifest.json"),
+    }
+
+    const execution = await providers.prepareExecutionSource(detail, {
+      continueExecution: true,
+      approvedBlueprintRecord: approvedBlueprint as any,
+    })
+
+    expect(execution.planningTrace).toBeNull()
+    expect(execution.blueprintRecord.status).toBe("approved")
+    expect(execution.detail.script).toBe("Approved narration from the reviewed blueprint.")
+    expect(execution.detail.scenes[0]?.imagePrompt).toBe("Approved image prompt from reviewed blueprint.")
+    expect(execution.detail.scenes[0]?.videoPrompt).toBe("Approved video prompt from reviewed blueprint.")
+  })
+
+  it("reads an approved keyframe manifest so resume can reuse reviewed keyframes", async () => {
+    const providers = await import("../../../apps/worker/src/lib/providers")
+
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "genergi-approved-keyframe-manifest-"))
+    const manifestPath = path.join(tempDir, "manifest.json")
+    await writeFile(
+      manifestPath,
+      JSON.stringify({
+        sceneCount: 3,
+        frames: [{ sceneId: "scene_1" }, { sceneId: "scene_2" }, { sceneId: "scene_3" }],
+      }),
+      "utf8",
+    )
+
+    const snapshot = await providers.readKeyframeBundleSnapshot(manifestPath)
+
+    expect(snapshot?.manifestPath).toBe(manifestPath)
+    expect(snapshot?.frameCount).toBe(3)
+    expect(snapshot?.keyframeDir).toBe(tempDir)
+  })
+
   it("prefers the text model's final scene scripts and prompts when they are already structured", async () => {
     const providers = await import("../../../apps/worker/src/lib/providers")
 

@@ -20,7 +20,7 @@ import {
   createKeyframeBundle,
   createSceneVideoBundle,
   describeRuntimeGenerationConfig,
-  prepareTaskBlueprint,
+  prepareExecutionSource,
   resolveKeyframeGenerationTimeoutPolicy,
   resolveRuntimeGenerationConfig,
   synthesizeNarration,
@@ -146,7 +146,9 @@ async function writeTaskArtifacts(
     }
   }
 
-  const prepared = await prepareTaskBlueprint(detail)
+  const prepared = await prepareExecutionSource(detail, {
+    continueExecution: options.continueExecution,
+  })
   const preparedDetail = await mergeLatestReviewMetadata(prepared.detail)
   const planningTrace = prepared.planningTrace
   let blueprintRecord = prepared.blueprintRecord
@@ -167,7 +169,7 @@ async function writeTaskArtifacts(
     failureReason: null,
     statusDetail: "准备任务源文件",
   })
-  const taskDir = await writeTaskSourceFiles(preparedDetail, planningTrace)
+  const taskDir = await writeTaskSourceFiles(preparedDetail, planningTrace ?? undefined)
   await upsertTaskAssets(
     taskId,
     await buildProgressAssetRecords({
@@ -183,45 +185,55 @@ async function writeTaskArtifacts(
         manifestPath: string
         frameCount: number
       }
-    | null = null
-  try {
-    await writeWorkerHeartbeat(`Generating keyframes for ${taskId} with ${runtime.imageModelLabel}`)
-    const keyframeTimeoutPolicy = resolveKeyframeGenerationTimeoutPolicy({
-      detail: preparedDetail,
-      continueExecution: options.continueExecution,
-    })
-    keyframes = await Promise.race([
-      createKeyframeBundle({
-        taskId,
+    | null = prepared.approvedKeyframes
+  if (!keyframes) {
+    try {
+      await writeWorkerHeartbeat(`Generating keyframes for ${taskId} with ${runtime.imageModelLabel}`)
+      const keyframeTimeoutPolicy = resolveKeyframeGenerationTimeoutPolicy({
         detail: preparedDetail,
-        model: runtime.imageModelId,
-        signal: options.signal,
-        onSceneStart: async (scene, totalScenes) => {
-          await updateTaskLifecycleState(taskId, {
-            status: "running",
-            progressPct: 40,
-            failureReason: null,
-            statusDetail: `关键画面生成中 ${scene.index + 1}/${totalScenes}`,
-          })
-        },
-      }),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error(keyframeTimeoutPolicy.onTimeoutMessage)), keyframeTimeoutPolicy.timeoutMs),
-      ),
-    ])
-  } catch (error) {
-    console.warn(`[worker] ${taskId} image keyframe generation failed:`, error instanceof Error ? error.message : String(error))
-    if (preparedDetail.taskRunConfig.executionMode === "review_required" && !options.continueExecution) {
-      throw error
+        continueExecution: options.continueExecution,
+      })
+      keyframes = await Promise.race([
+        createKeyframeBundle({
+          taskId,
+          detail: preparedDetail,
+          model: runtime.imageModelId,
+          signal: options.signal,
+          onSceneStart: async (scene, totalScenes) => {
+            await updateTaskLifecycleState(taskId, {
+              status: "running",
+              progressPct: 40,
+              failureReason: null,
+              statusDetail: `关键画面生成中 ${scene.index + 1}/${totalScenes}`,
+            })
+          },
+        }),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error(keyframeTimeoutPolicy.onTimeoutMessage)), keyframeTimeoutPolicy.timeoutMs),
+        ),
+      ])
+    } catch (error) {
+      console.warn(`[worker] ${taskId} image keyframe generation failed:`, error instanceof Error ? error.message : String(error))
+      if (preparedDetail.taskRunConfig.executionMode === "review_required" && !options.continueExecution) {
+        throw error
+      }
+      await writeWorkerHeartbeat(`Image generation failed, will continue with prompt-only video path for ${taskId}`, "degraded")
+      await updateTaskLifecycleState(taskId, {
+        status: "running",
+        progressPct: 55,
+        failureReason: null,
+        statusDetail: "关键画面超时，正在转视频导出关键帧",
+      })
+      keyframes = null
     }
-    await writeWorkerHeartbeat(`Image generation failed, will continue with prompt-only video path for ${taskId}`, "degraded")
+  } else {
+    await writeWorkerHeartbeat(`Reusing approved keyframes for ${taskId}`)
     await updateTaskLifecycleState(taskId, {
       status: "running",
-      progressPct: 55,
+      progressPct: 40,
       failureReason: null,
-      statusDetail: "关键画面超时，正在转视频导出关键帧",
+      statusDetail: "复用已审核关键画面",
     })
-    keyframes = null
   }
 
   blueprintRecord = await upsertTaskBlueprintSnapshot({
