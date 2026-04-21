@@ -198,6 +198,8 @@ export type TaskSummary = {
   blueprintStatus: BlueprintStatus
   actualDurationSec: number | null
   failureReason?: string | null
+  statusDetail?: string | null
+  cancelRequestedAt?: string | null
   status: string
   progressPct: number
   retryCount: number
@@ -242,6 +244,8 @@ export type TaskDetail = {
   blueprintVersion: number
   blueprintStatus: BlueprintStatus
   failureReason?: string | null
+  statusDetail?: string | null
+  cancelRequestedAt?: string | null
   taskRunConfig: {
     projectId: string
     modeId: string
@@ -294,6 +298,15 @@ export type TaskDetail = {
 export type ReviewMutationResponse = {
   task: TaskSummary
   detail: TaskDetail
+}
+
+export type TaskCancelResponse = {
+  task: TaskSummary
+  detail: TaskDetail
+  queue: {
+    removedJobIds: string[]
+    hadActiveJob: boolean
+  }
 }
 
 export type AssetRecord = {
@@ -641,6 +654,10 @@ export const api = {
       method: "POST",
     }),
   getTaskAssets: (taskId: string) => request<{ assets: AssetRecord[] }>(`/api/tasks/${taskId}/assets`),
+  cancelTask: (taskId: string) =>
+    request<TaskCancelResponse>(`/api/tasks/${taskId}/cancel`, {
+      method: "POST",
+    }),
   createTask: (payload: CreateTaskPayload) =>
     request<{ task: TaskSummary }>("/api/tasks", {
       method: "POST",

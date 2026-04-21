@@ -104,3 +104,28 @@ export async function enqueueTask(
     }
   })
 }
+
+export async function cancelTaskJobs(taskId: string) {
+  return withQueue(async (queue) => {
+    const jobs = await queue.getJobs(["waiting", "delayed", "prioritized", "paused", "active"], 0, 200, true)
+    const matchedJobs = jobs.filter((job) => job.data?.taskId === taskId)
+    const removedJobIds: string[] = []
+    let hadActiveJob = false
+
+    for (const job of matchedJobs) {
+      const state = await job.getState()
+      if (state === "active") {
+        hadActiveJob = true
+        continue
+      }
+
+      await job.remove()
+      removedJobIds.push(String(job.id))
+    }
+
+    return {
+      removedJobIds,
+      hadActiveJob,
+    }
+  })
+}

@@ -36,6 +36,10 @@ function getTaskFlowLabel(task: TaskSummary | null) {
     return "待同步"
   }
 
+  if (task.statusDetail?.trim()) {
+    return task.statusDetail.trim()
+  }
+
   if (task.executionMode === "review_required" && task.blueprintStatus === "ready_for_review") {
     return `整任务待审 (蓝图 v${task.blueprintVersion})`
   }
@@ -61,6 +65,10 @@ function getTaskFlowLabel(task: TaskSummary | null) {
   }
 
   return "等待生成"
+}
+
+function canCancelTask(task: TaskSummary | null) {
+  return task?.status === "queued" || task?.status === "running"
 }
 
 function sortAssetsForDelivery(assets: AssetRecord[]) {
@@ -102,6 +110,8 @@ export function AssetsPage() {
   const [lastRefreshAt, setLastRefreshAt] = useState<string>("")
   const [isStale, setIsStale] = useState(false)
   const [loadError, setLoadError] = useState("")
+  const [actionError, setActionError] = useState("")
+  const [cancelingTaskId, setCancelingTaskId] = useState("")
 
   function syncTaskContext(taskId?: string, replace = true) {
     const currentTaskId = searchParams.get("taskId") ?? ""
@@ -205,6 +215,19 @@ export function AssetsPage() {
 
     syncTaskContext(selectedTaskId, true)
   }, [selectedTaskId])
+
+  async function handleCancelTask(taskId: string) {
+    setActionError("")
+    setCancelingTaskId(taskId)
+    try {
+      const response = await api.cancelTask(taskId)
+      setTasks((current) => current.map((task) => (task.id === taskId ? response.task : task)))
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "终止任务失败")
+    } finally {
+      setCancelingTaskId("")
+    }
+  }
 
   const selectedTask = useMemo(
     () => tasks.find((task) => task.id === selectedTaskId) ?? null,
@@ -425,6 +448,11 @@ export function AssetsPage() {
               {loadError}
             </div>
           ) : null}
+          {actionError ? (
+            <div className="review-inline-note review-inline-note--danger" role="alert">
+              {actionError}
+            </div>
+          ) : null}
 
           <div className="asset-metrics">
             <div className="asset-metric-card">
@@ -538,6 +566,16 @@ export function AssetsPage() {
                 <strong>{getTaskFlowLabel(selectedTask)}</strong>
                 <span>资产排查完成后，直接回到当前任务真正需要处理的唯一主工作台。</span>
                 <div className="task-item__actions">
+                  {selectedTaskId && canCancelTask(selectedTask) ? (
+                    <button
+                      className="ghost-button"
+                      disabled={cancelingTaskId === selectedTaskId}
+                      onClick={() => void handleCancelTask(selectedTaskId)}
+                      type="button"
+                    >
+                      {cancelingTaskId === selectedTaskId ? "终止中..." : "终止任务"}
+                    </button>
+                  ) : null}
                   {selectedTask?.executionMode === "review_required" &&
                   (selectedTask.blueprintStatus === "ready_for_review" ||
                     selectedTask.blueprintStatus === "approved" ||

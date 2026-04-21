@@ -19,6 +19,10 @@ function formatDurationDelta(task: TaskSummary) {
 }
 
 function getTaskExceptionLabel(task: TaskSummary) {
+  if (task.statusDetail?.trim()) {
+    return task.statusDetail.trim()
+  }
+
   if (task.executionMode === "review_required" && task.blueprintStatus === "ready_for_review") {
     return `蓝图待审 v${task.blueprintVersion}`
   }
@@ -40,6 +44,10 @@ function getTaskExceptionLabel(task: TaskSummary) {
   }
 
   return "查看当前任务上下文"
+}
+
+function canCancelTask(task: TaskSummary) {
+  return task.status === "queued" || task.status === "running"
 }
 
 function getTaskActions(task: TaskSummary) {
@@ -93,6 +101,8 @@ export function BatchDashboardPage() {
   const [lastRefreshAt, setLastRefreshAt] = useState<string>("")
   const [isStale, setIsStale] = useState(false)
   const [loadError, setLoadError] = useState("")
+  const [actionError, setActionError] = useState("")
+  const [cancelingTaskId, setCancelingTaskId] = useState("")
 
   useEffect(() => {
     async function load() {
@@ -126,6 +136,19 @@ export function BatchDashboardPage() {
 
     return () => window.clearInterval(timer)
   }, [])
+
+  async function handleCancelTask(taskId: string) {
+    setActionError("")
+    setCancelingTaskId(taskId)
+    try {
+      const response = await api.cancelTask(taskId)
+      setTasks((current) => current.map((task) => (task.id === taskId ? response.task : task)))
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "终止任务失败")
+    } finally {
+      setCancelingTaskId("")
+    }
+  }
 
   const sortedTasks = useMemo(
     () => [...tasks].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
@@ -203,6 +226,11 @@ export function BatchDashboardPage() {
               {loadError}
             </div>
           ) : null}
+          {actionError ? (
+            <div className="review-inline-note review-inline-note--danger" role="alert">
+              {actionError}
+            </div>
+          ) : null}
           <div className="metric-grid">
             <div className="metric-card"><span>运行中</span><strong>{metrics.runningCount}</strong></div>
             <div className="metric-card"><span>已完成</span><strong>{metrics.completedCount}</strong></div>
@@ -247,7 +275,7 @@ export function BatchDashboardPage() {
                   </div>
                   <div>
                     <strong>{task.progressPct}%</strong>
-                    <span>重试 {task.retryCount} · {task.actualDurationSec ? `偏差 ${formatDurationDelta(task)}` : "等待成片"}</span>
+                    <span>{task.statusDetail ?? `重试 ${task.retryCount} · ${task.actualDurationSec ? `偏差 ${formatDurationDelta(task)}` : "等待成片"}`}</span>
                   </div>
                   <div>
                     <strong>¥{task.estimatedCostCny.toFixed(2)}</strong>
@@ -263,6 +291,16 @@ export function BatchDashboardPage() {
                         {action.label}
                       </Link>
                     ))}
+                    {canCancelTask(task) ? (
+                      <button
+                        className="ghost-button"
+                        disabled={cancelingTaskId === task.id}
+                        onClick={() => void handleCancelTask(task.id)}
+                        type="button"
+                      >
+                        {cancelingTaskId === task.id ? "终止中..." : "终止任务"}
+                      </button>
+                    ) : null}
                   </div>
                 </div>
               )

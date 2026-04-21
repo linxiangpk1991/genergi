@@ -33,6 +33,7 @@ const gatewayImageGenerationPaths = ["/v1/images/generations", "/v1/image/genera
 const IMAGE_GATEWAY_REQUEST_TIMEOUT_MS = 240000
 const REVIEW_REQUIRED_KEYFRAME_TIMEOUT_MS = 240000
 const DEGRADABLE_KEYFRAME_TIMEOUT_MS = 240000
+export const TASK_CANCELED_BY_OPERATOR = "TASK_CANCELED_BY_OPERATOR"
 
 type PlanningTraceArtifact = {
   sourceScript: string
@@ -118,8 +119,39 @@ function isRetryableGatewayStatus(status?: number | null) {
   return status === 429 || status === 500 || status === 502 || status === 503 || status === 504
 }
 
-async function sleep(ms: number) {
-  await new Promise((resolve) => setTimeout(resolve, ms))
+function createTaskCanceledError(signal?: AbortSignal) {
+  const reason = signal?.reason
+  if (reason instanceof Error) {
+    return new Error(reason.message)
+  }
+  if (typeof reason === "string" && reason.trim()) {
+    return new Error(reason)
+  }
+  return new Error(TASK_CANCELED_BY_OPERATOR)
+}
+
+function throwIfTaskCanceled(signal?: AbortSignal) {
+  if (signal?.aborted) {
+    throw createTaskCanceledError(signal)
+  }
+}
+
+async function sleep(ms: number, signal?: AbortSignal) {
+  throwIfTaskCanceled(signal)
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort)
+      resolve()
+    }, ms)
+
+    function onAbort() {
+      clearTimeout(timer)
+      signal?.removeEventListener("abort", onAbort)
+      reject(createTaskCanceledError(signal))
+    }
+
+    signal?.addEventListener("abort", onAbort, { once: true })
+  })
 }
 
 function normalizeImageModel(model: string) {
@@ -799,6 +831,7 @@ async function requestGatewayImageGeneration(input: {
   model: string
   prompt: string
   size: string
+  signal?: AbortSignal
 }) {
   if (!gatewayApiKey) {
     throw new Error("GENERGI_MEDIA_GATEWAY_API_KEY is missing")
@@ -817,19 +850,24 @@ async function requestGatewayImageGeneration(input: {
   for (const endpoint of gatewayImageGenerationPaths) {
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
+        throwIfTaskCanceled(input.signal)
         const response = await axios.post(`${gatewayBaseUrl}${endpoint}`, payload, {
           headers: buildGatewayHeaders(),
           timeout: IMAGE_GATEWAY_REQUEST_TIMEOUT_MS,
+          signal: input.signal,
         })
         return { endpoint, data: response.data }
       } catch (error) {
+        if (input.signal?.aborted || (axios.isAxiosError(error) && error.code === "ERR_CANCELED")) {
+          throw createTaskCanceledError(input.signal)
+        }
         lastError = error
         const status = axios.isAxiosError(error) ? error.response?.status : null
         if (status === 404 || status === 405) {
           break
         }
         if (isRetryableGatewayStatus(status) && attempt < 3) {
-          await sleep(1500 * attempt)
+          await sleep(1500 * attempt, input.signal)
           continue
         }
         throw error
@@ -842,15 +880,16 @@ async function requestGatewayImageGeneration(input: {
     : new Error(`Image generation failed for all gateway endpoints: ${String(lastError)}`)
 }
 
-async function pollGatewayImageGeneration(endpoint: string, generationId: string) {
+async function pollGatewayImageGeneration(endpoint: string, generationId: string, signal?: AbortSignal) {
   const deadline = Date.now() + 15 * 60 * 1000
   while (Date.now() < deadline) {
-    await new Promise((resolve) => setTimeout(resolve, 5000))
+    await sleep(5000, signal)
     const response = await axios.get(`${gatewayBaseUrl}${endpoint}/${generationId}`, {
       headers: {
         Authorization: `Bearer ${gatewayApiKey}`,
       },
       timeout: IMAGE_GATEWAY_REQUEST_TIMEOUT_MS,
+      signal,
     })
     const ref = extractImageReference(response.data)
     if (ref) {
@@ -866,7 +905,7 @@ async function pollGatewayImageGeneration(endpoint: string, generationId: string
   throw new Error(`Image generation polling timed out for task ${generationId}`)
 }
 
-async function createGatewayImageArtifact(input: { model: string; prompt: string; size: string }) {
+async function createGatewayImageArtifact(input: { model: string; prompt: string; size: string; signal?: AbortSignal }) {
   const createResponse = await requestGatewayImageGeneration(input)
   const payload = createResponse.data
 
@@ -874,7 +913,7 @@ async function createGatewayImageArtifact(input: { model: string; prompt: string
   const generationId = extractGenerationId(payload)
 
   if (!reference && generationId) {
-    const polled = await pollGatewayImageGeneration(createResponse.endpoint, generationId)
+    const polled = await pollGatewayImageGeneration(createResponse.endpoint, generationId, input.signal)
     reference = polled.reference
   }
 
@@ -942,6 +981,7 @@ export async function createGeminiNativeImageArtifact(
     apiKey: string
     model: string
     prompt: string
+    signal?: AbortSignal
   },
   deps: {
     postJson?: (url: string, body: Record<string, unknown>) => Promise<any>
@@ -967,6 +1007,7 @@ export async function createGeminiNativeImageArtifact(
           "Content-Type": "application/json",
         },
         timeout: 300000,
+        signal: input.signal,
       })
     ).data
 
@@ -2011,6 +2052,7 @@ export async function createVideoFromPrompt(input: {
   scene: StoryboardScene
   model: string
   keyframePath?: string | null
+  signal?: AbortSignal
 }) {
   if (!gatewayApiKey) {
     throw new Error("GENERGI_MEDIA_GATEWAY_API_KEY is missing")
@@ -2030,6 +2072,7 @@ export async function createVideoFromPrompt(input: {
   let lastCreateError: unknown = null
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
+      throwIfTaskCanceled(input.signal)
       createResponse = await axios.post(
         `${gatewayBaseUrl}/v1/video/generations`,
         {
@@ -2044,14 +2087,18 @@ export async function createVideoFromPrompt(input: {
             "Content-Type": "application/json",
           },
           timeout: 120000,
+          signal: input.signal,
         },
       )
       break
     } catch (error) {
+      if (input.signal?.aborted || (axios.isAxiosError(error) && error.code === "ERR_CANCELED")) {
+        throw createTaskCanceledError(input.signal)
+      }
       lastCreateError = error
       const status = axios.isAxiosError(error) ? error.response?.status : null
       if (isRetryableGatewayStatus(status) && attempt < 3) {
-        await sleep(2000 * attempt)
+        await sleep(2000 * attempt, input.signal)
         continue
       }
       throw error
@@ -2069,12 +2116,13 @@ export async function createVideoFromPrompt(input: {
 
   const deadline = Date.now() + 15 * 60 * 1000
   while (Date.now() < deadline) {
-    await new Promise((resolve) => setTimeout(resolve, 5000))
+    await sleep(5000, input.signal)
     const pollResponse = await axios.get(`${gatewayBaseUrl}/v1/video/generations/${taskId}`, {
       headers: {
         Authorization: `Bearer ${gatewayApiKey}`,
       },
       timeout: 120000,
+      signal: input.signal,
     })
 
     const status = `${pollResponse.data?.data?.status || pollResponse.data?.data?.data?.status || ""}`.toLowerCase()
@@ -2094,6 +2142,7 @@ export async function createVideoFromPrompt(input: {
       const download = await axios.get<ArrayBuffer>(videoUrl, {
         responseType: "arraybuffer",
         timeout: 300000,
+        signal: input.signal,
       })
       await fs.writeFile(targetPath, Buffer.from(download.data))
       return { videoPath: targetPath, remoteTaskId: taskId }
@@ -2113,6 +2162,7 @@ export async function createSceneVideoBundle(input: {
   model: string
   blueprintRecord?: TaskBlueprintRecord | null
   onSceneStart?: (scene: StoryboardScene, totalScenes: number) => Promise<void> | void
+  signal?: AbortSignal
 }) {
   const sceneInputs = await buildSceneVideoGenerationInputs({
     detail: input.detail,
@@ -2128,6 +2178,7 @@ export async function createSceneVideoBundle(input: {
         scene: sceneInput.scene,
         model: input.model,
         keyframePath: sceneInput.keyframePath,
+        signal: input.signal,
       }),
       new Promise<never>((_, reject) =>
         setTimeout(
@@ -2152,6 +2203,8 @@ export async function createKeyframeBundle(input: {
   taskId: string
   detail: TaskDetail
   model: string
+  signal?: AbortSignal
+  onSceneStart?: (scene: StoryboardScene, totalScenes: number) => Promise<void> | void
 }, deps: {
   createGeminiNativeImageArtifact?: typeof createGeminiNativeImageArtifact
   createGatewayImageArtifact?: typeof createGatewayImageArtifact
@@ -2177,6 +2230,8 @@ export async function createKeyframeBundle(input: {
   const createGatewayArtifact = deps.createGatewayImageArtifact ?? createGatewayImageArtifact
   const createdFrames = await Promise.all(
     input.detail.scenes.map(async (scene) => {
+      throwIfTaskCanceled(input.signal)
+      await input.onSceneStart?.(scene, input.detail.scenes.length)
       const prompt = buildKeyframePrompt(scene, aspectRatio)
       const generated =
         imageRuntime.kind === "gemini-native"
@@ -2185,11 +2240,13 @@ export async function createKeyframeBundle(input: {
               apiKey: imageRuntime.apiKey,
               model: imageRuntime.providerModelId,
               prompt,
+              signal: input.signal,
             })
           : await createGatewayArtifact({
               model: imageRuntime.model,
               prompt,
               size: "1024x1024",
+              signal: input.signal,
             })
 
       const fileName = `scene-${String(scene.index + 1).padStart(2, "0")}.${generated.extension}`

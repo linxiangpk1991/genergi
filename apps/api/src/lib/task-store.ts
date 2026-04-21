@@ -6,6 +6,7 @@ import {
   createDefaultReviewSummary,
   deleteTaskAssets,
   deleteTaskDetail,
+  normalizeTaskSummaryRecord,
   normalizeStoryboardScene,
   normalizeTaskDetailRecord,
   readTaskAssets,
@@ -15,6 +16,7 @@ import {
   writeTaskSummaries,
 } from "@genergi/shared"
 import type {
+  AssetRecord,
   CreateTaskInput,
   ReviewDecisionInput,
   ReviewStageId,
@@ -31,6 +33,16 @@ import { getProjectById } from "./project-store.js"
 
 function now() {
   return new Date().toISOString()
+}
+
+function resolveTaskDataDir() {
+  return process.env.GENERGI_DATA_DIR
+    ? path.resolve(process.env.GENERGI_DATA_DIR)
+    : path.resolve(process.cwd(), ".data")
+}
+
+function resolveTaskExportDir(taskId: string) {
+  return path.join(resolveTaskDataDir(), "exports", taskId)
 }
 
 export type AssetPreviewKind = "text" | "json" | "media" | "directory" | "binary"
@@ -263,6 +275,136 @@ async function resolveAssetRecord(asset: any): Promise<ResolvedAssetRecord & typ
   }
 }
 
+async function inferExportedAssets(taskId: string): Promise<AssetRecord[]> {
+  const exportDir = resolveTaskExportDir(taskId)
+  const exists = await fs
+    .stat(exportDir)
+    .then((stats) => stats.isDirectory())
+    .catch(() => false)
+
+  if (!exists) {
+    return []
+  }
+
+  const createdAt = now()
+  const assets: AssetRecord[] = []
+  const pushIfExists = async (entry: {
+    id: string
+    assetType: AssetRecord["assetType"]
+    label: string
+    relativePath: string
+  }) => {
+    const assetPath = path.join(exportDir, entry.relativePath)
+    const present = await fs
+      .stat(assetPath)
+      .then((stats) => stats.isFile())
+      .catch(() => false)
+
+    if (!present) {
+      return
+    }
+
+    assets.push({
+      id: entry.id,
+      taskId,
+      assetType: entry.assetType,
+      label: entry.label,
+      status: "ready",
+      path: assetPath,
+      createdAt,
+    })
+  }
+
+  await pushIfExists({ id: `${taskId}_script`, assetType: "script", label: "英文脚本", relativePath: "script.txt" })
+  await pushIfExists({ id: `${taskId}_source_script`, assetType: "source_script", label: "任务母本", relativePath: "source-script.txt" })
+  await pushIfExists({ id: `${taskId}_planning_prompt`, assetType: "planning_prompt", label: "文本规划提示词", relativePath: "planning-prompt.txt" })
+  await pushIfExists({ id: `${taskId}_planning_response`, assetType: "planning_response", label: "文本模型原始返回", relativePath: "planning-response.txt" })
+  await pushIfExists({ id: `${taskId}_planning_audit`, assetType: "planning_audit", label: "文本规划审计 JSON", relativePath: "planning-audit.json" })
+  await pushIfExists({ id: `${taskId}_storyboard`, assetType: "storyboard", label: "分镜 JSON", relativePath: "storyboard.json" })
+  await pushIfExists({ id: `${taskId}_subtitles`, assetType: "subtitles", label: "英文字幕", relativePath: "subtitles.srt" })
+  await pushIfExists({ id: `${taskId}_audio`, assetType: "audio", label: "英文配音", relativePath: "narration.mp3" })
+  await pushIfExists({ id: `${taskId}_video`, assetType: "video_bundle", label: "最终视频", relativePath: path.join("video", "final-with-audio.mp4") })
+
+  const manifestPath = path.join(exportDir, "keyframes", "manifest.json")
+  const manifestExists = await fs
+    .stat(manifestPath)
+    .then((stats) => stats.isFile())
+    .catch(() => false)
+
+  if (manifestExists) {
+    assets.push({
+      id: `${taskId}_keyframes`,
+      taskId,
+      assetType: "keyframe_bundle",
+      label: "关键帧包",
+      status: "ready",
+      path: manifestPath,
+      createdAt,
+    })
+
+    try {
+      const rawManifest = await fs.readFile(manifestPath, "utf8")
+      const manifest = JSON.parse(rawManifest) as {
+        frames?: Array<{
+          sceneId?: string
+          sceneIndex?: number
+          title?: string
+          fileName?: string
+          filePath?: string
+        }>
+      }
+      for (const frame of manifest.frames ?? []) {
+        const sceneId = `${frame.sceneId ?? `scene_${frame.sceneIndex ?? assets.length}`}`.trim()
+        const sceneIndex = typeof frame.sceneIndex === "number" ? frame.sceneIndex : assets.length - 1
+        const imagePath = frame.filePath?.trim()
+          ? frame.filePath.trim()
+          : frame.fileName
+            ? path.join(path.dirname(manifestPath), frame.fileName)
+            : null
+        if (!imagePath) {
+          continue
+        }
+        const imageExists = await fs
+          .stat(imagePath)
+          .then((stats) => stats.isFile())
+          .catch(() => false)
+        if (!imageExists) {
+          continue
+        }
+
+        assets.push({
+          id: `${taskId}_keyframe_${sceneId}`,
+          taskId,
+          assetType: "keyframe_image",
+          label: `关键画面 ${sceneIndex + 1}${frame.title ? ` · ${frame.title}` : ""}`,
+          status: "ready",
+          path: imagePath,
+          createdAt,
+        })
+      }
+    } catch {
+      // Ignore malformed manifests and fall back to the bundle record only.
+    }
+  }
+
+  return assets
+}
+
+async function readMergedTaskAssets(taskId: string) {
+  const storedAssets = await readTaskAssets(taskId)
+  const inferredAssets = await inferExportedAssets(taskId)
+  const merged = new Map<string, AssetRecord>()
+
+  for (const asset of inferredAssets) {
+    merged.set(asset.id, asset)
+  }
+  for (const asset of storedAssets) {
+    merged.set(asset.id, asset)
+  }
+
+  return [...merged.values()]
+}
+
 export function normalizeSceneReviewMetadata(scene: StoryboardScene) {
   return normalizeStoryboardScene(scene)
 }
@@ -449,6 +591,8 @@ async function syncTaskSummaryFromDetail(
     nextSummary = {
       ...entry,
       status: derived.status,
+      statusDetail: detail.statusDetail ?? entry.statusDetail ?? null,
+      cancelRequestedAt: detail.cancelRequestedAt ?? entry.cancelRequestedAt ?? null,
       reviewStage: derived.reviewSummary.reviewStage,
       pendingReviewCount: derived.reviewSummary.pendingReviewCount,
       reviewUpdatedAt: derived.reviewSummary.reviewUpdatedAt,
@@ -556,12 +700,12 @@ export async function getTaskDetail(taskId: string) {
 }
 
 export async function getTaskAssets(taskId: string) {
-  const assets = await readTaskAssets(taskId)
+  const assets = await readMergedTaskAssets(taskId)
   return Promise.all(assets.map((asset) => resolveAssetRecord(asset)))
 }
 
 export async function getTaskAsset(taskId: string, assetId: string) {
-  const assets = await readTaskAssets(taskId)
+  const assets = await readMergedTaskAssets(taskId)
   const asset = assets.find((item) => item.id === assetId) ?? null
   return asset ? resolveAssetRecord(asset) : null
 }
@@ -607,10 +751,12 @@ export async function createTask(input: CreateTaskInput): Promise<{ task: TaskSu
     script: input.script,
     taskRunConfig,
     blueprintVersion: 1,
-    blueprintStatus: "pending_generation",
-    actualDurationSec: null,
-    failureReason: null,
-    scenes: buildStoryboardScenes({
+      blueprintStatus: "pending_generation",
+      actualDurationSec: null,
+      failureReason: null,
+      statusDetail: "等待 worker 开始处理",
+      cancelRequestedAt: null,
+      scenes: buildStoryboardScenes({
       script: input.script,
       targetDurationSec: input.targetDurationSec,
       maxSceneDurationSec: resolveVideoModelCapability(taskRunConfig.videoModel.id).maxSingleShotSec,
@@ -638,6 +784,8 @@ export async function createTask(input: CreateTaskInput): Promise<{ task: TaskSu
     blueprintStatus: detail.blueprintStatus,
     actualDurationSec: null,
     failureReason: null,
+    statusDetail: "等待 worker 开始处理",
+    cancelRequestedAt: null,
     status: "queued",
     progressPct: 0,
     retryCount: 0,
@@ -657,6 +805,48 @@ export async function createTask(input: CreateTaskInput): Promise<{ task: TaskSu
   return {
     task,
     taskRunConfig,
+  }
+}
+
+export async function cancelTask(taskId: string, queue: {
+  removedJobIds: string[]
+  hadActiveJob: boolean
+}) {
+  const tasks = await listTasks()
+  const task = tasks.find((entry) => entry.id === taskId)
+  if (!task) {
+    return null
+  }
+
+  const detail = await readTaskDetail(taskId)
+  if (!detail) {
+    return null
+  }
+
+  const canceledAt = now()
+  const statusDetail = queue.hadActiveJob ? "正在终止当前任务" : "任务已终止"
+  const nextSummary = normalizeTaskSummaryRecord({
+    ...task,
+    status: "canceled",
+    failureReason: null,
+    statusDetail,
+    cancelRequestedAt: canceledAt,
+    updatedAt: canceledAt,
+  })
+  const nextDetail = normalizeTaskDetailRecord({
+    ...detail,
+    failureReason: null,
+    statusDetail,
+    cancelRequestedAt: canceledAt,
+    updatedAt: canceledAt,
+  })
+
+  await writeTaskSummaries(tasks.map((entry) => (entry.id === taskId ? nextSummary : entry)))
+  await upsertTaskDetail(nextDetail)
+
+  return {
+    summary: nextSummary,
+    detail: nextDetail,
   }
 }
 

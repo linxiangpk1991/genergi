@@ -145,6 +145,8 @@ export const taskSummarySchema = z.object({
   blueprintStatus: blueprintStatusSchema.default("pending_generation"),
   actualDurationSec: z.number().positive().nullable(),
   failureReason: z.string().nullable().optional(),
+  statusDetail: z.string().nullable().optional(),
+  cancelRequestedAt: z.string().nullable().optional(),
   status: taskStatusSchema,
   progressPct: z.number().min(0).max(100),
   retryCount: z.number().int().nonnegative(),
@@ -191,6 +193,8 @@ export const taskDetailSchema = z.object({
   ctaLine: z.string().optional(),
   actualDurationSec: z.number().positive().nullable().optional(),
   failureReason: z.string().nullable().optional(),
+  statusDetail: z.string().nullable().optional(),
+  cancelRequestedAt: z.string().nullable().optional(),
   scenes: z.array(storyboardSceneSchema),
   updatedAt: z.string(),
 }).extend(reviewSummarySchema.shape)

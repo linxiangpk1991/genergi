@@ -449,6 +449,8 @@ export function normalizeTaskSummaryRecord(
     blueprintStatus?: BlueprintStatus
     actualDurationSec?: number | null
     failureReason?: string | null
+    statusDetail?: string | null
+    cancelRequestedAt?: string | null
     reviewStage?: ReviewStageId | null
     pendingReviewCount?: number
     reviewUpdatedAt?: string | null
@@ -469,6 +471,8 @@ export function normalizeTaskSummaryRecord(
     blueprintStatus: normalizeBlueprintStatus(task.blueprintStatus),
     actualDurationSec: task.actualDurationSec ?? null,
     failureReason: normalizeNullableString(task.failureReason),
+    statusDetail: normalizeNullableString(task.statusDetail),
+    cancelRequestedAt: normalizeNullableString(task.cancelRequestedAt),
     ...normalizeReviewSummaryRecord(task),
   }
 }
@@ -480,6 +484,8 @@ export function normalizeTaskDetailRecord(
     blueprintVersion?: number
     blueprintStatus?: BlueprintStatus
     failureReason?: string | null
+    statusDetail?: string | null
+    cancelRequestedAt?: string | null
     reviewStage?: ReviewStageId | null
     pendingReviewCount?: number
     reviewUpdatedAt?: string | null
@@ -538,6 +544,8 @@ export function normalizeTaskDetailRecord(
     blueprintStatus: normalizeBlueprintStatus(detail.blueprintStatus ?? taskRunConfig.blueprintStatus),
     actualDurationSec: detail.actualDurationSec ?? null,
     failureReason: normalizeNullableString(detail.failureReason),
+    statusDetail: normalizeNullableString(detail.statusDetail),
+    cancelRequestedAt: normalizeNullableString(detail.cancelRequestedAt),
     scenes: Array.isArray(detail.scenes)
       ? detail.scenes.map((scene) => normalizeStoryboardScene(scene))
       : [],
@@ -568,6 +576,8 @@ export function seedTaskSummaries(): TaskSummary[] {
       blueprintStatus: "pending_generation",
       actualDurationSec: null,
       failureReason: null,
+      statusDetail: "等待 worker 开始处理",
+      cancelRequestedAt: null,
       status: "running",
       progressPct: 40,
       retryCount: 0,
@@ -594,6 +604,8 @@ export function seedTaskSummaries(): TaskSummary[] {
       blueprintStatus: "pending_generation",
       actualDurationSec: null,
       failureReason: null,
+      statusDetail: "等待 worker 开始处理",
+      cancelRequestedAt: null,
       status: "failed",
       progressPct: 62,
       retryCount: 2,

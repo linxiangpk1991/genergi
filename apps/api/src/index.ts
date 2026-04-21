@@ -33,8 +33,8 @@ import {
   updateUserInputSchema,
 } from "@genergi/shared"
 import { clearSession, getAuthStatus, getSessionUser, loginWithPassword, requireAuth } from "./lib/auth.js"
-import { assertQueueAvailable, enqueueTask, QueueUnavailableError } from "./lib/queue/enqueue.js"
-import { createTask, deleteTask, getTaskAsset, getTaskAssets, getTaskDetail, listTasks } from "./lib/task-store.js"
+import { assertQueueAvailable, cancelTaskJobs, enqueueTask, QueueUnavailableError } from "./lib/queue/enqueue.js"
+import { cancelTask, createTask, deleteTask, getTaskAsset, getTaskAssets, getTaskDetail, listTasks } from "./lib/task-store.js"
 import {
   approveTaskBlueprint,
   createTaskBlueprintVersion,
@@ -1642,6 +1642,27 @@ app.get("/api/tasks/:taskId/assets/:assetId/preview", async (c) => {
   }
 
   return sendAssetFile(c, asset, "inline")
+})
+
+app.post("/api/tasks/:taskId/cancel", async (c) => {
+  const taskId = c.req.param("taskId")
+  let queue
+  try {
+    queue = await cancelTaskJobs(taskId)
+  } catch (error) {
+    return toQueueUnavailableResponse(c, error)
+  }
+
+  const canceled = await cancelTask(taskId, queue)
+  if (!canceled) {
+    return c.json({ message: "TASK_NOT_FOUND" }, 404)
+  }
+
+  return c.json({
+    task: canceled.summary,
+    detail: canceled.detail,
+    queue,
+  })
 })
 
 app.post(
