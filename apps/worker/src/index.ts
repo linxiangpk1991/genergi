@@ -76,7 +76,7 @@ async function updateTaskLifecycleState(taskId: string, patch: {
 }
 
 function startTaskCancellationWatcher(taskId: string, controller: AbortController) {
-  const timer = setInterval(() => {
+  const checkOnce = () =>
     void readTaskDetail(taskId)
       .then((detail) => {
         if (detail?.cancelRequestedAt && !controller.signal.aborted) {
@@ -84,7 +84,9 @@ function startTaskCancellationWatcher(taskId: string, controller: AbortControlle
         }
       })
       .catch(() => {})
-  }, 1500)
+
+  checkOnce()
+  const timer = setInterval(checkOnce, 1500)
   timer.unref()
   return () => clearInterval(timer)
 }

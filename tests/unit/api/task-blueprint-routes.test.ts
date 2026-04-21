@@ -5,10 +5,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 const enqueueTaskMock = vi.fn()
 const assertQueueAvailableMock = vi.fn()
+const cancelTaskJobsMock = vi.fn()
 
 vi.mock("../../../apps/api/src/lib/queue/enqueue", () => ({
   enqueueTask: enqueueTaskMock,
   assertQueueAvailable: assertQueueAvailableMock,
+  cancelTaskJobs: cancelTaskJobsMock,
   QueueUnavailableError: class QueueUnavailableError extends Error {
     readonly code = "TASK_QUEUE_UNAVAILABLE"
   },
@@ -29,6 +31,10 @@ describe("API task blueprint routes", () => {
       continueExecution: true,
     })
     assertQueueAvailableMock.mockResolvedValue(undefined)
+    cancelTaskJobsMock.mockResolvedValue({
+      removedJobIds: [],
+      hadActiveJob: false,
+    })
   })
 
   afterEach(async () => {

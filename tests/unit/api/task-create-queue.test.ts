@@ -83,6 +83,10 @@ describe("API task creation queue hardening", () => {
       return {
         ...actual,
         assertQueueAvailable: vi.fn().mockResolvedValue(undefined),
+        cancelTaskJobs: vi.fn().mockResolvedValue({
+          removedJobIds: [],
+          hadActiveJob: false,
+        }),
         enqueueTask: vi.fn().mockRejectedValue(new actual.QueueUnavailableError("enqueue add failed")),
       }
     })
