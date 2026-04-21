@@ -464,6 +464,7 @@ export function normalizeTaskSummaryRecord(
     renderSpecJson: normalizeRenderSpec(task.renderSpecJson, normalizeTerminalPresetId(task.terminalPresetId)),
     targetDurationSec: task.targetDurationSec ?? 30,
     generationMode: task.generationMode ?? "user_locked",
+    audioStrategy: task.audioStrategy ?? "tts_only",
     generationRoute: task.generationRoute ?? "multi_scene",
     routeReason: task.routeReason ?? "legacy task normalized to multi-scene",
     planningVersion: task.planningVersion ?? "v1",
@@ -536,6 +537,7 @@ export function normalizeTaskDetailRecord(
           ? taskRunConfig.blueprintVersion
           : 0,
       blueprintStatus: normalizeBlueprintStatus(taskRunConfig.blueprintStatus),
+      audioStrategy: taskRunConfig.audioStrategy === "native_plus_tts_ducked" ? "native_plus_tts_ducked" : "tts_only",
     },
     blueprintVersion:
       typeof detail.blueprintVersion === "number" && detail.blueprintVersion >= 0
@@ -569,6 +571,7 @@ export function seedTaskSummaries(): TaskSummary[] {
       renderSpecJson: createDefaultRenderSpec("phone_portrait"),
       targetDurationSec: 30,
       generationMode: "user_locked",
+      audioStrategy: "tts_only",
       generationRoute: "multi_scene",
       routeReason: "legacy seed task normalized to multi-scene",
       planningVersion: "v1",
@@ -597,6 +600,7 @@ export function seedTaskSummaries(): TaskSummary[] {
       renderSpecJson: createDefaultRenderSpec("phone_portrait"),
       targetDurationSec: 45,
       generationMode: "user_locked",
+      audioStrategy: "tts_only",
       generationRoute: "multi_scene",
       routeReason: "legacy seed task normalized to multi-scene",
       planningVersion: "v1",

@@ -6,6 +6,7 @@ import {
   buildAssetPreviewUrl,
   buildKeyframePreviewUrl,
   buildBatchDashboardUrl,
+  getAudioStrategyLabel,
   type AssetRecord,
   type TaskBlueprintRecord,
   type TaskBlueprintReviewRecord,
@@ -189,8 +190,15 @@ export function TaskReviewPage() {
     [detail?.taskId, routeTaskId, tasks],
   )
 
+  const isApproved = blueprint?.status === "approved"
+  const isRejected = blueprint?.status === "rejected"
+
   async function submitReview(decision: "approved" | "rejected") {
     if (!detail || !blueprint) {
+      return
+    }
+
+    if ((decision === "approved" && isApproved) || (decision === "rejected" && isRejected)) {
       return
     }
 
@@ -276,19 +284,19 @@ export function TaskReviewPage() {
             <div className="section-actions">
               <button
                 className="primary-button"
-                disabled={!blueprint || submitting}
+                disabled={!blueprint || submitting || isApproved}
                 onClick={() => void submitReview("approved")}
                 type="button"
               >
-                审核通过
+                {isApproved ? "已审核通过" : "审核通过"}
               </button>
               <button
                 className="secondary-button"
-                disabled={!blueprint || submitting}
+                disabled={!blueprint || submitting || isRejected}
                 onClick={() => void submitReview("rejected")}
                 type="button"
               >
-                驳回当前蓝图
+                {isRejected ? "已驳回当前蓝图" : "驳回当前蓝图"}
               </button>
               <button
                 className="ghost-button"
@@ -316,6 +324,15 @@ export function TaskReviewPage() {
               <span className="planning-chip__label">执行方式</span>
               <strong>{blueprint?.blueprint.executionMode ?? detail?.taskRunConfig.executionMode ?? "--"}</strong>
               <span>{review ? `最近审核：${review.decision}` : "当前还没有审核记录"}</span>
+            </div>
+            <div className="planning-chip">
+              <span className="planning-chip__label">音频策略</span>
+              <strong>{getAudioStrategyLabel(detail?.taskRunConfig.audioStrategy)}</strong>
+              <span>
+                {detail?.taskRunConfig.audioStrategy === "native_plus_tts_ducked"
+                  ? "保留 Veo 原生环境音，并叠加 TTS 旁白。"
+                  : "最终主音轨使用 TTS 旁白。"}
+              </span>
             </div>
           </div>
 
@@ -412,6 +429,10 @@ export function TaskReviewPage() {
               <div className="task-item">
                 <strong>母本留档</strong>
                 <span>{sourceScript ? "已加载" : "暂无"}</span>
+              </div>
+              <div className="task-item">
+                <strong>音频策略</strong>
+                <span>{getAudioStrategyLabel(detail?.taskRunConfig.audioStrategy)}</span>
               </div>
             </div>
           </section>

@@ -4,6 +4,7 @@ import {
   api,
   buildAssetCenterUrl,
   buildTaskReviewUrl,
+  getAudioStrategyLabel,
   type RuntimeStatusResponse,
   type TaskSummary,
 } from "../api"
@@ -48,6 +49,10 @@ function getTaskExceptionLabel(task: TaskSummary) {
 
 function canCancelTask(task: TaskSummary) {
   return task.status === "queued" || task.status === "running"
+}
+
+function canResumeFailedTask(task: TaskSummary) {
+  return task.status === "failed"
 }
 
 function getTaskActions(task: TaskSummary) {
@@ -103,6 +108,7 @@ export function BatchDashboardPage() {
   const [loadError, setLoadError] = useState("")
   const [actionError, setActionError] = useState("")
   const [cancelingTaskId, setCancelingTaskId] = useState("")
+  const [resumingTaskId, setResumingTaskId] = useState("")
 
   useEffect(() => {
     async function load() {
@@ -147,6 +153,19 @@ export function BatchDashboardPage() {
       setActionError(error instanceof Error ? error.message : "终止任务失败")
     } finally {
       setCancelingTaskId("")
+    }
+  }
+
+  async function handleResumeFailedTask(taskId: string) {
+    setActionError("")
+    setResumingTaskId(taskId)
+    try {
+      const response = await api.resumeFailedTask(taskId)
+      setTasks((current) => current.map((task) => (task.id === taskId ? response.task : task)))
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "恢复运行失败")
+    } finally {
+      setResumingTaskId("")
     }
   }
 
@@ -263,7 +282,7 @@ export function BatchDashboardPage() {
                       {isFocused ? <span className="pill pill--sm pill--accent">当前定位</span> : null}
                     </div>
                     <span>
-                      {task.targetDurationSec}s · {task.planning?.generationRouteLabel ?? "待预判"} · {task.planning?.generationPreferenceLabel ?? "待接入"}
+                      {task.targetDurationSec}s · {task.planning?.generationRouteLabel ?? "待预判"} · {task.planning?.generationPreferenceLabel ?? "待接入"} · {getAudioStrategyLabel(task.audioStrategy)}
                       {task.executionMode === "review_required" && task.blueprintStatus === "ready_for_review"
                         ? ` · 待审蓝图(v${task.blueprintVersion})`
                         : task.executionMode === "review_required" && task.blueprintStatus === "approved"
@@ -299,6 +318,16 @@ export function BatchDashboardPage() {
                         type="button"
                       >
                         {cancelingTaskId === task.id ? "终止中..." : "终止任务"}
+                      </button>
+                    ) : null}
+                    {canResumeFailedTask(task) ? (
+                      <button
+                        className="ghost-button"
+                        disabled={resumingTaskId === task.id}
+                        onClick={() => void handleResumeFailedTask(task.id)}
+                        type="button"
+                      >
+                        {resumingTaskId === task.id ? "恢复中..." : "恢复运行"}
                       </button>
                     ) : null}
                   </div>

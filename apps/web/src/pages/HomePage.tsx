@@ -18,6 +18,11 @@ function getCreateTaskNotice(task: TaskSummary) {
   return `任务“${task.title}”已提交到渲染队列。关键画面生成完成后，会进入任务审核队列。`;
 }
 
+type FloatingToastState = {
+  tone: "success" | "error"
+  message: string
+}
+
 const TERMINAL_PRESET_OPTIONS: Array<{
   id: TerminalPresetId;
   label: string;
@@ -84,6 +89,19 @@ function getRenderSpec(terminalPresetId: TerminalPresetId): RenderSpec {
   );
 }
 
+const AUDIO_STRATEGY_OPTIONS = [
+  {
+    id: "tts_only" as const,
+    label: "TTS 主导",
+    description: "保持当前稳定链路，使用 TTS 旁白作为最终主音轨。",
+  },
+  {
+    id: "native_plus_tts_ducked" as const,
+    label: "原生音频 + TTS 混音",
+    description: "保留 Veo 原生环境音，再叠加 TTS 旁白，增强临场感。",
+  },
+]
+
 export function HomePage() {
   const [bootstrap, setBootstrap] = useState<BootstrapResponse | null>(null);
   const [projects, setProjects] = useState<ProjectRecord[]>([]);
@@ -94,12 +112,14 @@ export function HomePage() {
   const [terminalPresetId, setTerminalPresetId] =
     useState<TerminalPresetId>("phone_portrait");
   const [targetDurationSec, setTargetDurationSec] = useState(30);
+  const [audioStrategy, setAudioStrategy] = useState<"tts_only" | "native_plus_tts_ducked">("tts_only");
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [createdTask, setCreatedTask] = useState<TaskSummary | null>(null);
   const [tasksUpdatedAt, setTasksUpdatedAt] = useState<string>("");
+  const [floatingToast, setFloatingToast] = useState<FloatingToastState | null>(null);
 
   useEffect(() => {
     async function load() {
@@ -142,11 +162,26 @@ export function HomePage() {
 
     return () => window.clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    if (!floatingToast) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      setFloatingToast(null);
+    }, 4200);
+
+    return () => window.clearTimeout(timer);
+  }, [floatingToast]);
+
   const selectedProject = useMemo(
     () => projects.find((project) => project.id === projectId) ?? null,
     [projects, projectId],
   );
   const renderSpec = getRenderSpec(terminalPresetId);
+  const selectedAudioStrategy =
+    AUDIO_STRATEGY_OPTIONS.find((item) => item.id === audioStrategy) ?? AUDIO_STRATEGY_OPTIONS[0];
   const selectedExecutionMode = "review_required";
   const selectedExecutionModeLabel = "审核优先";
 
@@ -182,6 +217,10 @@ export function HomePage() {
       setNotice("");
       setCreatedTask(null);
       setError("请先填写任务名称和内容母本");
+      setFloatingToast({
+        tone: "error",
+        message: "请先填写任务名称和内容母本",
+      });
       return;
     }
 
@@ -196,14 +235,25 @@ export function HomePage() {
         projectId,
         terminalPresetId,
         targetDurationSec,
+        audioStrategy,
       });
       setTasks((current) => [result.task, ...current]);
-      setNotice(getCreateTaskNotice(result.task));
+      const successMessage = getCreateTaskNotice(result.task);
+      setNotice(successMessage);
       setCreatedTask(result.task);
+      setFloatingToast({
+        tone: "success",
+        message: successMessage,
+      });
       setTitle("");
       setScript("");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "创建任务失败");
+      const errorMessage = err instanceof Error ? err.message : "创建任务失败";
+      setError(errorMessage);
+      setFloatingToast({
+        tone: "error",
+        message: errorMessage,
+      });
     } finally {
       setSubmitting(false);
     }
@@ -319,6 +369,27 @@ export function HomePage() {
             ))}
           </select>
 
+          <label className="field-label">音频策略</label>
+          <div className="mode-grid" role="radiogroup" aria-label="音频策略">
+            {AUDIO_STRATEGY_OPTIONS.map((option) => (
+              <button
+                key={option.id}
+                className={
+                  option.id === audioStrategy
+                    ? "mode-card mode-card--active"
+                    : "mode-card"
+                }
+                onClick={() => setAudioStrategy(option.id)}
+                type="button"
+                role="radio"
+                aria-checked={option.id === audioStrategy}
+              >
+                <div className="mode-title">{option.label}</div>
+                <div className="mode-description">{option.description}</div>
+              </button>
+            ))}
+          </div>
+
           <div className="planning-strip">
             <div className="planning-chip">
               <span className="planning-chip__label">成片组织方式</span>
@@ -338,6 +409,11 @@ export function HomePage() {
                   ? "关键画面与提示词审核通过后，才继续完整视频生成。"
                   : "关键画面完成后会自动继续生成视频。"}
               </span>
+            </div>
+            <div className="planning-chip">
+              <span className="planning-chip__label">音频策略</span>
+              <strong>{selectedAudioStrategy.label}</strong>
+              <span>{selectedAudioStrategy.description}</span>
             </div>
             <div className="planning-chip">
               <span className="planning-chip__label">终端规格</span>
@@ -373,6 +449,10 @@ export function HomePage() {
             <div className="metric-row">
               <span>成片组织</span>
               <strong>{routePreview}</strong>
+            </div>
+            <div className="metric-row">
+              <span>音频策略</span>
+              <strong>{selectedAudioStrategy.label}</strong>
             </div>
             <div className="metric-row">
               <span>终端预设</span>
@@ -488,6 +568,21 @@ export function HomePage() {
             : "启动渲染队列"}
         </button>
       </div>
+
+      {floatingToast ? (
+        <div
+          aria-live={floatingToast.tone === "success" ? "polite" : "assertive"}
+          className={
+            floatingToast.tone === "success"
+              ? "floating-toast floating-toast--success"
+              : "floating-toast floating-toast--error"
+          }
+          role={floatingToast.tone === "success" ? "status" : "alert"}
+        >
+          <strong>{floatingToast.tone === "success" ? "已提交到渲染队列" : "提交失败"}</strong>
+          <span>{floatingToast.message}</span>
+        </div>
+      ) : null}
     </>
   );
 }

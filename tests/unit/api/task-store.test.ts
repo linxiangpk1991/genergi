@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { afterEach, describe, expect, it, vi } from "vitest"
@@ -41,6 +41,7 @@ describe("API task store", () => {
       aspectRatio: "9:16",
       targetDurationSec: 30,
       generationMode: "system_enhanced",
+      audioStrategy: "native_plus_tts_ducked",
     })
 
     const parsedDecision = shared.reviewDecisionInputSchema.parse({
@@ -56,6 +57,8 @@ describe("API task store", () => {
     expect(created.taskRunConfig.targetDurationSec).toBe(30)
     expect(created.task.generationMode).toBe("system_enhanced")
     expect(created.taskRunConfig.generationMode).toBe("system_enhanced")
+    expect(created.task.audioStrategy).toBe("native_plus_tts_ducked")
+    expect(created.taskRunConfig.audioStrategy).toBe("native_plus_tts_ducked")
     expect(created.task.executionMode).toBe("review_required")
     expect(created.task.terminalPresetId).toBe("phone_portrait")
     expect(created.task.renderSpecJson.terminalPresetId).toBe("phone_portrait")
@@ -75,6 +78,7 @@ describe("API task store", () => {
     expect(detail?.taskRunConfig.executionMode).toBe("review_required")
     expect(detail?.taskRunConfig.terminalPresetId).toBe("phone_portrait")
     expect(detail?.taskRunConfig.renderSpecJson.terminalPresetId).toBe("phone_portrait")
+    expect(detail?.taskRunConfig.audioStrategy).toBe("native_plus_tts_ducked")
     expect(detail?.blueprintVersion).toBe(1)
     expect(detail?.blueprintStatus).toBe("pending_generation")
     expect(detail?.taskRunConfig.generationRoute).toBe("multi_scene")
@@ -744,5 +748,95 @@ describe("API task store", () => {
     expect(normalizedDetail?.pendingReviewCount).toBe(4)
     expect(untouchedScene?.reviewNote).toBeNull()
     expect(untouchedScene?.reviewedAt).toBeNull()
+  })
+
+  it("falls back to exported task files when asset records are missing", async () => {
+    dataDir = await mkdtemp(path.join(os.tmpdir(), "genergi-task-store-"))
+    process.env.GENERGI_DATA_DIR = dataDir
+
+    const store = await import("../../../apps/api/src/lib/task-store")
+
+    const created = await store.createTask({
+      projectId: "project_default",
+      title: "Export fallback task",
+      script: "Show the product. Explain the value. End with a CTA.",
+      modeId: "high_quality",
+      channelId: "reels",
+      terminalPresetId: "phone_portrait",
+      aspectRatio: "9:16",
+      targetDurationSec: 30,
+      generationMode: "system_enhanced",
+    })
+
+    const exportDir = path.join(dataDir, "exports", created.task.id)
+    await mkdir(exportDir, { recursive: true })
+    await writeFile(path.join(exportDir, "script.txt"), "final narration", "utf8")
+    await writeFile(path.join(exportDir, "source-script.txt"), "original source", "utf8")
+    await writeFile(path.join(exportDir, "planning-prompt.txt"), "prompt", "utf8")
+    await writeFile(path.join(exportDir, "planning-response.txt"), "response", "utf8")
+    await writeFile(path.join(exportDir, "planning-audit.json"), "{\"usedFallback\":false}", "utf8")
+    await writeFile(path.join(exportDir, "storyboard.json"), "{\"scenes\":[]}", "utf8")
+
+    const assets = await store.getTaskAssets(created.task.id)
+    const assetTypes = assets.map((asset) => asset.assetType)
+
+    expect(assetTypes).toEqual([
+      "script",
+      "source_script",
+      "planning_prompt",
+      "planning_response",
+      "planning_audit",
+      "storyboard",
+    ])
+    expect(assets.every((asset) => asset.exists)).toBe(true)
+
+    const planningResponse = assets.find((asset) => asset.assetType === "planning_response")
+    expect(planningResponse?.fileName).toBe("planning-response.txt")
+
+    const previewAsset = await store.getTaskAsset(created.task.id, `${created.task.id}_planning_response`)
+    expect(previewAsset?.assetType).toBe("planning_response")
+    expect(previewAsset?.exists).toBe(true)
+  })
+
+  it("rehydrates missing task summaries from persisted task details so asset center does not lose historical tasks", async () => {
+    dataDir = await mkdtemp(path.join(os.tmpdir(), "genergi-task-store-"))
+    process.env.GENERGI_DATA_DIR = dataDir
+
+    const store = await import("../../../apps/api/src/lib/task-store")
+
+    const created = await store.createTask({
+      projectId: "project_default",
+      title: "Historical task should still be listed",
+      script: "Show the product. Explain the value. End with a CTA.",
+      modeId: "high_quality",
+      channelId: "reels",
+      terminalPresetId: "phone_portrait",
+      aspectRatio: "9:16",
+      targetDurationSec: 30,
+      generationMode: "system_enhanced",
+    })
+
+    const tasksFile = path.join(dataDir, "tasks.json")
+    const taskRecords = await readJsonFile<Array<Record<string, unknown>>>(tasksFile)
+    await writeJsonFile(
+      tasksFile,
+      taskRecords.filter((task) => task.id !== created.task.id),
+    )
+
+    const beforeRepair = await readJsonFile<Array<Record<string, unknown>>>(tasksFile)
+    expect(beforeRepair.some((task) => task.id === created.task.id)).toBe(false)
+
+    const recoveredTasks = await store.listTasks()
+    const recovered = recoveredTasks.find((task) => task.id === created.task.id)
+
+    expect(recovered).toBeTruthy()
+    expect(recovered?.title).toBe("Historical task should still be listed")
+    expect(recovered?.projectId).toBe("project_default")
+    expect(recovered?.status).toBe("queued")
+    expect(recovered?.blueprintStatus).toBe("pending_generation")
+    expect(recovered?.targetDurationSec).toBe(30)
+
+    const persistedAfterRepair = await readJsonFile<Array<Record<string, unknown>>>(tasksFile)
+    expect(persistedAfterRepair.some((task) => task.id === created.task.id)).toBe(true)
   })
 })

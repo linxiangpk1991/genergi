@@ -34,7 +34,7 @@ import {
 } from "@genergi/shared"
 import { clearSession, getAuthStatus, getSessionUser, loginWithPassword, requireAuth } from "./lib/auth.js"
 import { assertQueueAvailable, cancelTaskJobs, enqueueTask, QueueUnavailableError } from "./lib/queue/enqueue.js"
-import { cancelTask, createTask, deleteTask, getTaskAsset, getTaskAssets, getTaskDetail, listTasks } from "./lib/task-store.js"
+import { cancelTask, createTask, deleteTask, getTaskAsset, getTaskAssets, getTaskDetail, listTasks, resumeFailedTask } from "./lib/task-store.js"
 import {
   approveTaskBlueprint,
   createTaskBlueprintVersion,
@@ -1663,6 +1663,54 @@ app.post("/api/tasks/:taskId/cancel", async (c) => {
     detail: canceled.detail,
     queue,
   })
+})
+
+app.post("/api/tasks/:taskId/resume", async (c) => {
+  const taskId = c.req.param("taskId")
+  const tasks = await listTasks()
+  const task = tasks.find((entry) => entry.id === taskId)
+  if (!task) {
+    return c.json({ message: "TASK_NOT_FOUND" }, 404)
+  }
+
+  if (task.status !== "failed") {
+    return c.json({ message: "TASK_NOT_FAILED", status: task.status }, 409)
+  }
+
+  const detail = await getTaskDetail(taskId)
+  if (!detail) {
+    return c.json({ message: "TASK_NOT_FOUND" }, 404)
+  }
+
+  const continueExecution =
+    detail.blueprintStatus === "approved" ||
+    detail.blueprintStatus === "queued_for_video" ||
+    detail.blueprintStatus === "video_generating" ||
+    detail.blueprintStatus === "completed"
+
+  let queue
+  try {
+    queue = await enqueueTask(taskId, {
+      reason: "resume_failed_task",
+      continueExecution,
+      blueprintVersion: detail.blueprintVersion,
+      stage: "resume_after_failure",
+      resumeFrom: "failed_task",
+    })
+  } catch (error) {
+    return toQueueUnavailableResponse(c, error)
+  }
+
+  const resumed = await resumeFailedTask(taskId)
+  if (!resumed) {
+    return c.json({ message: "TASK_NOT_FOUND" }, 404)
+  }
+
+  return c.json({
+    task: resumed.summary,
+    detail: resumed.detail,
+    queue,
+  }, 202)
 })
 
 app.post(

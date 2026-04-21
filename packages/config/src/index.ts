@@ -186,6 +186,7 @@ export function buildDefaultTaskRunConfig(
   options: {
     projectId?: string
     terminalPresetId?: TerminalPresetId
+    audioStrategy?: "tts_only" | "native_plus_tts_ducked"
   } = {},
 ): TaskRunConfig {
   const mode = MODE_MODELS[modeId]
@@ -215,6 +216,7 @@ export function buildDefaultTaskRunConfig(
     imageModel: mode.imageModel,
     videoModel: mode.videoModel,
     ttsProvider: mode.ttsProvider,
+    audioStrategy: options.audioStrategy ?? "tts_only",
     contentLocale: "en",
     operatorLocale: "zh-CN",
     requireStoryboardReview: mode.requireStoryboardReview,

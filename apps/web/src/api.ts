@@ -62,6 +62,7 @@ export type HealthResponse = {
 }
 
 export type GenerationPreferenceId = "user_locked" | "system_enhanced"
+export type AudioStrategy = "tts_only" | "native_plus_tts_ducked"
 
 export type GenerationRouteId = "single_shot" | "multi_scene"
 
@@ -191,6 +192,7 @@ export type TaskSummary = {
   renderSpecJson: RenderSpec
   targetDurationSec: number
   generationMode: GenerationPreferenceId
+  audioStrategy: "tts_only" | "native_plus_tts_ducked"
   generationRoute: GenerationRouteId
   routeReason: string
   planningVersion: string
@@ -255,6 +257,7 @@ export type TaskDetail = {
     renderSpecJson: RenderSpec
     targetDurationSec: number
     generationMode: GenerationPreferenceId
+    audioStrategy: "tts_only" | "native_plus_tts_ducked"
     generationRoute: GenerationRouteId
     routeReason: string
     planningVersion: string
@@ -306,6 +309,19 @@ export type TaskCancelResponse = {
   queue: {
     removedJobIds: string[]
     hadActiveJob: boolean
+  }
+}
+
+export type TaskResumeResponse = {
+  task: TaskSummary
+  detail: TaskDetail
+  queue: {
+    queued: boolean
+    reason: string
+    continueExecution: boolean
+    blueprintVersion?: number | null
+    stage?: string | null
+    resumeFrom?: string | null
   }
 }
 
@@ -577,6 +593,11 @@ export type CreateTaskPayload = {
   script: string
   terminalPresetId: TerminalPresetId
   targetDurationSec: number
+  audioStrategy: AudioStrategy
+}
+
+export function getAudioStrategyLabel(strategy: AudioStrategy | null | undefined) {
+  return strategy === "native_plus_tts_ducked" ? "原生音频 + TTS 混音" : "TTS 主导"
 }
 
 export const api = {
@@ -656,6 +677,10 @@ export const api = {
   getTaskAssets: (taskId: string) => request<{ assets: AssetRecord[] }>(`/api/tasks/${taskId}/assets`),
   cancelTask: (taskId: string) =>
     request<TaskCancelResponse>(`/api/tasks/${taskId}/cancel`, {
+      method: "POST",
+    }),
+  resumeFailedTask: (taskId: string) =>
+    request<TaskResumeResponse>(`/api/tasks/${taskId}/resume`, {
       method: "POST",
     }),
   createTask: (payload: CreateTaskPayload) =>

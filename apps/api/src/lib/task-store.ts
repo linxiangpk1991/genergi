@@ -11,6 +11,7 @@ import {
   normalizeTaskDetailRecord,
   readTaskAssets,
   readTaskDetail,
+  readTaskDetails,
   readTaskSummaries,
   upsertTaskDetail,
   writeTaskSummaries,
@@ -33,6 +34,20 @@ import { getProjectById } from "./project-store.js"
 
 function now() {
   return new Date().toISOString()
+}
+
+function inferCreatedAtFromTaskId(taskId: string, fallback: string) {
+  const match = /^task_(\d{13})$/.exec(taskId)
+  if (!match) {
+    return fallback
+  }
+
+  const timestamp = Number(match[1])
+  if (!Number.isFinite(timestamp)) {
+    return fallback
+  }
+
+  return new Date(timestamp).toISOString()
 }
 
 function resolveTaskDataDir() {
@@ -540,6 +555,170 @@ function applyDerivedReviewState(detail: TaskDetail, currentStatus: TaskStatus) 
   }
 }
 
+function inferBaseTaskStatusFromDetail(detail: TaskDetail): TaskStatus {
+  const statusDetail = detail.statusDetail ?? ""
+
+  if (statusDetail.includes("终止") || detail.cancelRequestedAt) {
+    return "canceled"
+  }
+
+  if (detail.failureReason || statusDetail.includes("失败")) {
+    return "failed"
+  }
+
+  if (detail.actualDurationSec != null || detail.blueprintStatus === "completed") {
+    return "completed"
+  }
+
+  if (
+    detail.blueprintStatus === "ready_for_review" ||
+    detail.blueprintStatus === "approved" ||
+    detail.blueprintStatus === "rejected"
+  ) {
+    return "waiting_review"
+  }
+
+  if (
+    detail.blueprintStatus === "queued_for_video" ||
+    detail.blueprintStatus === "video_generating" ||
+    statusDetail.includes("准备") ||
+    statusDetail.includes("生成") ||
+    statusDetail.includes("合成") ||
+    statusDetail.includes("复用")
+  ) {
+    return "running"
+  }
+
+  return "queued"
+}
+
+function inferProgressPctFromTaskStatus(status: TaskStatus, reviewStage: ReviewStageId | null) {
+  if (status === "completed") {
+    return 100
+  }
+
+  if (status === "waiting_review") {
+    return reviewStage === "keyframe_review" ? 45 : 35
+  }
+
+  if (status === "running") {
+    return 72
+  }
+
+  if (status === "failed" || status === "canceled") {
+    return 65
+  }
+
+  return 0
+}
+
+function isQueuedBeforeWorkerStarts(detail: TaskDetail) {
+  return (
+    detail.blueprintStatus === "pending_generation" &&
+    detail.actualDurationSec == null &&
+    !detail.failureReason &&
+    !detail.cancelRequestedAt &&
+    (detail.statusDetail ?? "") === "等待 worker 开始处理"
+  )
+}
+
+function synthesizeTaskSummaryFromDetail(detail: TaskDetail): TaskSummary {
+  const createdAt = inferCreatedAtFromTaskId(detail.taskId, detail.updatedAt)
+  const estimatedCost = estimateCost(detail.taskRunConfig.modeId)
+
+  if (isQueuedBeforeWorkerStarts(detail)) {
+    const reviewSummary = createDefaultReviewSummary()
+    return normalizeTaskSummaryRecord({
+      id: detail.taskId,
+      projectId: detail.projectId,
+      title: detail.title,
+      modeId: detail.taskRunConfig.modeId,
+      executionMode: detail.taskRunConfig.executionMode,
+      channelId: detail.taskRunConfig.channelId,
+      terminalPresetId: detail.taskRunConfig.terminalPresetId,
+      renderSpecJson: detail.taskRunConfig.renderSpecJson,
+      targetDurationSec: detail.taskRunConfig.targetDurationSec,
+      generationMode: detail.taskRunConfig.generationMode,
+      audioStrategy: detail.taskRunConfig.audioStrategy,
+      generationRoute: detail.taskRunConfig.generationRoute,
+      routeReason: detail.taskRunConfig.routeReason,
+      planningVersion: detail.taskRunConfig.planningVersion,
+      blueprintVersion: detail.blueprintVersion,
+      blueprintStatus: detail.blueprintStatus,
+      actualDurationSec: detail.actualDurationSec ?? null,
+      failureReason: null,
+      statusDetail: detail.statusDetail ?? null,
+      cancelRequestedAt: null,
+      status: "queued",
+      progressPct: 0,
+      retryCount: 0,
+      estimatedCostCny: estimatedCost.budgetUsagePct / 100 * detail.taskRunConfig.budgetLimitCny,
+      createdAt,
+      updatedAt: detail.updatedAt,
+      reviewStage: reviewSummary.reviewStage,
+      pendingReviewCount: reviewSummary.pendingReviewCount,
+      reviewUpdatedAt: reviewSummary.reviewUpdatedAt,
+    })
+  }
+
+  const baseStatus = inferBaseTaskStatusFromDetail(detail)
+  const derived = applyDerivedReviewState(detail, baseStatus)
+  const status = derived.status
+
+  return normalizeTaskSummaryRecord({
+    id: detail.taskId,
+    projectId: detail.projectId,
+    title: detail.title,
+    modeId: detail.taskRunConfig.modeId,
+    executionMode: detail.taskRunConfig.executionMode,
+    channelId: detail.taskRunConfig.channelId,
+    terminalPresetId: detail.taskRunConfig.terminalPresetId,
+    renderSpecJson: detail.taskRunConfig.renderSpecJson,
+    targetDurationSec: detail.taskRunConfig.targetDurationSec,
+    generationMode: detail.taskRunConfig.generationMode,
+    audioStrategy: detail.taskRunConfig.audioStrategy,
+    generationRoute: detail.taskRunConfig.generationRoute,
+    routeReason: detail.taskRunConfig.routeReason,
+    planningVersion: detail.taskRunConfig.planningVersion,
+    blueprintVersion: detail.blueprintVersion,
+    blueprintStatus: detail.blueprintStatus,
+    actualDurationSec: detail.actualDurationSec ?? null,
+    failureReason: detail.failureReason ?? null,
+    statusDetail: detail.statusDetail ?? null,
+    cancelRequestedAt: detail.cancelRequestedAt ?? null,
+    status,
+    progressPct: inferProgressPctFromTaskStatus(status, derived.reviewSummary.reviewStage),
+    retryCount: status === "failed" ? 1 : 0,
+    estimatedCostCny: estimatedCost.budgetUsagePct / 100 * detail.taskRunConfig.budgetLimitCny,
+    createdAt,
+    updatedAt: detail.updatedAt,
+    reviewStage: derived.reviewSummary.reviewStage,
+    pendingReviewCount: derived.reviewSummary.pendingReviewCount,
+    reviewUpdatedAt: derived.reviewSummary.reviewUpdatedAt,
+  })
+}
+
+async function readTaskSummariesWithRepair() {
+  const [tasks, details] = await Promise.all([readTaskSummaries(), readTaskDetails()])
+  const taskIds = new Set(tasks.map((task) => task.id))
+  const synthesized = Object.values(details)
+    .filter((detail) => !taskIds.has(detail.taskId))
+    .map((detail) => synthesizeTaskSummaryFromDetail(detail))
+
+  if (synthesized.length === 0) {
+    return tasks
+  }
+
+  const repaired = [...tasks, ...synthesized].sort((left, right) => {
+    const leftTime = Date.parse(left.createdAt || left.updatedAt)
+    const rightTime = Date.parse(right.createdAt || right.updatedAt)
+    return rightTime - leftTime
+  })
+
+  await writeTaskSummaries(repaired)
+  return repaired
+}
+
 function buildSceneReviewRequirements(taskRunConfig: TaskRunConfig) {
   return {
     requireStoryboardReview: taskRunConfig.requireStoryboardReview,
@@ -609,7 +788,7 @@ async function syncTaskSummaryFromDetail(
 }
 
 export async function listTasks(): Promise<TaskSummary[]> {
-  return readTaskSummaries()
+  return readTaskSummariesWithRepair()
 }
 
 export async function getTaskDetail(taskId: string) {
@@ -716,9 +895,9 @@ export async function createTask(input: CreateTaskInput): Promise<{ task: TaskSu
     throw new Error("PROJECT_NOT_FOUND")
   }
   const tasks = await listTasks()
-  const modeId = "high_quality" as const
-  const channelId = ((project.defaultChannelIds[0] ?? "tiktok") as "tiktok" | "reels" | "shorts")
-  const generationMode = "user_locked" as const
+  const modeId = input.modeId
+  const channelId = input.channelId
+  const generationMode = input.generationMode
   const estimate = estimateCost(modeId)
   const timestamp = now()
   let taskRunConfig = buildDefaultTaskRunConfig(
@@ -729,6 +908,7 @@ export async function createTask(input: CreateTaskInput): Promise<{ task: TaskSu
     {
       projectId: input.projectId,
       terminalPresetId: input.terminalPresetId,
+      audioStrategy: input.audioStrategy,
     },
   )
   const resolvedSlots = await resolveEffectiveSlots({
@@ -777,6 +957,7 @@ export async function createTask(input: CreateTaskInput): Promise<{ task: TaskSu
     renderSpecJson: taskRunConfig.renderSpecJson,
     targetDurationSec: input.targetDurationSec,
     generationMode,
+    audioStrategy: taskRunConfig.audioStrategy,
     generationRoute: taskRunConfig.generationRoute,
     routeReason: taskRunConfig.routeReason,
     planningVersion: taskRunConfig.planningVersion,
@@ -839,6 +1020,44 @@ export async function cancelTask(taskId: string, queue: {
     statusDetail,
     cancelRequestedAt: canceledAt,
     updatedAt: canceledAt,
+  })
+
+  await writeTaskSummaries(tasks.map((entry) => (entry.id === taskId ? nextSummary : entry)))
+  await upsertTaskDetail(nextDetail)
+
+  return {
+    summary: nextSummary,
+    detail: nextDetail,
+  }
+}
+
+export async function resumeFailedTask(taskId: string) {
+  const tasks = await listTasks()
+  const task = tasks.find((entry) => entry.id === taskId)
+  if (!task) {
+    return null
+  }
+
+  const detail = await readTaskDetail(taskId)
+  if (!detail) {
+    return null
+  }
+
+  const resumedAt = now()
+  const nextSummary = normalizeTaskSummaryRecord({
+    ...task,
+    status: "queued",
+    failureReason: null,
+    statusDetail: "等待 worker 恢复处理",
+    cancelRequestedAt: null,
+    updatedAt: resumedAt,
+  })
+  const nextDetail = normalizeTaskDetailRecord({
+    ...detail,
+    failureReason: null,
+    statusDetail: "等待 worker 恢复处理",
+    cancelRequestedAt: null,
+    updatedAt: resumedAt,
   })
 
   await writeTaskSummaries(tasks.map((entry) => (entry.id === taskId ? nextSummary : entry)))

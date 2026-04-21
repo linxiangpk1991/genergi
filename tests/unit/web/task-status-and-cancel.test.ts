@@ -15,6 +15,7 @@ vi.mock("../../../apps/web/src/api", async () => {
       runtimeStatus: vi.fn(),
       getTaskAssets: vi.fn(),
       cancelTask: vi.fn(),
+      resumeFailedTask: vi.fn(),
     },
   }
 })
@@ -62,6 +63,7 @@ function createRunningTask(overrides: Record<string, unknown> = {}) {
     },
     targetDurationSec: 30,
     generationMode: "user_locked",
+    audioStrategy: "tts_only",
     generationRoute: "multi_scene",
     routeReason: "target duration 30s exceeds the current model single-shot limit of 8s",
     planningVersion: "v1",
@@ -77,6 +79,22 @@ function createRunningTask(overrides: Record<string, unknown> = {}) {
     estimatedCostCny: 4.25,
     createdAt: "2026-04-20T00:00:00.000Z",
     updatedAt: "2026-04-20T00:00:00.000Z",
+    ...overrides,
+  }
+}
+
+function createFailedTask(overrides: Record<string, unknown> = {}) {
+  return {
+    ...createRunningTask({
+      id: "task_failed",
+      title: "Failed task",
+      status: "failed",
+      failureReason: "Scene 2 video generation timeout",
+      statusDetail: "任务失败",
+      retryCount: 1,
+      blueprintStatus: "queued_for_video",
+      audioStrategy: "native_plus_tts_ducked",
+    }),
     ...overrides,
   }
 }
@@ -152,6 +170,59 @@ describe("task status details and cancel actions", () => {
         hadActiveJob: true,
       },
     } as any)
+    vi.mocked(api.resumeFailedTask).mockResolvedValue({
+      task: createFailedTask({
+        status: "queued",
+        failureReason: null,
+        statusDetail: "等待 worker 恢复处理",
+      }),
+      detail: {
+        taskId: "task_failed",
+        projectId: "project_default",
+        title: "Failed task",
+        script: "script",
+        blueprintVersion: 1,
+        blueprintStatus: "queued_for_video",
+        failureReason: null,
+        statusDetail: "等待 worker 恢复处理",
+        cancelRequestedAt: null,
+        taskRunConfig: {
+          projectId: "project_default",
+          modeId: "high_quality",
+          executionMode: "review_required",
+          channelId: "tiktok",
+          terminalPresetId: "phone_portrait",
+          renderSpecJson: createRunningTask().renderSpecJson,
+          targetDurationSec: 30,
+          generationMode: "user_locked",
+          audioStrategy: "native_plus_tts_ducked",
+          generationRoute: "multi_scene",
+          routeReason: "target duration 30s exceeds the current model single-shot limit of 8s",
+          planningVersion: "v1",
+          blueprintVersion: 1,
+          blueprintStatus: "queued_for_video",
+          textModel: { id: "text.default", label: "Claude Opus 4.6", provider: "anthropic-compatible" },
+          imageModel: { id: "gemini-3.1-flash-image-preview", label: "Gemini 3.1 Flash Image Preview", provider: "openai-compatible" },
+          videoModel: { id: "veo3.1", label: "Veo 3.1 Portrait", provider: "openai-compatible" },
+          ttsProvider: "edge-tts",
+          contentLocale: "en",
+          operatorLocale: "zh-CN",
+          requireStoryboardReview: true,
+          requireKeyframeReview: true,
+          budgetLimitCny: 5,
+          aspectRatio: "9:16",
+          slotSnapshots: [],
+        },
+        scenes: [],
+        updatedAt: "2026-04-20T00:00:05.000Z",
+      },
+      queue: {
+        queued: true,
+        reason: "resume_failed_task",
+        continueExecution: true,
+        resumeFrom: "failed_task",
+      },
+    } as any)
   })
 
   afterEach(async () => {
@@ -213,6 +284,82 @@ describe("task status details and cancel actions", () => {
     await waitFor(() => {
       expect(vi.mocked(api.cancelTask)).toHaveBeenCalledWith("task_running")
       expect(container.textContent ?? "").toContain("正在终止当前任务")
+    })
+  })
+
+  it("shows a resume button for failed tasks on the batch dashboard", async () => {
+    vi.mocked(api.listTasks).mockResolvedValue({
+      tasks: [createFailedTask()],
+    } as any)
+
+    await act(async () => {
+      root.render(
+        createElement(
+          MemoryRouter,
+          { initialEntries: ["/batch-dashboard"] },
+          createElement(
+            Routes,
+            null,
+            createElement(Route, { path: "/batch-dashboard", element: createElement(BatchDashboardPage) }),
+          ),
+        ),
+      )
+    })
+
+    await waitFor(() => {
+      expect(container.textContent ?? "").toContain("任务失败")
+    })
+
+    const resumeButton = Array.from(container.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("恢复运行"),
+    )
+    expect(resumeButton).toBeTruthy()
+
+    await act(async () => {
+      resumeButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }))
+    })
+
+    await waitFor(() => {
+      expect(vi.mocked(api.resumeFailedTask)).toHaveBeenCalledWith("task_failed")
+      expect(container.textContent ?? "").toContain("等待 worker 恢复处理")
+    })
+  })
+
+  it("shows a resume button for failed tasks in asset center and updates the task after resume", async () => {
+    vi.mocked(api.listTasks).mockResolvedValue({
+      tasks: [createFailedTask()],
+    } as any)
+
+    await act(async () => {
+      root.render(
+        createElement(
+          MemoryRouter,
+          { initialEntries: ["/asset-center?taskId=task_failed"] },
+          createElement(
+            Routes,
+            null,
+            createElement(Route, { path: "/asset-center", element: createElement(AssetsPage) }),
+          ),
+        ),
+      )
+    })
+
+    await waitFor(() => {
+      expect(container.textContent ?? "").toContain("任务失败")
+    })
+
+    const resumeButton = Array.from(container.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("恢复运行"),
+    )
+    expect(resumeButton).toBeTruthy()
+
+    await act(async () => {
+      resumeButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }))
+    })
+
+    await waitFor(() => {
+      expect(vi.mocked(api.resumeFailedTask)).toHaveBeenCalledWith("task_failed")
+      expect(container.textContent ?? "").toContain("等待 worker 恢复处理")
     })
   })
 })

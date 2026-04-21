@@ -32,6 +32,9 @@ export type VideoDurationSec = z.infer<typeof videoDurationSecSchema>
 export const channelProfileSchema = z.enum(["tiktok", "reels", "shorts"])
 export type ChannelProfileId = z.infer<typeof channelProfileSchema>
 
+export const audioStrategySchema = z.enum(["tts_only", "native_plus_tts_ducked"])
+export type AudioStrategy = z.infer<typeof audioStrategySchema>
+
 export const taskStatusSchema = z.enum([
   "draft",
   "queued",
@@ -107,6 +110,7 @@ export const taskRunConfigSchema = z.object({
   imageModel: modelRefSchema,
   videoModel: modelRefSchema,
   ttsProvider: z.string(),
+  audioStrategy: audioStrategySchema.default("tts_only"),
   contentLocale: z.literal("en"),
   operatorLocale: z.literal("zh-CN"),
   requireStoryboardReview: z.boolean(),
@@ -143,6 +147,7 @@ export const taskSummarySchema = z.object({
   planningVersion: planningVersionSchema,
   blueprintVersion: z.number().int().nonnegative().default(0),
   blueprintStatus: blueprintStatusSchema.default("pending_generation"),
+  audioStrategy: audioStrategySchema.default("tts_only"),
   actualDurationSec: z.number().positive().nullable(),
   failureReason: z.string().nullable().optional(),
   statusDetail: z.string().nullable().optional(),
@@ -233,6 +238,7 @@ export const createTaskInputSchema = z.object({
   aspectRatio: z.string().default("9:16"),
   targetDurationSec: videoDurationSecSchema.default(30),
   generationMode: generationModeSchema.default("user_locked"),
+  audioStrategy: audioStrategySchema.default("tts_only"),
   modelOverrides: taskModelOverrideSchema.optional(),
 })
 export type CreateTaskInput = z.infer<typeof createTaskInputSchema>

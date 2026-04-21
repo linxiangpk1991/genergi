@@ -63,4 +63,34 @@ Line two
     expect(args[args.indexOf("-c:v") + 1]).toBe("copy")
     expect(args).not.toContain("-vf")
   })
+
+  it("builds mixed-audio ffmpeg args that preserve native video audio under the narration track", async () => {
+    const ffmpeg = await import("../../../apps/worker/src/lib/ffmpeg")
+
+    const args = ffmpeg.buildMixNarrationWithVideoAudioCommandArgs({
+      videoPath: "/tmp/video.mp4",
+      audioPath: "/tmp/audio.mp3",
+      outputPath: "/tmp/output.mp4",
+    })
+
+    expect(args).toContain("-filter_complex")
+    expect(args[args.indexOf("-filter_complex") + 1]).toContain("amix=inputs=2")
+    expect(args).toContain("-map")
+    expect(args).toContain("[aout]")
+  })
+
+  it("keeps subtitle burn-in in the mixed-audio ffmpeg args when a subtitle path is provided", async () => {
+    const ffmpeg = await import("../../../apps/worker/src/lib/ffmpeg")
+
+    const args = ffmpeg.buildMixNarrationWithVideoAudioCommandArgs({
+      videoPath: "/tmp/video.mp4",
+      audioPath: "/tmp/audio.mp3",
+      subtitlePath: "/tmp/subtitles.ass",
+      outputPath: "/tmp/output.mp4",
+    })
+
+    expect(args).toContain("-vf")
+    expect(args[args.indexOf("-vf") + 1]).toContain("ass=")
+    expect(args).toContain("libx264")
+  })
 })

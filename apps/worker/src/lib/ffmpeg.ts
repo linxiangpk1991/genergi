@@ -11,6 +11,15 @@ type MuxNarrationInput = {
   subtitlePath?: string | null
 }
 
+type MixNarrationWithVideoAudioInput = {
+  videoPath: string
+  audioPath: string
+  outputPath: string
+  subtitlePath?: string | null
+  nativeAudioVolume?: number
+  narrationVolume?: number
+}
+
 function toAssTimestamp(milliseconds: number) {
   const totalCentiseconds = Math.max(0, Math.round(milliseconds / 10))
   const hours = Math.floor(totalCentiseconds / 360000)
@@ -114,6 +123,58 @@ export function buildMuxNarrationCommandArgs(input: MuxNarrationInput) {
     "0:v:0",
     "-map",
     "1:a:0",
+  ]
+
+  if (input.subtitlePath) {
+    return [
+      ...baseArgs,
+      "-vf",
+      `ass=${escapeFfmpegFilterPath(input.subtitlePath)}`,
+      "-c:v",
+      "libx264",
+      "-pix_fmt",
+      "yuv420p",
+      "-preset",
+      "medium",
+      "-crf",
+      "18",
+      "-c:a",
+      "aac",
+      "-movflags",
+      "+faststart",
+      "-shortest",
+      input.outputPath,
+    ]
+  }
+
+  return [
+    ...baseArgs,
+    "-c:v",
+    "copy",
+    "-c:a",
+    "aac",
+    "-movflags",
+    "+faststart",
+    "-shortest",
+    input.outputPath,
+  ]
+}
+
+export function buildMixNarrationWithVideoAudioCommandArgs(input: MixNarrationWithVideoAudioInput) {
+  const nativeAudioVolume = input.nativeAudioVolume ?? 0.35
+  const narrationVolume = input.narrationVolume ?? 1
+  const baseArgs = [
+    "-y",
+    "-i",
+    input.videoPath,
+    "-i",
+    input.audioPath,
+    "-filter_complex",
+    `[0:a]volume=${nativeAudioVolume}[native];[1:a]volume=${narrationVolume}[tts];[native][tts]amix=inputs=2:duration=first:dropout_transition=0[aout]`,
+    "-map",
+    "0:v:0",
+    "-map",
+    "[aout]",
   ]
 
   if (input.subtitlePath) {
@@ -261,6 +322,7 @@ export async function trimVideoDuration(input: {
   videoPath: string
   outputPath: string
   durationSec: number
+  preserveAudio?: boolean
 }) {
   const ffmpegPath = process.env.GENERGI_FFMPEG_PATH || "ffmpeg"
 
@@ -273,9 +335,10 @@ export async function trimVideoDuration(input: {
         input.videoPath,
         "-t",
         `${input.durationSec}`,
-        "-an",
+        ...(input.preserveAudio ? [] : ["-an"]),
         "-c:v",
         "libx264",
+        ...(input.preserveAudio ? ["-c:a", "aac"] : []),
         input.outputPath,
       ],
       { stdio: ["ignore", "pipe", "pipe"] },
@@ -324,6 +387,32 @@ export async function muxNarrationIntoVideo(input: {
         return
       }
       reject(new Error(`ffmpeg exited with code ${code}: ${stderr}`))
+    })
+  })
+}
+
+export async function mixNarrationWithVideoAudio(input: MixNarrationWithVideoAudioInput) {
+  const ffmpegPath = process.env.GENERGI_FFMPEG_PATH || "ffmpeg"
+
+  await new Promise<void>((resolve, reject) => {
+    const process = spawn(
+      ffmpegPath,
+      buildMixNarrationWithVideoAudioCommandArgs(input),
+      { stdio: ["ignore", "pipe", "pipe"] },
+    )
+
+    let stderr = ""
+    process.stderr.on("data", (chunk) => {
+      stderr += chunk.toString()
+    })
+
+    process.on("error", reject)
+    process.on("close", (code) => {
+      if (code === 0) {
+        resolve()
+        return
+      }
+      reject(new Error(`ffmpeg audio mix exited with code ${code}: ${stderr}`))
     })
   })
 }

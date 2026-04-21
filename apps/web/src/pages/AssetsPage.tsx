@@ -6,6 +6,7 @@ import {
   buildAssetPreviewUrl,
   buildBatchDashboardUrl,
   buildTaskReviewUrl,
+  getAudioStrategyLabel,
   type AssetRecord,
   type RuntimeStatusResponse,
   type TaskSummary,
@@ -71,6 +72,10 @@ function canCancelTask(task: TaskSummary | null) {
   return task?.status === "queued" || task?.status === "running"
 }
 
+function canResumeFailedTask(task: TaskSummary | null) {
+  return task?.status === "failed"
+}
+
 function sortAssetsForDelivery(assets: AssetRecord[]) {
   const priority: Record<AssetRecord["assetType"], number> = {
     video_bundle: 0,
@@ -112,6 +117,7 @@ export function AssetsPage() {
   const [loadError, setLoadError] = useState("")
   const [actionError, setActionError] = useState("")
   const [cancelingTaskId, setCancelingTaskId] = useState("")
+  const [resumingTaskId, setResumingTaskId] = useState("")
 
   function syncTaskContext(taskId?: string, replace = true) {
     const currentTaskId = searchParams.get("taskId") ?? ""
@@ -226,6 +232,19 @@ export function AssetsPage() {
       setActionError(error instanceof Error ? error.message : "终止任务失败")
     } finally {
       setCancelingTaskId("")
+    }
+  }
+
+  async function handleResumeFailedTask(taskId: string) {
+    setActionError("")
+    setResumingTaskId(taskId)
+    try {
+      const response = await api.resumeFailedTask(taskId)
+      setTasks((current) => current.map((task) => (task.id === taskId ? response.task : task)))
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "恢复运行失败")
+    } finally {
+      setResumingTaskId("")
     }
   }
 
@@ -424,6 +443,7 @@ export function AssetsPage() {
             <span>{selectedTask?.planning?.planningSummary ?? "这里会展示分镜路由、目标时长和规划原则的真实摘要。"}</span>
             <div className="planning-summary-tags">
               <span className="pill pill--sm">{selectedTask?.planning?.generationPreferenceLabel ?? "待接入"}</span>
+              <span className="pill pill--sm">{getAudioStrategyLabel(selectedTask?.audioStrategy)}</span>
               <span className="pill pill--sm">目标 {selectedTask?.targetDurationSec ?? 0}s</span>
               {selectedTask?.actualDurationSec ? (
                 <span className="pill pill--sm">实际 {selectedTask.actualDurationSec.toFixed(1)}s</span>
@@ -576,6 +596,16 @@ export function AssetsPage() {
                       {cancelingTaskId === selectedTaskId ? "终止中..." : "终止任务"}
                     </button>
                   ) : null}
+                  {selectedTaskId && canResumeFailedTask(selectedTask) ? (
+                    <button
+                      className="ghost-button"
+                      disabled={resumingTaskId === selectedTaskId}
+                      onClick={() => void handleResumeFailedTask(selectedTaskId)}
+                      type="button"
+                    >
+                      {resumingTaskId === selectedTaskId ? "恢复中..." : "恢复运行"}
+                    </button>
+                  ) : null}
                   {selectedTask?.executionMode === "review_required" &&
                   (selectedTask.blueprintStatus === "ready_for_review" ||
                     selectedTask.blueprintStatus === "approved" ||
@@ -604,6 +634,7 @@ export function AssetsPage() {
               ) : null}
               <div className="task-item"><strong>分镜路由依据</strong><span>{selectedTask?.routeReason ?? "待接入"}</span></div>
               <div className="task-item"><strong>规划原则</strong><span>{selectedTask?.planning?.generationPreferenceLabel ?? "待接入"}</span></div>
+              <div className="task-item"><strong>音频策略</strong><span>{getAudioStrategyLabel(selectedTask?.audioStrategy)}</span></div>
               <div className="task-item"><strong>当前链路</strong><span>{getTaskFlowLabel(selectedTask)}</span></div>
               <div className="task-item"><strong>可预览资产</strong><span>{assetStats.previewableCount} 个</span></div>
               <div className="task-item"><strong>已就绪资产</strong><span>{assetStats.readyCount} 个</span></div>

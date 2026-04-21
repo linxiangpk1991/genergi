@@ -26,7 +26,7 @@ import {
 } from "@genergi/shared"
 import { GENERATION_PREFERENCES, resolveVideoModelCapability } from "@genergi/config"
 import { EdgeTTS } from "./edge-tts.js"
-import { concatVideos, extractKeyframeFromVideo, getMediaDurationSeconds, muxNarrationIntoVideo, trimVideoDuration, writeStyledAssSubtitleFile } from "./ffmpeg.js"
+import { concatVideos, extractKeyframeFromVideo, getMediaDurationSeconds, mixNarrationWithVideoAudio, muxNarrationIntoVideo, trimVideoDuration, writeStyledAssSubtitleFile } from "./ffmpeg.js"
 
 const gatewayBaseUrl = process.env.GENERGI_MEDIA_GATEWAY_BASE_URL ?? "https://open.xiaojingai.com"
 const gatewayApiKey = process.env.GENERGI_MEDIA_GATEWAY_API_KEY ?? ""
@@ -153,6 +153,41 @@ async function sleep(ms: number, signal?: AbortSignal) {
 
     signal?.addEventListener("abort", onAbort, { once: true })
   })
+}
+
+async function mapWithConcurrencyLimit<TInput, TOutput>(
+  items: TInput[],
+  limit: number,
+  mapper: (item: TInput, index: number) => Promise<TOutput>,
+) {
+  const results = new Array<TOutput>(items.length)
+  let nextIndex = 0
+  const workerCount = Math.max(1, Math.min(limit, items.length))
+
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (true) {
+        const currentIndex = nextIndex
+        nextIndex += 1
+        if (currentIndex >= items.length) {
+          return
+        }
+
+        results[currentIndex] = await mapper(items[currentIndex], currentIndex)
+      }
+    }),
+  )
+
+  return results
+}
+
+function resolveSceneVideoConcurrency() {
+  const raw = Number.parseInt(process.env.GENERGI_VIDEO_SCENE_CONCURRENCY ?? "4", 10)
+  if (!Number.isFinite(raw) || raw <= 0) {
+    return 4
+  }
+
+  return Math.min(raw, 6)
 }
 
 function normalizeImageModel(model: string) {
@@ -1903,9 +1938,12 @@ export async function prepareExecutionSource(
     frameCount: number
   } | null
 }> {
+  const canReuseReviewedBlueprint = (record?: TaskBlueprintRecord | null) =>
+    record?.status === "approved" || record?.status === "queued_for_video"
+
   if (options.continueExecution) {
     const approvedBlueprintRecord = options.approvedBlueprintRecord ?? await getCurrentTaskBlueprintRecord(detail.taskId)
-    if (approvedBlueprintRecord?.status === "approved") {
+    if (approvedBlueprintRecord && canReuseReviewedBlueprint(approvedBlueprintRecord)) {
       const rebuiltScenes = buildScenesFromBlueprint(detail, approvedBlueprintRecord.blueprint)
       const rebuiltDetail = normalizeTaskDetailRecord({
         ...detail,
@@ -2248,39 +2286,45 @@ export async function createSceneVideoBundle(input: {
   blueprintRecord?: TaskBlueprintRecord | null
   onSceneStart?: (scene: StoryboardScene, totalScenes: number) => Promise<void> | void
   signal?: AbortSignal
-}) {
+}, deps: {
+  createVideoFromPrompt?: typeof createVideoFromPrompt
+} = {}) {
   const sceneInputs = await buildSceneVideoGenerationInputs({
     detail: input.detail,
     blueprintRecord: input.blueprintRecord ?? null,
   })
-  const videos = []
-  for (const sceneInput of sceneInputs) {
-    await input.onSceneStart?.(sceneInput.scene, input.detail.scenes.length)
+  const createSceneVideo = deps.createVideoFromPrompt ?? createVideoFromPrompt
+  const videos = await mapWithConcurrencyLimit(
+    sceneInputs,
+    resolveSceneVideoConcurrency(),
+    async (sceneInput) => {
+      await input.onSceneStart?.(sceneInput.scene, input.detail.scenes.length)
 
-    const video = await Promise.race([
-      createVideoFromPrompt({
-        taskId: input.taskId,
-        scene: sceneInput.scene,
-        model: input.model,
-        keyframePath: sceneInput.keyframePath,
-        signal: input.signal,
-      }),
-      new Promise<never>((_, reject) =>
-        setTimeout(
-          () => reject(new Error(`Scene ${sceneInput.scene.index + 1} video generation timeout`)),
-          8 * 60 * 1000,
+      const video = await Promise.race([
+        createSceneVideo({
+          taskId: input.taskId,
+          scene: sceneInput.scene,
+          model: input.model,
+          keyframePath: sceneInput.keyframePath,
+          signal: input.signal,
+        }),
+        new Promise<never>((_, reject) =>
+          setTimeout(
+            () => reject(new Error(`Scene ${sceneInput.scene.index + 1} video generation timeout`)),
+            8 * 60 * 1000,
+          ),
         ),
-      ),
-    ])
-    videos.push({
-      ...video,
-      sceneId: sceneInput.scene.id,
-      sceneIndex: sceneInput.scene.index,
-      durationSec: sceneInput.scene.durationSec,
-      inputStrategy: sceneInput.inputStrategy,
-      keyframePath: sceneInput.keyframePath,
-    })
-  }
+      ])
+      return {
+        ...video,
+        sceneId: sceneInput.scene.id,
+        sceneIndex: sceneInput.scene.index,
+        durationSec: sceneInput.scene.durationSec,
+        inputStrategy: sceneInput.inputStrategy,
+        keyframePath: sceneInput.keyframePath,
+      }
+    },
+  )
   return videos
 }
 
@@ -2480,11 +2524,13 @@ export async function buildFinalVideoWithNarration(input: {
   subtitlesPath?: string | null
   renderSpec?: TaskDetail["taskRunConfig"]["renderSpecJson"] | null
   targetDurationSec: number
+  audioStrategy?: TaskDetail["taskRunConfig"]["audioStrategy"]
 }, deps: {
   concatVideos?: typeof concatVideos
   trimVideoDuration?: typeof trimVideoDuration
   writeStyledAssSubtitleFile?: typeof writeStyledAssSubtitleFile
   muxNarrationIntoVideo?: typeof muxNarrationIntoVideo
+  mixNarrationWithVideoAudio?: typeof mixNarrationWithVideoAudio
   getMediaDurationSeconds?: typeof getMediaDurationSeconds
 } = {}) {
   const dir = ensureTaskDir(input.taskId)
@@ -2496,7 +2542,9 @@ export async function buildFinalVideoWithNarration(input: {
   const trimScenes = deps.trimVideoDuration ?? trimVideoDuration
   const writeAssSubtitles = deps.writeStyledAssSubtitleFile ?? writeStyledAssSubtitleFile
   const muxFinalVideo = deps.muxNarrationIntoVideo ?? muxNarrationIntoVideo
+  const mixFinalAudio = deps.mixNarrationWithVideoAudio ?? mixNarrationWithVideoAudio
   const readDuration = deps.getMediaDurationSeconds ?? getMediaDurationSeconds
+  const preserveNativeAudio = input.audioStrategy === "native_plus_tts_ducked"
   try {
     await concatScenes({
       videoPaths: input.sourceVideoPaths,
@@ -2507,6 +2555,7 @@ export async function buildFinalVideoWithNarration(input: {
       videoPath: stitchedVideoPath,
       outputPath: trimmedVideoPath,
       durationSec: input.targetDurationSec,
+      preserveAudio: preserveNativeAudio,
     })
     if (input.subtitlesPath && input.renderSpec) {
       try {
@@ -2515,12 +2564,21 @@ export async function buildFinalVideoWithNarration(input: {
           assPath: subtitlesAssPath,
           renderSpec: input.renderSpec,
         })
-        await muxFinalVideo({
-          videoPath: trimmedVideoPath,
-          audioPath: input.narrationPath,
-          subtitlePath: subtitlesAssPath,
-          outputPath,
-        })
+        if (preserveNativeAudio) {
+          await mixFinalAudio({
+            videoPath: trimmedVideoPath,
+            audioPath: input.narrationPath,
+            subtitlePath: subtitlesAssPath,
+            outputPath,
+          })
+        } else {
+          await muxFinalVideo({
+            videoPath: trimmedVideoPath,
+            audioPath: input.narrationPath,
+            subtitlePath: subtitlesAssPath,
+            outputPath,
+          })
+        }
       } catch (error) {
         console.warn("[worker] subtitle burn-in failed, retrying audio-only mux:", error instanceof Error ? error.message : String(error))
         await muxFinalVideo({
@@ -2530,11 +2588,28 @@ export async function buildFinalVideoWithNarration(input: {
         })
       }
     } else {
-      await muxFinalVideo({
-        videoPath: trimmedVideoPath,
-        audioPath: input.narrationPath,
-        outputPath,
-      })
+      if (preserveNativeAudio) {
+        try {
+          await mixFinalAudio({
+            videoPath: trimmedVideoPath,
+            audioPath: input.narrationPath,
+            outputPath,
+          })
+        } catch (error) {
+          console.warn("[worker] native audio mix failed, retrying narration-only mux:", error instanceof Error ? error.message : String(error))
+          await muxFinalVideo({
+            videoPath: trimmedVideoPath,
+            audioPath: input.narrationPath,
+            outputPath,
+          })
+        }
+      } else {
+        await muxFinalVideo({
+          videoPath: trimmedVideoPath,
+          audioPath: input.narrationPath,
+          outputPath,
+        })
+      }
     }
   } catch (error) {
     console.warn("[worker] ffmpeg concat/mux failed, falling back to stitched source video:", error instanceof Error ? error.message : String(error))

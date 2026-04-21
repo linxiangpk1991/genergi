@@ -408,6 +408,7 @@ async function writeTaskArtifacts(
     subtitlesPath: narration.srtPath,
     renderSpec: preparedDetail.taskRunConfig.renderSpecJson,
     targetDurationSec: preparedDetail.taskRunConfig.targetDurationSec,
+    audioStrategy: preparedDetail.taskRunConfig.audioStrategy,
   })
   await upsertTaskDetail(
     await mergeLatestReviewMetadata({

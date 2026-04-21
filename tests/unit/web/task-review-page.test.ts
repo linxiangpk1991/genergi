@@ -388,7 +388,7 @@ describe("TaskReviewPage", () => {
   })
 
   it("prefers actionable review tasks even when the blueprint is already approved", async () => {
-    vi.mocked(api.listTasks).mockResolvedValueOnce({
+    vi.mocked(api.listTasks).mockResolvedValue({
       tasks: [
         {
           id: "task_approved",
@@ -425,7 +425,7 @@ describe("TaskReviewPage", () => {
       ],
     } as any)
 
-    vi.mocked(api.getTaskDetail).mockResolvedValueOnce({
+    vi.mocked(api.getTaskDetail).mockResolvedValue({
       detail: {
         taskId: "task_approved",
         projectId: "project_default",
@@ -472,7 +472,7 @@ describe("TaskReviewPage", () => {
       },
     } as any)
 
-    vi.mocked(api.getTaskCurrentBlueprint).mockResolvedValueOnce({
+    vi.mocked(api.getTaskCurrentBlueprint).mockResolvedValue({
       blueprint: {
         taskId: "task_approved",
         version: 2,
@@ -531,6 +531,18 @@ describe("TaskReviewPage", () => {
     await waitFor(() => {
       expect(vi.mocked(api.getTaskDetail)).toHaveBeenCalledWith("task_approved")
     })
+
+    const approveButton = Array.from(container.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("审核通过") || button.textContent?.includes("已审核通过"),
+    )
+    const resumeButton = Array.from(container.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("继续完整视频生成"),
+    )
+
+    expect(approveButton).toBeTruthy()
+    expect((approveButton as HTMLButtonElement | undefined)?.disabled).toBe(true)
+    expect(container.textContent ?? "").toContain("approved")
+    expect((resumeButton as HTMLButtonElement | undefined)?.disabled).toBe(false)
   })
 
   it("syncs the visible blueprint status after approval and allows resume", async () => {

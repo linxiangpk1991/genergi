@@ -122,6 +122,7 @@ describe("HomePage project and terminal preset flow", () => {
         },
         targetDurationSec: 30,
         generationMode: "user_locked",
+        audioStrategy: "native_plus_tts_ducked",
         generationRoute: "multi_scene",
         routeReason: "target duration exceeds single-shot limit",
         planningVersion: "v1",
@@ -182,6 +183,15 @@ describe("HomePage project and terminal preset flow", () => {
       terminalPresetSelect!.dispatchEvent(new Event("change", { bubbles: true }))
     })
 
+    const mixedAudioButton = Array.from(container.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("原生音频 + TTS 混音"),
+    )
+    expect(mixedAudioButton).toBeTruthy()
+
+    await act(async () => {
+      mixedAudioButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }))
+    })
+
     await waitFor(() => {
       const text = container.textContent ?? ""
       expect(text).toContain("审核优先")
@@ -212,17 +222,59 @@ describe("HomePage project and terminal preset flow", () => {
       expect(text).toContain("打开任务资产")
     })
 
+    await waitFor(() => {
+      const toast = container.querySelector('[role="status"]')
+      expect(toast?.textContent ?? "").toContain("任务“Campaign launch”已提交到渲染队列。关键画面生成完成后，会进入任务审核队列。")
+    })
+
     const payload = vi.mocked(api.createTask).mock.calls[0]?.[0] as Record<string, unknown>
     expect(payload).toMatchObject({
       title: "Campaign launch",
       projectId: "project_campaign",
       terminalPresetId: "tablet_landscape",
       targetDurationSec: 30,
+      audioStrategy: "native_plus_tts_ducked",
     })
     expect(payload).not.toHaveProperty("aspectRatio")
     expect(payload).not.toHaveProperty("modeId")
     expect(payload).not.toHaveProperty("channelId")
     expect(payload).not.toHaveProperty("generationMode")
     expect(payload).not.toHaveProperty("modelOverrides")
+  })
+
+  it("shows a floating error toast when queue submission fails", async () => {
+    vi.mocked(api.createTask).mockRejectedValueOnce(new Error("队列提交失败"))
+
+    await act(async () => {
+      root.render(createElement(HomePage))
+    })
+
+    await waitFor(() => {
+      expect(vi.mocked(api.listProjects)).toHaveBeenCalledTimes(1)
+    })
+
+    const titleInput = container.querySelector('input[placeholder*="夏季新品种草短视频"]') as HTMLInputElement | null
+    const scriptInput = container.querySelector('textarea[placeholder*="直接写你要表达的内容"]') as HTMLTextAreaElement | null
+    expect(titleInput).toBeTruthy()
+    expect(scriptInput).toBeTruthy()
+
+    await act(async () => {
+      setInputValue(titleInput!, "Failed launch")
+      setInputValue(scriptInput!, "Need a visible failure message.")
+    })
+
+    const submitButton = Array.from(container.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("启动渲染队列"),
+    )
+    expect(submitButton).toBeTruthy()
+
+    await act(async () => {
+      submitButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }))
+    })
+
+    await waitFor(() => {
+      const toast = container.querySelector('[role="alert"]')
+      expect(toast?.textContent ?? "").toContain("队列提交失败")
+    })
   })
 })
