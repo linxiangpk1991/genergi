@@ -6,15 +6,18 @@ import {
   createDefaultReviewSummary,
   deleteTaskAssets,
   deleteTaskDetail,
+  normalizeTaskSummaryRecord,
   normalizeStoryboardScene,
   normalizeTaskDetailRecord,
   readTaskAssets,
   readTaskDetail,
+  readTaskDetails,
   readTaskSummaries,
   upsertTaskDetail,
   writeTaskSummaries,
 } from "@genergi/shared"
 import type {
+  AssetRecord,
   CreateTaskInput,
   ReviewDecisionInput,
   ReviewStageId,
@@ -25,10 +28,36 @@ import type {
   TaskSummary,
   TaskStatus,
 } from "@genergi/shared"
+import { createInitialTaskBlueprintRecord } from "./blueprint-store.js"
 import { resolveEffectiveSlots } from "./model-control/resolver.js"
+import { getProjectById } from "./project-store.js"
 
 function now() {
   return new Date().toISOString()
+}
+
+function inferCreatedAtFromTaskId(taskId: string, fallback: string) {
+  const match = /^task_(\d{13})$/.exec(taskId)
+  if (!match) {
+    return fallback
+  }
+
+  const timestamp = Number(match[1])
+  if (!Number.isFinite(timestamp)) {
+    return fallback
+  }
+
+  return new Date(timestamp).toISOString()
+}
+
+function resolveTaskDataDir() {
+  return process.env.GENERGI_DATA_DIR
+    ? path.resolve(process.env.GENERGI_DATA_DIR)
+    : path.resolve(process.cwd(), ".data")
+}
+
+function resolveTaskExportDir(taskId: string) {
+  return path.join(resolveTaskDataDir(), "exports", taskId)
 }
 
 export type AssetPreviewKind = "text" | "json" | "media" | "directory" | "binary"
@@ -114,11 +143,20 @@ function getAssetExtension(assetType: string, fileName: string, isDirectory: boo
     return ".json"
   }
 
+  if (assetType === "planning_audit") {
+    return ".json"
+  }
+
   if (assetType === "subtitles") {
     return ".srt"
   }
 
-  if (assetType === "script") {
+  if (
+    assetType === "script" ||
+    assetType === "source_script" ||
+    assetType === "planning_prompt" ||
+    assetType === "planning_response"
+  ) {
     return ".txt"
   }
 
@@ -132,8 +170,12 @@ function getAssetMimeType(assetType: string, extension: string | null, isDirecto
 
   switch (assetType) {
     case "script":
+    case "source_script":
+    case "planning_prompt":
+    case "planning_response":
       return "text/plain; charset=utf-8"
     case "storyboard":
+    case "planning_audit":
       return "application/json"
     case "subtitles":
       return "application/x-subrip; charset=utf-8"
@@ -184,12 +226,20 @@ function getPreviewKind(assetType: string, extension: string | null, isDirectory
     return "json"
   }
 
-  if (assetType === "audio" || assetType === "video_bundle" || [".mp4", ".mp3", ".wav", ".m4a", ".aac", ".webm"].includes(extension ?? "")) {
+  if (
+    assetType === "audio" ||
+    assetType === "video_bundle" ||
+    assetType === "keyframe_image" ||
+    [".mp4", ".mp3", ".wav", ".m4a", ".aac", ".webm", ".png", ".jpg", ".jpeg", ".webp"].includes(extension ?? "")
+  ) {
     return "media"
   }
 
   if (
     assetType === "script" ||
+    assetType === "source_script" ||
+    assetType === "planning_prompt" ||
+    assetType === "planning_response" ||
     assetType === "subtitles" ||
     [".txt", ".md", ".csv", ".log", ".srt", ".vtt"].includes(extension ?? "")
   ) {
@@ -238,6 +288,136 @@ async function resolveAssetRecord(asset: any): Promise<ResolvedAssetRecord & typ
     modifiedAt,
     downloadFileName: fileName,
   }
+}
+
+async function inferExportedAssets(taskId: string): Promise<AssetRecord[]> {
+  const exportDir = resolveTaskExportDir(taskId)
+  const exists = await fs
+    .stat(exportDir)
+    .then((stats) => stats.isDirectory())
+    .catch(() => false)
+
+  if (!exists) {
+    return []
+  }
+
+  const createdAt = now()
+  const assets: AssetRecord[] = []
+  const pushIfExists = async (entry: {
+    id: string
+    assetType: AssetRecord["assetType"]
+    label: string
+    relativePath: string
+  }) => {
+    const assetPath = path.join(exportDir, entry.relativePath)
+    const present = await fs
+      .stat(assetPath)
+      .then((stats) => stats.isFile())
+      .catch(() => false)
+
+    if (!present) {
+      return
+    }
+
+    assets.push({
+      id: entry.id,
+      taskId,
+      assetType: entry.assetType,
+      label: entry.label,
+      status: "ready",
+      path: assetPath,
+      createdAt,
+    })
+  }
+
+  await pushIfExists({ id: `${taskId}_script`, assetType: "script", label: "英文脚本", relativePath: "script.txt" })
+  await pushIfExists({ id: `${taskId}_source_script`, assetType: "source_script", label: "任务母本", relativePath: "source-script.txt" })
+  await pushIfExists({ id: `${taskId}_planning_prompt`, assetType: "planning_prompt", label: "文本规划提示词", relativePath: "planning-prompt.txt" })
+  await pushIfExists({ id: `${taskId}_planning_response`, assetType: "planning_response", label: "文本模型原始返回", relativePath: "planning-response.txt" })
+  await pushIfExists({ id: `${taskId}_planning_audit`, assetType: "planning_audit", label: "文本规划审计 JSON", relativePath: "planning-audit.json" })
+  await pushIfExists({ id: `${taskId}_storyboard`, assetType: "storyboard", label: "分镜 JSON", relativePath: "storyboard.json" })
+  await pushIfExists({ id: `${taskId}_subtitles`, assetType: "subtitles", label: "英文字幕", relativePath: "subtitles.srt" })
+  await pushIfExists({ id: `${taskId}_audio`, assetType: "audio", label: "英文配音", relativePath: "narration.mp3" })
+  await pushIfExists({ id: `${taskId}_video`, assetType: "video_bundle", label: "最终视频", relativePath: path.join("video", "final-with-audio.mp4") })
+
+  const manifestPath = path.join(exportDir, "keyframes", "manifest.json")
+  const manifestExists = await fs
+    .stat(manifestPath)
+    .then((stats) => stats.isFile())
+    .catch(() => false)
+
+  if (manifestExists) {
+    assets.push({
+      id: `${taskId}_keyframes`,
+      taskId,
+      assetType: "keyframe_bundle",
+      label: "关键帧包",
+      status: "ready",
+      path: manifestPath,
+      createdAt,
+    })
+
+    try {
+      const rawManifest = await fs.readFile(manifestPath, "utf8")
+      const manifest = JSON.parse(rawManifest) as {
+        frames?: Array<{
+          sceneId?: string
+          sceneIndex?: number
+          title?: string
+          fileName?: string
+          filePath?: string
+        }>
+      }
+      for (const frame of manifest.frames ?? []) {
+        const sceneId = `${frame.sceneId ?? `scene_${frame.sceneIndex ?? assets.length}`}`.trim()
+        const sceneIndex = typeof frame.sceneIndex === "number" ? frame.sceneIndex : assets.length - 1
+        const imagePath = frame.filePath?.trim()
+          ? frame.filePath.trim()
+          : frame.fileName
+            ? path.join(path.dirname(manifestPath), frame.fileName)
+            : null
+        if (!imagePath) {
+          continue
+        }
+        const imageExists = await fs
+          .stat(imagePath)
+          .then((stats) => stats.isFile())
+          .catch(() => false)
+        if (!imageExists) {
+          continue
+        }
+
+        assets.push({
+          id: `${taskId}_keyframe_${sceneId}`,
+          taskId,
+          assetType: "keyframe_image",
+          label: `关键画面 ${sceneIndex + 1}${frame.title ? ` · ${frame.title}` : ""}`,
+          status: "ready",
+          path: imagePath,
+          createdAt,
+        })
+      }
+    } catch {
+      // Ignore malformed manifests and fall back to the bundle record only.
+    }
+  }
+
+  return assets
+}
+
+async function readMergedTaskAssets(taskId: string) {
+  const storedAssets = await readTaskAssets(taskId)
+  const inferredAssets = await inferExportedAssets(taskId)
+  const merged = new Map<string, AssetRecord>()
+
+  for (const asset of inferredAssets) {
+    merged.set(asset.id, asset)
+  }
+  for (const asset of storedAssets) {
+    merged.set(asset.id, asset)
+  }
+
+  return [...merged.values()]
 }
 
 export function normalizeSceneReviewMetadata(scene: StoryboardScene) {
@@ -375,6 +555,170 @@ function applyDerivedReviewState(detail: TaskDetail, currentStatus: TaskStatus) 
   }
 }
 
+function inferBaseTaskStatusFromDetail(detail: TaskDetail): TaskStatus {
+  const statusDetail = detail.statusDetail ?? ""
+
+  if (statusDetail.includes("终止") || detail.cancelRequestedAt) {
+    return "canceled"
+  }
+
+  if (detail.failureReason || statusDetail.includes("失败")) {
+    return "failed"
+  }
+
+  if (detail.actualDurationSec != null || detail.blueprintStatus === "completed") {
+    return "completed"
+  }
+
+  if (
+    detail.blueprintStatus === "ready_for_review" ||
+    detail.blueprintStatus === "approved" ||
+    detail.blueprintStatus === "rejected"
+  ) {
+    return "waiting_review"
+  }
+
+  if (
+    detail.blueprintStatus === "queued_for_video" ||
+    detail.blueprintStatus === "video_generating" ||
+    statusDetail.includes("准备") ||
+    statusDetail.includes("生成") ||
+    statusDetail.includes("合成") ||
+    statusDetail.includes("复用")
+  ) {
+    return "running"
+  }
+
+  return "queued"
+}
+
+function inferProgressPctFromTaskStatus(status: TaskStatus, reviewStage: ReviewStageId | null) {
+  if (status === "completed") {
+    return 100
+  }
+
+  if (status === "waiting_review") {
+    return reviewStage === "keyframe_review" ? 45 : 35
+  }
+
+  if (status === "running") {
+    return 72
+  }
+
+  if (status === "failed" || status === "canceled") {
+    return 65
+  }
+
+  return 0
+}
+
+function isQueuedBeforeWorkerStarts(detail: TaskDetail) {
+  return (
+    detail.blueprintStatus === "pending_generation" &&
+    detail.actualDurationSec == null &&
+    !detail.failureReason &&
+    !detail.cancelRequestedAt &&
+    (detail.statusDetail ?? "") === "等待 worker 开始处理"
+  )
+}
+
+function synthesizeTaskSummaryFromDetail(detail: TaskDetail): TaskSummary {
+  const createdAt = inferCreatedAtFromTaskId(detail.taskId, detail.updatedAt)
+  const estimatedCost = estimateCost(detail.taskRunConfig.modeId)
+
+  if (isQueuedBeforeWorkerStarts(detail)) {
+    const reviewSummary = createDefaultReviewSummary()
+    return normalizeTaskSummaryRecord({
+      id: detail.taskId,
+      projectId: detail.projectId,
+      title: detail.title,
+      modeId: detail.taskRunConfig.modeId,
+      executionMode: detail.taskRunConfig.executionMode,
+      channelId: detail.taskRunConfig.channelId,
+      terminalPresetId: detail.taskRunConfig.terminalPresetId,
+      renderSpecJson: detail.taskRunConfig.renderSpecJson,
+      targetDurationSec: detail.taskRunConfig.targetDurationSec,
+      generationMode: detail.taskRunConfig.generationMode,
+      audioStrategy: detail.taskRunConfig.audioStrategy,
+      generationRoute: detail.taskRunConfig.generationRoute,
+      routeReason: detail.taskRunConfig.routeReason,
+      planningVersion: detail.taskRunConfig.planningVersion,
+      blueprintVersion: detail.blueprintVersion,
+      blueprintStatus: detail.blueprintStatus,
+      actualDurationSec: detail.actualDurationSec ?? null,
+      failureReason: null,
+      statusDetail: detail.statusDetail ?? null,
+      cancelRequestedAt: null,
+      status: "queued",
+      progressPct: 0,
+      retryCount: 0,
+      estimatedCostCny: estimatedCost.budgetUsagePct / 100 * detail.taskRunConfig.budgetLimitCny,
+      createdAt,
+      updatedAt: detail.updatedAt,
+      reviewStage: reviewSummary.reviewStage,
+      pendingReviewCount: reviewSummary.pendingReviewCount,
+      reviewUpdatedAt: reviewSummary.reviewUpdatedAt,
+    })
+  }
+
+  const baseStatus = inferBaseTaskStatusFromDetail(detail)
+  const derived = applyDerivedReviewState(detail, baseStatus)
+  const status = derived.status
+
+  return normalizeTaskSummaryRecord({
+    id: detail.taskId,
+    projectId: detail.projectId,
+    title: detail.title,
+    modeId: detail.taskRunConfig.modeId,
+    executionMode: detail.taskRunConfig.executionMode,
+    channelId: detail.taskRunConfig.channelId,
+    terminalPresetId: detail.taskRunConfig.terminalPresetId,
+    renderSpecJson: detail.taskRunConfig.renderSpecJson,
+    targetDurationSec: detail.taskRunConfig.targetDurationSec,
+    generationMode: detail.taskRunConfig.generationMode,
+    audioStrategy: detail.taskRunConfig.audioStrategy,
+    generationRoute: detail.taskRunConfig.generationRoute,
+    routeReason: detail.taskRunConfig.routeReason,
+    planningVersion: detail.taskRunConfig.planningVersion,
+    blueprintVersion: detail.blueprintVersion,
+    blueprintStatus: detail.blueprintStatus,
+    actualDurationSec: detail.actualDurationSec ?? null,
+    failureReason: detail.failureReason ?? null,
+    statusDetail: detail.statusDetail ?? null,
+    cancelRequestedAt: detail.cancelRequestedAt ?? null,
+    status,
+    progressPct: inferProgressPctFromTaskStatus(status, derived.reviewSummary.reviewStage),
+    retryCount: status === "failed" ? 1 : 0,
+    estimatedCostCny: estimatedCost.budgetUsagePct / 100 * detail.taskRunConfig.budgetLimitCny,
+    createdAt,
+    updatedAt: detail.updatedAt,
+    reviewStage: derived.reviewSummary.reviewStage,
+    pendingReviewCount: derived.reviewSummary.pendingReviewCount,
+    reviewUpdatedAt: derived.reviewSummary.reviewUpdatedAt,
+  })
+}
+
+async function readTaskSummariesWithRepair() {
+  const [tasks, details] = await Promise.all([readTaskSummaries(), readTaskDetails()])
+  const taskIds = new Set(tasks.map((task) => task.id))
+  const synthesized = Object.values(details)
+    .filter((detail) => !taskIds.has(detail.taskId))
+    .map((detail) => synthesizeTaskSummaryFromDetail(detail))
+
+  if (synthesized.length === 0) {
+    return tasks
+  }
+
+  const repaired = [...tasks, ...synthesized].sort((left, right) => {
+    const leftTime = Date.parse(left.createdAt || left.updatedAt)
+    const rightTime = Date.parse(right.createdAt || right.updatedAt)
+    return rightTime - leftTime
+  })
+
+  await writeTaskSummaries(repaired)
+  return repaired
+}
+
 function buildSceneReviewRequirements(taskRunConfig: TaskRunConfig) {
   return {
     requireStoryboardReview: taskRunConfig.requireStoryboardReview,
@@ -426,6 +770,8 @@ async function syncTaskSummaryFromDetail(
     nextSummary = {
       ...entry,
       status: derived.status,
+      statusDetail: detail.statusDetail ?? entry.statusDetail ?? null,
+      cancelRequestedAt: detail.cancelRequestedAt ?? entry.cancelRequestedAt ?? null,
       reviewStage: derived.reviewSummary.reviewStage,
       pendingReviewCount: derived.reviewSummary.pendingReviewCount,
       reviewUpdatedAt: derived.reviewSummary.reviewUpdatedAt,
@@ -442,7 +788,7 @@ async function syncTaskSummaryFromDetail(
 }
 
 export async function listTasks(): Promise<TaskSummary[]> {
-  return readTaskSummaries()
+  return readTaskSummariesWithRepair()
 }
 
 export async function getTaskDetail(taskId: string) {
@@ -458,38 +804,26 @@ export async function getTaskDetail(taskId: string) {
     task.channelId,
     task.targetDurationSec,
     task.generationMode,
+    {
+      projectId: task.projectId,
+      terminalPresetId: task.terminalPresetId,
+    },
   )
+  taskRunConfig.executionMode = task.executionMode
+  taskRunConfig.renderSpecJson = task.renderSpecJson
+  taskRunConfig.aspectRatio = task.renderSpecJson.aspectRatio
+  taskRunConfig.blueprintVersion = task.blueprintVersion
+  taskRunConfig.blueprintStatus = task.blueprintStatus
   if (existing) {
     const normalizedExisting = normalizeTaskDetailRecord(existing)
     const totalSceneDuration = normalizedExisting.scenes.reduce((total, scene) => total + scene.durationSec, 0)
     const hasExpectedDuration = existing.taskRunConfig.targetDurationSec === task.targetDurationSec
     const hasExpectedRoute = existing.taskRunConfig.generationRoute === task.generationRoute
     if (hasExpectedDuration && hasExpectedRoute && totalSceneDuration === task.targetDurationSec) {
-      const derived = applyDerivedReviewState(
-        {
-          ...normalizedExisting,
-          actualDurationSec: normalizedExisting.actualDurationSec ?? task.actualDurationSec,
-        },
-        task.status,
-      )
-      const summaryChanged =
-        task.reviewStage !== derived.reviewSummary.reviewStage ||
-        task.pendingReviewCount !== derived.reviewSummary.pendingReviewCount ||
-        task.reviewUpdatedAt !== derived.reviewSummary.reviewUpdatedAt ||
-        task.status !== derived.status
-      const detailChanged =
-        normalizedExisting.reviewStage !== derived.detail.reviewStage ||
-        normalizedExisting.pendingReviewCount !== derived.detail.pendingReviewCount ||
-        normalizedExisting.reviewUpdatedAt !== derived.detail.reviewUpdatedAt
-
-      if (detailChanged) {
-        await upsertTaskDetail(derived.detail)
+      return {
+        ...normalizedExisting,
+        actualDurationSec: normalizedExisting.actualDurationSec ?? task.actualDurationSec,
       }
-      if (summaryChanged) {
-        await syncTaskSummaryFromDetail(task, derived.detail, normalizedExisting.updatedAt)
-      }
-
-      return derived.detail
     }
 
     const rebuiltScenes = mergeSceneReviewMetadata(
@@ -513,7 +847,6 @@ export async function getTaskDetail(taskId: string) {
       task.status,
     ).detail
     await upsertTaskDetail(normalized)
-    await syncTaskSummaryFromDetail(task, normalized, normalized.updatedAt)
     return normalized
   }
 
@@ -521,9 +854,12 @@ export async function getTaskDetail(taskId: string) {
   const synthesized = applyDerivedReviewState(
     {
       taskId: task.id,
+      projectId: task.projectId,
       title: task.title,
       script,
       taskRunConfig,
+      blueprintVersion: task.blueprintVersion,
+      blueprintStatus: task.blueprintStatus,
       actualDurationSec: task.actualDurationSec,
       scenes: buildStoryboardScenes({
         script,
@@ -543,69 +879,95 @@ export async function getTaskDetail(taskId: string) {
 }
 
 export async function getTaskAssets(taskId: string) {
-  const assets = await readTaskAssets(taskId)
+  const assets = await readMergedTaskAssets(taskId)
   return Promise.all(assets.map((asset) => resolveAssetRecord(asset)))
 }
 
 export async function getTaskAsset(taskId: string, assetId: string) {
-  const assets = await readTaskAssets(taskId)
+  const assets = await readMergedTaskAssets(taskId)
   const asset = assets.find((item) => item.id === assetId) ?? null
   return asset ? resolveAssetRecord(asset) : null
 }
 
 export async function createTask(input: CreateTaskInput): Promise<{ task: TaskSummary; taskRunConfig: unknown }> {
+  const project = await getProjectById(input.projectId)
+  if (!project) {
+    throw new Error("PROJECT_NOT_FOUND")
+  }
   const tasks = await listTasks()
-  const estimate = estimateCost(input.modeId)
+  const modeId = input.modeId
+  const channelId = input.channelId
+  const generationMode = input.generationMode
+  const estimate = estimateCost(modeId)
   const timestamp = now()
   let taskRunConfig = buildDefaultTaskRunConfig(
-    input.modeId,
-    input.channelId,
+    modeId,
+    channelId,
     input.targetDurationSec,
-    input.generationMode,
+    generationMode,
+    {
+      projectId: input.projectId,
+      terminalPresetId: input.terminalPresetId,
+      audioStrategy: input.audioStrategy,
+    },
   )
   const resolvedSlots = await resolveEffectiveSlots({
-    modeId: input.modeId,
-    taskOverrides: input.modelOverrides,
+    modeId,
   })
   taskRunConfig = mapResolvedSlotsToTaskConfig(
     {
       ...taskRunConfig,
-      modelOverrides: input.modelOverrides,
+      blueprintVersion: 1,
+      blueprintStatus: "pending_generation",
+      modelOverrides: undefined,
     },
     resolvedSlots,
   )
   const taskId = `task_${Date.now()}`
-  const detail = applyDerivedReviewState(
-    {
-      taskId,
-      title: input.title,
-      script: input.script,
-      taskRunConfig,
+  const detail = normalizeTaskDetailRecord({
+    taskId,
+    projectId: input.projectId,
+    title: input.title,
+    script: input.script,
+    taskRunConfig,
+    blueprintVersion: 1,
+      blueprintStatus: "pending_generation",
       actualDurationSec: null,
+      failureReason: null,
+      statusDetail: "等待 worker 开始处理",
+      cancelRequestedAt: null,
       scenes: buildStoryboardScenes({
-        script: input.script,
-        targetDurationSec: input.targetDurationSec,
-        maxSceneDurationSec: resolveVideoModelCapability(taskRunConfig.videoModel.id).maxSingleShotSec,
-        aspectRatio: taskRunConfig.aspectRatio,
-        reviewRequirements: buildSceneReviewRequirements(taskRunConfig),
-      }),
-      updatedAt: timestamp,
-      ...createDefaultReviewSummary(),
-    },
-    "queued",
-  ).detail
+      script: input.script,
+      targetDurationSec: input.targetDurationSec,
+      maxSceneDurationSec: resolveVideoModelCapability(taskRunConfig.videoModel.id).maxSingleShotSec,
+      aspectRatio: taskRunConfig.aspectRatio,
+      reviewRequirements: buildSceneReviewRequirements(taskRunConfig),
+    }),
+    updatedAt: timestamp,
+    ...createDefaultReviewSummary(),
+  })
   const task: TaskSummary = {
     id: taskId,
+    projectId: input.projectId,
     title: input.title,
-    modeId: input.modeId,
-    channelId: input.channelId,
+    modeId,
+    executionMode: taskRunConfig.executionMode,
+    channelId,
+    terminalPresetId: taskRunConfig.terminalPresetId,
+    renderSpecJson: taskRunConfig.renderSpecJson,
     targetDurationSec: input.targetDurationSec,
-    generationMode: input.generationMode,
+    generationMode,
+    audioStrategy: taskRunConfig.audioStrategy,
     generationRoute: taskRunConfig.generationRoute,
     routeReason: taskRunConfig.routeReason,
     planningVersion: taskRunConfig.planningVersion,
+    blueprintVersion: detail.blueprintVersion,
+    blueprintStatus: detail.blueprintStatus,
     actualDurationSec: null,
-    status: resolveTaskStatusForReview("queued", detail.reviewStage ?? null),
+    failureReason: null,
+    statusDetail: "等待 worker 开始处理",
+    cancelRequestedAt: null,
+    status: "queued",
     progressPct: 0,
     retryCount: 0,
     estimatedCostCny: estimate.budgetUsagePct / 100 * taskRunConfig.budgetLimitCny,
@@ -619,10 +981,91 @@ export async function createTask(input: CreateTaskInput): Promise<{ task: TaskSu
   tasks.unshift(task)
   await writeTaskSummaries(tasks)
   await upsertTaskDetail(detail)
+  await createInitialTaskBlueprintRecord(detail)
 
   return {
     task,
     taskRunConfig,
+  }
+}
+
+export async function cancelTask(taskId: string, queue: {
+  removedJobIds: string[]
+  hadActiveJob: boolean
+}) {
+  const tasks = await listTasks()
+  const task = tasks.find((entry) => entry.id === taskId)
+  if (!task) {
+    return null
+  }
+
+  const detail = await readTaskDetail(taskId)
+  if (!detail) {
+    return null
+  }
+
+  const canceledAt = now()
+  const statusDetail = queue.hadActiveJob ? "正在终止当前任务" : "任务已终止"
+  const nextSummary = normalizeTaskSummaryRecord({
+    ...task,
+    status: "canceled",
+    failureReason: null,
+    statusDetail,
+    cancelRequestedAt: canceledAt,
+    updatedAt: canceledAt,
+  })
+  const nextDetail = normalizeTaskDetailRecord({
+    ...detail,
+    failureReason: null,
+    statusDetail,
+    cancelRequestedAt: canceledAt,
+    updatedAt: canceledAt,
+  })
+
+  await writeTaskSummaries(tasks.map((entry) => (entry.id === taskId ? nextSummary : entry)))
+  await upsertTaskDetail(nextDetail)
+
+  return {
+    summary: nextSummary,
+    detail: nextDetail,
+  }
+}
+
+export async function resumeFailedTask(taskId: string) {
+  const tasks = await listTasks()
+  const task = tasks.find((entry) => entry.id === taskId)
+  if (!task) {
+    return null
+  }
+
+  const detail = await readTaskDetail(taskId)
+  if (!detail) {
+    return null
+  }
+
+  const resumedAt = now()
+  const nextSummary = normalizeTaskSummaryRecord({
+    ...task,
+    status: "queued",
+    failureReason: null,
+    statusDetail: "等待 worker 恢复处理",
+    cancelRequestedAt: null,
+    updatedAt: resumedAt,
+  })
+  const nextDetail = normalizeTaskDetailRecord({
+    ...detail,
+    failureReason: null,
+    statusDetail: "等待 worker 恢复处理",
+    cancelRequestedAt: null,
+    updatedAt: resumedAt,
+  })
+
+  await writeTaskSummaries(tasks.map((entry) => (entry.id === taskId ? nextSummary : entry)))
+  await upsertTaskDetail(nextDetail)
+
+  return {
+    summary: nextSummary,
+    detail: nextDetail,
   }
 }
 

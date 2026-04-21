@@ -69,9 +69,63 @@ export async function assertQueueAvailable() {
   await withQueue(async () => undefined)
 }
 
-export async function enqueueTask(taskId: string) {
+export async function enqueueTask(
+  taskId: string,
+  options: {
+    reason?: string
+    continueExecution?: boolean
+    blueprintVersion?: number
+    stage?: string
+    resumeFrom?: string
+  } = {},
+) {
   return withQueue(async (queue) => {
-    await queue.add("process-task", { taskId })
-    return { queued: true as const }
+    const reason = options.reason ?? options.resumeFrom ?? "initial_create"
+    const jobId = `${taskId}:${reason}:${Date.now()}`
+    await queue.add("process-task", {
+      taskId,
+      reason,
+      continueExecution: options.continueExecution ?? false,
+      blueprintVersion: options.blueprintVersion ?? null,
+      stage: options.stage ?? null,
+      resumeFrom: options.resumeFrom ?? null,
+      enqueuedAt: new Date().toISOString(),
+    }, {
+      jobId,
+    })
+    return {
+      queued: true as const,
+      jobId,
+      reason,
+      continueExecution: options.continueExecution ?? false,
+      blueprintVersion: options.blueprintVersion ?? null,
+      stage: options.stage ?? null,
+      resumeFrom: options.resumeFrom ?? null,
+    }
+  })
+}
+
+export async function cancelTaskJobs(taskId: string) {
+  return withQueue(async (queue) => {
+    const jobs = await queue.getJobs(["waiting", "delayed", "prioritized", "paused", "active"], 0, 200, true)
+    const matchedJobs = jobs.filter((job) => job.data?.taskId === taskId)
+    const removedJobIds: string[] = []
+    let hadActiveJob = false
+
+    for (const job of matchedJobs) {
+      const state = await job.getState()
+      if (state === "active") {
+        hadActiveJob = true
+        continue
+      }
+
+      await job.remove()
+      removedJobIds.push(String(job.id))
+    }
+
+    return {
+      removedJobIds,
+      hadActiveJob,
+    }
   })
 }

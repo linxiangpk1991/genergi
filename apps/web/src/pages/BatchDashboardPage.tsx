@@ -3,8 +3,8 @@ import { Link, useSearchParams } from "react-router-dom"
 import {
   api,
   buildAssetCenterUrl,
-  buildKeyframeReviewUrl,
-  buildStoryboardReviewUrl,
+  buildTaskReviewUrl,
+  getAudioStrategyLabel,
   type RuntimeStatusResponse,
   type TaskSummary,
 } from "../api"
@@ -20,12 +20,20 @@ function formatDurationDelta(task: TaskSummary) {
 }
 
 function getTaskExceptionLabel(task: TaskSummary) {
-  if (task.reviewStage === "storyboard_review") {
-    return `分镜待审 ${task.pendingReviewCount ?? 0} 项`
+  if (task.statusDetail?.trim()) {
+    return task.statusDetail.trim()
   }
 
-  if (task.reviewStage === "keyframe_review") {
-    return `关键帧待审 ${task.pendingReviewCount ?? 0} 项`
+  if (task.executionMode === "review_required" && task.blueprintStatus === "ready_for_review") {
+    return `蓝图待审 v${task.blueprintVersion}`
+  }
+
+  if (task.executionMode === "review_required" && task.blueprintStatus === "approved") {
+    return `蓝图已通过，待继续执行 v${task.blueprintVersion}`
+  }
+
+  if (task.executionMode === "review_required" && task.blueprintStatus === "rejected") {
+    return `蓝图已驳回，待重建 v${task.blueprintVersion}`
   }
 
   if (task.status === "failed") {
@@ -39,21 +47,37 @@ function getTaskExceptionLabel(task: TaskSummary) {
   return "查看当前任务上下文"
 }
 
+function canCancelTask(task: TaskSummary) {
+  return task.status === "queued" || task.status === "running"
+}
+
+function canResumeFailedTask(task: TaskSummary) {
+  return task.status === "failed"
+}
+
 function getTaskActions(task: TaskSummary) {
   const actions: Array<{ label: string; to: string; tone: "primary" | "ghost" }> = []
 
-  if (task.reviewStage === "storyboard_review") {
+  if (task.executionMode === "review_required" && task.blueprintStatus === "ready_for_review") {
     actions.push({
-      label: `继续分镜审阅${task.pendingReviewCount ? ` · ${task.pendingReviewCount}` : ""}`,
-      to: buildStoryboardReviewUrl(task.id),
+      label: `进入任务审核 · v${task.blueprintVersion}`,
+      to: buildTaskReviewUrl(task),
       tone: "primary",
     })
   }
 
-  if (task.reviewStage === "keyframe_review") {
+  if (task.executionMode === "review_required" && task.blueprintStatus === "approved") {
     actions.push({
-      label: `继续关键帧审阅${task.pendingReviewCount ? ` · ${task.pendingReviewCount}` : ""}`,
-      to: buildKeyframeReviewUrl(task.id),
+      label: `继续完整生成 · v${task.blueprintVersion}`,
+      to: buildTaskReviewUrl(task),
+      tone: "primary",
+    })
+  }
+
+  if (task.executionMode === "review_required" && task.blueprintStatus === "rejected") {
+    actions.push({
+      label: `查看驳回蓝图 · v${task.blueprintVersion}`,
+      to: buildTaskReviewUrl(task),
       tone: "primary",
     })
   }
@@ -82,6 +106,9 @@ export function BatchDashboardPage() {
   const [lastRefreshAt, setLastRefreshAt] = useState<string>("")
   const [isStale, setIsStale] = useState(false)
   const [loadError, setLoadError] = useState("")
+  const [actionError, setActionError] = useState("")
+  const [cancelingTaskId, setCancelingTaskId] = useState("")
+  const [resumingTaskId, setResumingTaskId] = useState("")
 
   useEffect(() => {
     async function load() {
@@ -116,6 +143,32 @@ export function BatchDashboardPage() {
     return () => window.clearInterval(timer)
   }, [])
 
+  async function handleCancelTask(taskId: string) {
+    setActionError("")
+    setCancelingTaskId(taskId)
+    try {
+      const response = await api.cancelTask(taskId)
+      setTasks((current) => current.map((task) => (task.id === taskId ? response.task : task)))
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "终止任务失败")
+    } finally {
+      setCancelingTaskId("")
+    }
+  }
+
+  async function handleResumeFailedTask(taskId: string) {
+    setActionError("")
+    setResumingTaskId(taskId)
+    try {
+      const response = await api.resumeFailedTask(taskId)
+      setTasks((current) => current.map((task) => (task.id === taskId ? response.task : task)))
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "恢复运行失败")
+    } finally {
+      setResumingTaskId("")
+    }
+  }
+
   const sortedTasks = useMemo(
     () => [...tasks].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
     [tasks],
@@ -125,10 +178,15 @@ export function BatchDashboardPage() {
     const runningCount = tasks.filter((task) => task.status === "running").length
     const completedCount = tasks.filter((task) => task.status === "completed").length
     const failedCount = tasks.filter((task) => task.status === "failed").length
-    const enhancedCount = tasks.filter((task) => task.generationMode === "system_enhanced").length
+    const sourceLockedCount = tasks.filter((task) => task.generationMode === "user_locked").length
+    const legacyEnhancedCount = tasks.filter((task) => task.generationMode === "system_enhanced").length
     const durationReadyCount = tasks.filter((task) => task.actualDurationSec != null).length
-    const storyboardReviewCount = tasks.filter((task) => task.reviewStage === "storyboard_review").length
-    const keyframeReviewCount = tasks.filter((task) => task.reviewStage === "keyframe_review").length
+    const blueprintReviewCount = tasks.filter(
+      (task) => task.executionMode === "review_required" && task.blueprintStatus === "ready_for_review",
+    ).length
+    const blueprintResumeCount = tasks.filter(
+      (task) => task.executionMode === "review_required" && task.blueprintStatus === "approved",
+    ).length
     const inToleranceCount = tasks.filter((task) => {
       if (task.actualDurationSec == null) {
         return false
@@ -140,10 +198,11 @@ export function BatchDashboardPage() {
       runningCount,
       completedCount,
       failedCount,
-      enhancedCount,
+      sourceLockedCount,
+      legacyEnhancedCount,
       durationReadyCount,
-      storyboardReviewCount,
-      keyframeReviewCount,
+      blueprintReviewCount,
+      blueprintResumeCount,
       inToleranceCount,
     }
   }, [tasks])
@@ -153,8 +212,10 @@ export function BatchDashboardPage() {
       sortedTasks
         .filter(
           (task) =>
-            task.reviewStage === "storyboard_review" ||
-            task.reviewStage === "keyframe_review" ||
+            (task.executionMode === "review_required" &&
+              (task.blueprintStatus === "ready_for_review" ||
+                task.blueprintStatus === "approved" ||
+                task.blueprintStatus === "rejected")) ||
             task.status === "failed" ||
             (task.actualDurationSec != null && Math.abs(task.actualDurationSec - task.targetDurationSec) > 2),
         )
@@ -184,15 +245,20 @@ export function BatchDashboardPage() {
               {loadError}
             </div>
           ) : null}
+          {actionError ? (
+            <div className="review-inline-note review-inline-note--danger" role="alert">
+              {actionError}
+            </div>
+          ) : null}
           <div className="metric-grid">
             <div className="metric-card"><span>运行中</span><strong>{metrics.runningCount}</strong></div>
             <div className="metric-card"><span>已完成</span><strong>{metrics.completedCount}</strong></div>
             <div className="metric-card"><span>异常任务</span><strong>{metrics.failedCount}</strong></div>
-            <div className="metric-card"><span>增强模式</span><strong>{metrics.enhancedCount}</strong></div>
+            <div className="metric-card"><span>保真优先</span><strong>{metrics.sourceLockedCount}</strong></div>
             <div className="metric-card"><span>已有成片</span><strong>{metrics.durationReadyCount}</strong></div>
             <div className="metric-card"><span>时长达标</span><strong>{metrics.inToleranceCount}</strong></div>
-            <div className="metric-card"><span>待审分镜</span><strong>{metrics.storyboardReviewCount}</strong></div>
-            <div className="metric-card"><span>待审关键帧</span><strong>{metrics.keyframeReviewCount}</strong></div>
+            <div className="metric-card"><span>待审蓝图</span><strong>{metrics.blueprintReviewCount}</strong></div>
+            <div className="metric-card"><span>待继续执行</span><strong>{metrics.blueprintResumeCount}</strong></div>
           </div>
         </section>
 
@@ -216,23 +282,23 @@ export function BatchDashboardPage() {
                       {isFocused ? <span className="pill pill--sm pill--accent">当前定位</span> : null}
                     </div>
                     <span>
-                      {task.targetDurationSec}s · {task.planning?.generationRouteLabel ?? "待预判"} · {task.planning?.generationPreferenceLabel ?? "待接入"}
-                      {task.reviewStage === "storyboard_review"
-                        ? ` · 待审分镜(${task.pendingReviewCount ?? 0})`
-                        : task.reviewStage === "keyframe_review"
-                          ? ` · 待审关键帧(${task.pendingReviewCount ?? 0})`
-                          : task.reviewStage === "auto_qa"
-                            ? " · 自动 QA"
+                      {task.targetDurationSec}s · {task.planning?.generationRouteLabel ?? "待预判"} · {task.planning?.generationPreferenceLabel ?? "待接入"} · {getAudioStrategyLabel(task.audioStrategy)}
+                      {task.executionMode === "review_required" && task.blueprintStatus === "ready_for_review"
+                        ? ` · 待审蓝图(v${task.blueprintVersion})`
+                        : task.executionMode === "review_required" && task.blueprintStatus === "approved"
+                          ? ` · 已通过待继续(v${task.blueprintVersion})`
+                          : task.executionMode === "review_required" && task.blueprintStatus === "rejected"
+                            ? ` · 已驳回(v${task.blueprintVersion})`
                             : ""}
                     </span>
                   </div>
                   <div>
                     <strong>{task.progressPct}%</strong>
-                    <span>重试 {task.retryCount} · {task.actualDurationSec ? `偏差 ${formatDurationDelta(task)}` : "等待成片"}</span>
+                    <span>{task.statusDetail ?? `重试 ${task.retryCount} · ${task.actualDurationSec ? `偏差 ${formatDurationDelta(task)}` : "等待成片"}`}</span>
                   </div>
                   <div>
                     <strong>¥{task.estimatedCostCny.toFixed(2)}</strong>
-                    <span>{task.status} · {task.channelId}</span>
+                    <span>{task.status} · {task.channelId} · {getTaskExceptionLabel(task)}</span>
                   </div>
                   <div className="task-item__actions">
                     {actions.map((action, index) => (
@@ -244,6 +310,26 @@ export function BatchDashboardPage() {
                         {action.label}
                       </Link>
                     ))}
+                    {canCancelTask(task) ? (
+                      <button
+                        className="ghost-button"
+                        disabled={cancelingTaskId === task.id}
+                        onClick={() => void handleCancelTask(task.id)}
+                        type="button"
+                      >
+                        {cancelingTaskId === task.id ? "终止中..." : "终止任务"}
+                      </button>
+                    ) : null}
+                    {canResumeFailedTask(task) ? (
+                      <button
+                        className="ghost-button"
+                        disabled={resumingTaskId === task.id}
+                        onClick={() => void handleResumeFailedTask(task.id)}
+                        type="button"
+                      >
+                        {resumingTaskId === task.id ? "恢复中..." : "恢复运行"}
+                      </button>
+                    ) : null}
                   </div>
                 </div>
               )
@@ -266,7 +352,7 @@ export function BatchDashboardPage() {
             <div className="task-list compact-list">
               <div className="task-item"><strong>多段成片</strong><span>{tasks.filter((task) => task.generationRoute === "multi_scene").length} 条任务</span></div>
               <div className="task-item"><strong>忠于原脚本</strong><span>{tasks.filter((task) => task.generationMode === "user_locked").length} 条任务</span></div>
-              <div className="task-item"><strong>启用系统增强</strong><span>{metrics.enhancedCount} 条任务</span></div>
+              <div className="task-item"><strong>历史增强任务</strong><span>{metrics.legacyEnhancedCount} 条任务</span></div>
             </div>
           </section>
 

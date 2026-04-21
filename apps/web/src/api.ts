@@ -62,10 +62,25 @@ export type HealthResponse = {
 }
 
 export type GenerationPreferenceId = "user_locked" | "system_enhanced"
+export type AudioStrategy = "tts_only" | "native_plus_tts_ducked"
 
 export type GenerationRouteId = "single_shot" | "multi_scene"
 
 export type ReviewStageId = "storyboard_review" | "keyframe_review" | "auto_qa"
+export type ExecutionMode = "automated" | "review_required"
+export type TerminalPresetId =
+  | "phone_portrait"
+  | "phone_landscape"
+  | "tablet_portrait"
+  | "tablet_landscape"
+export type BlueprintStatus =
+  | "pending_generation"
+  | "ready_for_review"
+  | "rejected"
+  | "approved"
+  | "queued_for_video"
+  | "video_generating"
+  | "completed"
 
 export type ReviewDecision = "approved" | "rejected"
 
@@ -89,13 +104,32 @@ export type TaskPlanningSnapshot = {
 export type BootstrapResponse = {
   brand: { productName: string; companyName: string; domain: string }
   durationOptions: number[]
-  channels: Array<{ id: string; label: string; description: string }>
-  modes: Array<{ id: string; label: string; description: string; budgetLimitCny: number; maxSingleShotSec: number }>
-  generationPreferences: Array<{
-    id: GenerationPreferenceId
-    label: string
-    description: string
-  }>
+}
+
+export type RenderSpec = {
+  terminalPresetId: TerminalPresetId
+  width: number
+  height: number
+  aspectRatio: string
+  safeArea: {
+    topPct: number
+    rightPct: number
+    bottomPct: number
+    leftPct: number
+  }
+  compositionGuideline: string
+  motionGuideline: string
+}
+
+export type ProjectRecord = {
+  id: string
+  name: string
+  description?: string | null
+  brandDirection?: string | null
+  defaultChannelIds: string[]
+  reusableStyleConstraints: string[]
+  createdAt: string
+  updatedAt: string
 }
 
 export type SessionResponse = {
@@ -149,15 +183,25 @@ export type RuntimeStatusResponse = {
 
 export type TaskSummary = {
   id: string
+  projectId: string
   title: string
   modeId: string
+  executionMode: ExecutionMode
   channelId: string
+  terminalPresetId: TerminalPresetId
+  renderSpecJson: RenderSpec
   targetDurationSec: number
   generationMode: GenerationPreferenceId
+  audioStrategy: "tts_only" | "native_plus_tts_ducked"
   generationRoute: GenerationRouteId
   routeReason: string
   planningVersion: string
+  blueprintVersion: number
+  blueprintStatus: BlueprintStatus
   actualDurationSec: number | null
+  failureReason?: string | null
+  statusDetail?: string | null
+  cancelRequestedAt?: string | null
   status: string
   progressPct: number
   retryCount: number
@@ -174,14 +218,20 @@ export type StoryboardScene = {
   id: string
   index: number
   title: string
+  sceneGoal?: string
+  voiceoverScript?: string
+  startFrameDescription?: string
   script: string
   imagePrompt: string
   videoPrompt: string
+  startFrameIntent?: string
+  endFrameIntent?: string
   durationSec: number
   startLabel: string
   endLabel: string
   reviewStatus: "pending" | "approved" | "rejected"
   keyframeStatus: "pending" | "approved" | "rejected"
+  continuityConstraints?: string[]
   reviewNote?: string
   reviewedAt?: string
   keyframeReviewNote?: string
@@ -190,19 +240,52 @@ export type StoryboardScene = {
 
 export type TaskDetail = {
   taskId: string
+  projectId: string
   title: string
   script: string
+  blueprintVersion: number
+  blueprintStatus: BlueprintStatus
+  failureReason?: string | null
+  statusDetail?: string | null
+  cancelRequestedAt?: string | null
   taskRunConfig: {
+    projectId: string
     modeId: string
+    executionMode: ExecutionMode
     channelId: string
+    terminalPresetId: TerminalPresetId
+    renderSpecJson: RenderSpec
     targetDurationSec: number
     generationMode: GenerationPreferenceId
+    audioStrategy: "tts_only" | "native_plus_tts_ducked"
     generationRoute: GenerationRouteId
     routeReason: string
     planningVersion: string
-    imageModel: {
+    blueprintVersion: number
+    blueprintStatus: BlueprintStatus
+    textModel: {
+      id: string
       label: string
+      provider: string
     }
+    imageModel: {
+      id: string
+      label: string
+      provider: string
+    }
+    videoModel: {
+      id: string
+      label: string
+      provider: string
+    }
+    ttsProvider: string
+    contentLocale: "en"
+    operatorLocale: "zh-CN"
+    requireStoryboardReview: boolean
+    requireKeyframeReview: boolean
+    budgetLimitCny: number
+    aspectRatio: string
+    slotSnapshots: Array<Record<string, unknown>>
   }
   visualStyleGuide?: string
   ctaLine?: string
@@ -220,10 +303,43 @@ export type ReviewMutationResponse = {
   detail: TaskDetail
 }
 
+export type TaskCancelResponse = {
+  task: TaskSummary
+  detail: TaskDetail
+  queue: {
+    removedJobIds: string[]
+    hadActiveJob: boolean
+  }
+}
+
+export type TaskResumeResponse = {
+  task: TaskSummary
+  detail: TaskDetail
+  queue: {
+    queued: boolean
+    reason: string
+    continueExecution: boolean
+    blueprintVersion?: number | null
+    stage?: string | null
+    resumeFrom?: string | null
+  }
+}
+
 export type AssetRecord = {
   id: string
   taskId: string
-  assetType: "script" | "storyboard" | "subtitles" | "audio" | "keyframe_bundle" | "video_bundle"
+  assetType:
+    | "script"
+    | "source_script"
+    | "planning_prompt"
+    | "planning_response"
+    | "planning_audit"
+    | "storyboard"
+    | "subtitles"
+    | "audio"
+    | "keyframe_bundle"
+    | "keyframe_image"
+    | "video_bundle"
   label: string
   status: "ready" | "pending"
   path: string
@@ -243,6 +359,72 @@ export type AssetRecord = {
   downloadFileName: string
 }
 
+export type PlannedExecutionBlueprint = {
+  executionMode: ExecutionMode
+  renderSpec: RenderSpec
+  globalTheme: string
+  visualStyleGuide: string
+  subjectProfile: string
+  productProfile: string
+  backgroundConstraints: string[]
+  negativeConstraints: string[]
+  totalVoiceoverScript: string
+  sceneContracts: Array<{
+    id: string
+    index: number
+    sceneGoal: string
+    voiceoverScript: string
+    startFrameDescription: string
+    imagePrompt: string
+    videoPrompt: string
+    startFrameIntent: string
+    endFrameIntent: string
+    durationSec: number
+    transitionHint: string
+    continuityConstraints: string[]
+  }>
+}
+
+export type TaskBlueprintRecord = {
+  taskId: string
+  version: number
+  status: BlueprintStatus
+  createdAt: string
+  updatedAt: string
+  blueprint: PlannedExecutionBlueprint & {
+    taskId: string
+    projectId: string
+    version: number
+    createdAt: string
+  }
+  keyframeManifestPath?: string | null
+}
+
+export type TaskBlueprintReviewRecord = {
+  taskId: string
+  blueprintVersion: number
+  decision: ReviewDecision
+  note?: string | null
+  decidedAt: string
+}
+
+export type ProjectApprovedBlueprintRecord = {
+  projectId: string
+  taskId: string
+  blueprintVersion: number
+  approvedAt: string
+  blueprint: TaskBlueprintRecord["blueprint"]
+}
+
+export type BlueprintCurrentResponse = {
+  blueprint: TaskBlueprintRecord
+  review: TaskBlueprintReviewRecord | null
+  nextStage: {
+    canResumeExecution: boolean
+    resumePath: string | null
+  }
+}
+
 export function buildAssetDownloadUrl(taskId: string, assetId: string) {
   return `${API_BASE_URL}/api/tasks/${taskId}/assets/${assetId}/download`
 }
@@ -255,14 +437,6 @@ export function buildKeyframePreviewUrl(taskId: string, sceneId: string) {
   return `${API_BASE_URL}/api/tasks/${taskId}/keyframes/${sceneId}/preview`
 }
 
-export function buildStoryboardReviewUrl(taskId?: string, sceneId?: string) {
-  return buildWorkspaceUrl("/storyboard-review", { taskId, sceneId })
-}
-
-export function buildKeyframeReviewUrl(taskId?: string, sceneId?: string) {
-  return buildWorkspaceUrl("/keyframe-review", { taskId, sceneId })
-}
-
 export function buildBatchDashboardUrl(taskId?: string) {
   return buildWorkspaceUrl("/batch-dashboard", { taskId })
 }
@@ -271,13 +445,16 @@ export function buildAssetCenterUrl(taskId?: string) {
   return buildWorkspaceUrl("/asset-center", { taskId })
 }
 
-export function buildTaskReviewUrl(task: Pick<TaskSummary, "id" | "reviewStage">, sceneId?: string) {
-  if (task.reviewStage === "keyframe_review") {
-    return buildKeyframeReviewUrl(task.id, sceneId)
-  }
-
-  if (task.reviewStage === "storyboard_review") {
-    return buildStoryboardReviewUrl(task.id, sceneId)
+export function buildTaskReviewUrl(
+  task: Pick<TaskSummary, "id" | "executionMode" | "blueprintStatus">,
+) {
+  if (
+    task.executionMode === "review_required" &&
+    (task.blueprintStatus === "ready_for_review" ||
+      task.blueprintStatus === "approved" ||
+      task.blueprintStatus === "rejected")
+  ) {
+    return buildWorkspaceUrl("/task-review", { taskId: task.id })
   }
 
   return buildAssetCenterUrl(task.id)
@@ -411,14 +588,16 @@ export type UpdateModelDefaultsPayload = {
 }
 
 export type CreateTaskPayload = {
+  projectId: string
   title: string
   script: string
-  modeId: string
-  channelId: string
-  aspectRatio: string
+  terminalPresetId: TerminalPresetId
   targetDurationSec: number
-  generationMode?: GenerationPreferenceId
-  modelOverrides?: Partial<Record<ModelControlSlotType, { modelId?: string; providerId?: string }>>
+  audioStrategy: AudioStrategy
+}
+
+export function getAudioStrategyLabel(strategy: AudioStrategy | null | undefined) {
+  return strategy === "native_plus_tts_ducked" ? "原生音频 + TTS 混音" : "TTS 主导"
 }
 
 export const api = {
@@ -451,18 +630,58 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  listProjects: () => request<{ projects: ProjectRecord[] }>("/api/projects"),
+  getProjectLibrary: (projectId: string) =>
+    request<{ entries: ProjectApprovedBlueprintRecord[] }>(`/api/projects/${projectId}/library`),
   listTasks: () => request<{ tasks: TaskSummary[] }>("/api/tasks"),
   getTaskDetail: (taskId: string) => request<{ detail: TaskDetail }>(`/api/tasks/${taskId}`),
-  getTaskAssets: (taskId: string) => request<{ assets: AssetRecord[] }>(`/api/tasks/${taskId}/assets`),
-  submitStoryboardReview: (taskId: string, sceneId: string, payload: ReviewDecisionPayload) =>
-    request<ReviewMutationResponse>(`/api/tasks/${taskId}/reviews/storyboard_review/${sceneId}`, {
+  getTaskBlueprints: (taskId: string) => request<{ blueprints: TaskBlueprintRecord[] }>(`/api/tasks/${taskId}/blueprints`),
+  getTaskCurrentBlueprint: (taskId: string) =>
+    request<BlueprintCurrentResponse>(`/api/tasks/${taskId}/blueprints/current`),
+  createTaskBlueprint: (taskId: string, payload: {
+    blueprint: PlannedExecutionBlueprint
+    keyframeManifestPath?: string
+  }) =>
+    request<BlueprintCurrentResponse>(`/api/tasks/${taskId}/blueprints`, {
       method: "POST",
       body: JSON.stringify(payload),
     }),
-  submitKeyframeReview: (taskId: string, sceneId: string, payload: ReviewDecisionPayload) =>
-    request<ReviewMutationResponse>(`/api/tasks/${taskId}/reviews/keyframe_review/${sceneId}`, {
+  reviewTaskBlueprint: (taskId: string, version: number, payload: ReviewDecisionPayload) =>
+    request<{
+      blueprint: TaskBlueprintRecord
+      review: TaskBlueprintReviewRecord
+      projectLibraryEntry: ProjectApprovedBlueprintRecord | null
+      nextStage: {
+        canResumeExecution: boolean
+        resumePath: string | null
+      }
+    }>(`/api/tasks/${taskId}/blueprints/${version}/review`, {
       method: "POST",
       body: JSON.stringify(payload),
+    }),
+  resumeCurrentBlueprint: (taskId: string) =>
+    request<{
+      blueprint: TaskBlueprintRecord
+      queue: {
+        queued: boolean
+        reason: string
+        continueExecution: boolean
+      }
+      nextStage: {
+        canResumeExecution: boolean
+        resumePath: string | null
+      }
+    }>(`/api/tasks/${taskId}/blueprints/current/resume`, {
+      method: "POST",
+    }),
+  getTaskAssets: (taskId: string) => request<{ assets: AssetRecord[] }>(`/api/tasks/${taskId}/assets`),
+  cancelTask: (taskId: string) =>
+    request<TaskCancelResponse>(`/api/tasks/${taskId}/cancel`, {
+      method: "POST",
+    }),
+  resumeFailedTask: (taskId: string) =>
+    request<TaskResumeResponse>(`/api/tasks/${taskId}/resume`, {
+      method: "POST",
     }),
   createTask: (payload: CreateTaskPayload) =>
     request<{ task: TaskSummary }>("/api/tasks", {

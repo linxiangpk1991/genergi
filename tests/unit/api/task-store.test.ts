@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { afterEach, describe, expect, it, vi } from "vitest"
@@ -31,14 +31,17 @@ describe("API task store", () => {
     const shared = await import("../../../packages/shared/src/index")
 
     const created = await store.createTask({
+      projectId: "project_default",
       title: "Desk charger launch",
       script:
         "Show the messy desk first. Introduce the charger as the upgrade. Demonstrate the clean transformation. End with a short premium CTA.",
       modeId: "high_quality",
       channelId: "reels",
+      terminalPresetId: "phone_portrait",
       aspectRatio: "9:16",
       targetDurationSec: 30,
       generationMode: "system_enhanced",
+      audioStrategy: "native_plus_tts_ducked",
     })
 
     const parsedDecision = shared.reviewDecisionInputSchema.parse({
@@ -50,24 +53,40 @@ describe("API task store", () => {
 
     expect(parsedDecision.stage).toBe("storyboard_review")
     expect(created.task.targetDurationSec).toBe(30)
+    expect(created.task.projectId).toBe("project_default")
     expect(created.taskRunConfig.targetDurationSec).toBe(30)
     expect(created.task.generationMode).toBe("system_enhanced")
     expect(created.taskRunConfig.generationMode).toBe("system_enhanced")
+    expect(created.task.audioStrategy).toBe("native_plus_tts_ducked")
+    expect(created.taskRunConfig.audioStrategy).toBe("native_plus_tts_ducked")
+    expect(created.task.executionMode).toBe("review_required")
+    expect(created.task.terminalPresetId).toBe("phone_portrait")
+    expect(created.task.renderSpecJson.terminalPresetId).toBe("phone_portrait")
+    expect(created.task.blueprintVersion).toBe(1)
+    expect(created.task.blueprintStatus).toBe("pending_generation")
     expect(created.task.generationRoute).toBe("multi_scene")
     expect(created.task.routeReason).toContain("single-shot limit")
-    expect(created.task.status).toBe("waiting_review")
-    expect(created.task.reviewStage).toBe("storyboard_review")
-    expect(created.task.pendingReviewCount).toBe(3)
+    expect(created.task.status).toBe("queued")
+    expect(created.task.reviewStage).toBeNull()
+    expect(created.task.pendingReviewCount).toBe(0)
     expect(created.task.reviewUpdatedAt).toBeNull()
 
     const detail = await store.getTaskDetail(created.task.id)
+    expect(detail?.projectId).toBe("project_default")
     expect(detail?.taskRunConfig.targetDurationSec).toBe(30)
+    expect(detail?.taskRunConfig.projectId).toBe("project_default")
+    expect(detail?.taskRunConfig.executionMode).toBe("review_required")
+    expect(detail?.taskRunConfig.terminalPresetId).toBe("phone_portrait")
+    expect(detail?.taskRunConfig.renderSpecJson.terminalPresetId).toBe("phone_portrait")
+    expect(detail?.taskRunConfig.audioStrategy).toBe("native_plus_tts_ducked")
+    expect(detail?.blueprintVersion).toBe(1)
+    expect(detail?.blueprintStatus).toBe("pending_generation")
     expect(detail?.taskRunConfig.generationRoute).toBe("multi_scene")
     expect(detail?.scenes).toHaveLength(4)
     expect(detail?.scenes.reduce((total, scene) => total + scene.durationSec, 0)).toBe(30)
     expect(detail?.scenes.some((scene) => scene.script.includes("Show the product in action"))).toBe(false)
-    expect(detail?.reviewStage).toBe("storyboard_review")
-    expect(detail?.pendingReviewCount).toBe(3)
+    expect(detail?.reviewStage).toBeNull()
+    expect(detail?.pendingReviewCount).toBe(0)
     expect(detail?.reviewUpdatedAt).toBeNull()
     expect(detail?.scenes[1]?.reviewNote).toBeNull()
     expect(detail?.scenes[1]?.reviewedAt).toBeNull()
@@ -183,10 +202,12 @@ describe("API task store", () => {
     })
 
     const created = await taskStore.createTask({
+      projectId: "project_default",
       title: "Snapshot freeze task",
       script: "Show the benefit. Explain the upgrade. Close with a CTA.",
       modeId: "high_quality",
       channelId: "reels",
+      terminalPresetId: "phone_portrait",
       aspectRatio: "9:16",
       targetDurationSec: 30,
       generationMode: "system_enhanced",
@@ -199,6 +220,12 @@ describe("API task store", () => {
 
     expect(created.taskRunConfig.slotSnapshots.find((item) => item.slotType === "textModel")?.displayName).toBe("Override Text")
     expect(created.taskRunConfig.textModel.id).toBe("gpt-override")
+    expect(created.task.projectId).toBe("project_default")
+    expect(created.task.executionMode).toBe("review_required")
+    expect(created.task.terminalPresetId).toBe("phone_portrait")
+    expect(created.task.renderSpecJson.terminalPresetId).toBe("phone_portrait")
+    expect(created.task.blueprintVersion).toBe(1)
+    expect(created.task.blueprintStatus).toBe("pending_generation")
 
     await registryStore.updateModelDefaultsDocument({
       globalDefaults: {
@@ -225,6 +252,13 @@ describe("API task store", () => {
     expect(textSnapshot?.displayName).toBe("Override Text")
     expect(textSnapshot?.providerModelId).toBe("gpt-override")
     expect(ttsSnapshot?.providerId).toBe(ttsProvider.id)
+    expect(detail?.projectId).toBe("project_default")
+    expect(detail?.taskRunConfig.projectId).toBe("project_default")
+    expect(detail?.taskRunConfig.executionMode).toBe("review_required")
+    expect(detail?.taskRunConfig.terminalPresetId).toBe("phone_portrait")
+    expect(detail?.taskRunConfig.renderSpecJson.terminalPresetId).toBe("phone_portrait")
+    expect(detail?.blueprintVersion).toBe(1)
+    expect(detail?.blueprintStatus).toBe("pending_generation")
   })
 
   it("creates tasks from legacy media model records by normalizing them into unified runtime slots", async () => {
@@ -337,10 +371,12 @@ describe("API task store", () => {
 
     const taskStore = await import("../../../apps/api/src/lib/task-store")
     const created = await taskStore.createTask({
+      projectId: "project_default",
       title: "Legacy migration task",
       script: "Show the product. Explain the benefit. End with a CTA.",
       modeId: "high_quality",
       channelId: "reels",
+      terminalPresetId: "phone_portrait",
       aspectRatio: "9:16",
       targetDurationSec: 30,
       generationMode: "system_enhanced",
@@ -362,10 +398,12 @@ describe("API task store", () => {
     const store = await import("../../../apps/api/src/lib/task-store")
 
     const created = await store.createTask({
+      projectId: "project_default",
       title: "Legacy runtime id normalization",
       script: "Show the product. Explain the benefit. End with a CTA.",
       modeId: "high_quality",
       channelId: "reels",
+      terminalPresetId: "phone_portrait",
       aspectRatio: "9:16",
       targetDurationSec: 30,
       generationMode: "system_enhanced",
@@ -424,11 +462,13 @@ describe("API task store", () => {
     const store = await import("../../../apps/api/src/lib/task-store")
 
     const created = await store.createTask({
+      projectId: "project_default",
       title: "Desk charger launch",
       script:
         "Show the messy desk first. Introduce the charger as the upgrade. Demonstrate the clean transformation. End with a short premium CTA.",
       modeId: "high_quality",
       channelId: "reels",
+      terminalPresetId: "phone_portrait",
       aspectRatio: "9:16",
       targetDurationSec: 30,
       generationMode: "system_enhanced",
@@ -521,23 +561,25 @@ describe("API task store", () => {
     const store = await import("../../../apps/api/src/lib/task-store")
 
     const created = await store.createTask({
+      projectId: "project_default",
       title: "Fast desk charger drop",
       script:
         "Show the cluttered desk. Reveal the compact charger. Show the clean setup. End with a quick shop-now CTA.",
       modeId: "mass_production",
       channelId: "tiktok",
+      terminalPresetId: "phone_portrait",
       aspectRatio: "9:16",
       targetDurationSec: 30,
       generationMode: "user_locked",
     })
 
-    expect(created.task.status).toBe("waiting_review")
-    expect(created.task.reviewStage).toBe("keyframe_review")
-    expect(created.task.pendingReviewCount).toBe(4)
+    expect(created.task.status).toBe("queued")
+    expect(created.task.reviewStage).toBeNull()
+    expect(created.task.pendingReviewCount).toBe(0)
 
     const detail = await store.getTaskDetail(created.task.id)
-    expect(detail?.reviewStage).toBe("keyframe_review")
-    expect(detail?.pendingReviewCount).toBe(4)
+    expect(detail?.reviewStage).toBeNull()
+    expect(detail?.pendingReviewCount).toBe(0)
     expect(detail?.scenes.every((scene) => scene.reviewStatus === "approved")).toBe(true)
     expect(detail?.scenes.every((scene) => scene.keyframeStatus === "pending")).toBe(true)
 
@@ -561,9 +603,9 @@ describe("API task store", () => {
 
     const normalized = await store.getTaskDetail(created.task.id)
 
-    expect(normalized?.reviewStage).toBe("keyframe_review")
-    expect(normalized?.pendingReviewCount).toBe(4)
-    expect(normalized?.reviewUpdatedAt).toBe("2026-04-19T09:00:00.000Z")
+    expect(normalized?.reviewStage).toBeNull()
+    expect(normalized?.pendingReviewCount).toBe(0)
+    expect(normalized?.reviewUpdatedAt).toBeNull()
     expect(normalized?.scenes[0]?.reviewStatus).toBe("pending")
     expect(normalized?.scenes[0]?.reviewNote).toBe("Legacy storyboard note")
     expect(normalized?.scenes[0]?.reviewedAt).toBe("2026-04-19T09:00:00.000Z")
@@ -576,11 +618,13 @@ describe("API task store", () => {
     const store = await import("../../../apps/api/src/lib/task-store")
 
     const created = await store.createTask({
+      projectId: "project_default",
       title: "Desk charger launch",
       script:
         "Show the messy desk first. Introduce the charger as the upgrade. Demonstrate the clean transformation. End with a short premium CTA.",
       modeId: "high_quality",
       channelId: "reels",
+      terminalPresetId: "phone_portrait",
       aspectRatio: "9:16",
       targetDurationSec: 30,
       generationMode: "system_enhanced",
@@ -611,11 +655,11 @@ describe("API task store", () => {
     const summaries = await store.listTasks()
     const updatedSummary = summaries.find((task) => task.id === created.task.id)
 
-    expect(normalized?.reviewStage).toBe("auto_qa")
+    expect(normalized?.reviewStage).toBeNull()
     expect(normalized?.pendingReviewCount).toBe(0)
-    expect(updatedSummary?.reviewStage).toBe("auto_qa")
+    expect(updatedSummary?.reviewStage).toBeNull()
     expect(updatedSummary?.pendingReviewCount).toBe(0)
-    expect(updatedSummary?.status).toBe("running")
+    expect(updatedSummary?.status).toBe("queued")
   })
 
   it("normalizes legacy review fields and preserves existing review metadata when detail scenes are rebuilt", async () => {
@@ -626,11 +670,13 @@ describe("API task store", () => {
     const shared = await import("../../../packages/shared/src/index")
 
     const created = await store.createTask({
+      projectId: "project_default",
       title: "Desk charger launch",
       script:
         "Show the messy desk first. Introduce the charger as the upgrade. Demonstrate the clean transformation. End with a short premium CTA.",
       modeId: "high_quality",
       channelId: "reels",
+      terminalPresetId: "phone_portrait",
       aspectRatio: "9:16",
       targetDurationSec: 30,
       generationMode: "system_enhanced",
@@ -702,5 +748,95 @@ describe("API task store", () => {
     expect(normalizedDetail?.pendingReviewCount).toBe(4)
     expect(untouchedScene?.reviewNote).toBeNull()
     expect(untouchedScene?.reviewedAt).toBeNull()
+  })
+
+  it("falls back to exported task files when asset records are missing", async () => {
+    dataDir = await mkdtemp(path.join(os.tmpdir(), "genergi-task-store-"))
+    process.env.GENERGI_DATA_DIR = dataDir
+
+    const store = await import("../../../apps/api/src/lib/task-store")
+
+    const created = await store.createTask({
+      projectId: "project_default",
+      title: "Export fallback task",
+      script: "Show the product. Explain the value. End with a CTA.",
+      modeId: "high_quality",
+      channelId: "reels",
+      terminalPresetId: "phone_portrait",
+      aspectRatio: "9:16",
+      targetDurationSec: 30,
+      generationMode: "system_enhanced",
+    })
+
+    const exportDir = path.join(dataDir, "exports", created.task.id)
+    await mkdir(exportDir, { recursive: true })
+    await writeFile(path.join(exportDir, "script.txt"), "final narration", "utf8")
+    await writeFile(path.join(exportDir, "source-script.txt"), "original source", "utf8")
+    await writeFile(path.join(exportDir, "planning-prompt.txt"), "prompt", "utf8")
+    await writeFile(path.join(exportDir, "planning-response.txt"), "response", "utf8")
+    await writeFile(path.join(exportDir, "planning-audit.json"), "{\"usedFallback\":false}", "utf8")
+    await writeFile(path.join(exportDir, "storyboard.json"), "{\"scenes\":[]}", "utf8")
+
+    const assets = await store.getTaskAssets(created.task.id)
+    const assetTypes = assets.map((asset) => asset.assetType)
+
+    expect(assetTypes).toEqual([
+      "script",
+      "source_script",
+      "planning_prompt",
+      "planning_response",
+      "planning_audit",
+      "storyboard",
+    ])
+    expect(assets.every((asset) => asset.exists)).toBe(true)
+
+    const planningResponse = assets.find((asset) => asset.assetType === "planning_response")
+    expect(planningResponse?.fileName).toBe("planning-response.txt")
+
+    const previewAsset = await store.getTaskAsset(created.task.id, `${created.task.id}_planning_response`)
+    expect(previewAsset?.assetType).toBe("planning_response")
+    expect(previewAsset?.exists).toBe(true)
+  })
+
+  it("rehydrates missing task summaries from persisted task details so asset center does not lose historical tasks", async () => {
+    dataDir = await mkdtemp(path.join(os.tmpdir(), "genergi-task-store-"))
+    process.env.GENERGI_DATA_DIR = dataDir
+
+    const store = await import("../../../apps/api/src/lib/task-store")
+
+    const created = await store.createTask({
+      projectId: "project_default",
+      title: "Historical task should still be listed",
+      script: "Show the product. Explain the value. End with a CTA.",
+      modeId: "high_quality",
+      channelId: "reels",
+      terminalPresetId: "phone_portrait",
+      aspectRatio: "9:16",
+      targetDurationSec: 30,
+      generationMode: "system_enhanced",
+    })
+
+    const tasksFile = path.join(dataDir, "tasks.json")
+    const taskRecords = await readJsonFile<Array<Record<string, unknown>>>(tasksFile)
+    await writeJsonFile(
+      tasksFile,
+      taskRecords.filter((task) => task.id !== created.task.id),
+    )
+
+    const beforeRepair = await readJsonFile<Array<Record<string, unknown>>>(tasksFile)
+    expect(beforeRepair.some((task) => task.id === created.task.id)).toBe(false)
+
+    const recoveredTasks = await store.listTasks()
+    const recovered = recoveredTasks.find((task) => task.id === created.task.id)
+
+    expect(recovered).toBeTruthy()
+    expect(recovered?.title).toBe("Historical task should still be listed")
+    expect(recovered?.projectId).toBe("project_default")
+    expect(recovered?.status).toBe("queued")
+    expect(recovered?.blueprintStatus).toBe("pending_generation")
+    expect(recovered?.targetDurationSec).toBe(30)
+
+    const persistedAfterRepair = await readJsonFile<Array<Record<string, unknown>>>(tasksFile)
+    expect(persistedAfterRepair.some((task) => task.id === created.task.id)).toBe(true)
   })
 })

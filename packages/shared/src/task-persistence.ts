@@ -2,6 +2,8 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises"
 import path from "node:path"
 import type {
   AssetRecord,
+  BlueprintStatus,
+  ExecutionMode,
   GlobalModelDefaults,
   ModelControlStatus,
   ModelControlDefaults,
@@ -15,11 +17,13 @@ import type {
   StoredUser,
   TaskDetail,
   TaskSummary,
+  TerminalPresetId,
 } from "./index.js"
 import {
   normalizeImageProviderModelId,
   normalizeVideoProviderModelId,
 } from "./provider-model-ids.js"
+import { renderSpecSchema } from "./video-blueprint.js"
 
 function resolveDataDir() {
   return process.env.GENERGI_DATA_DIR
@@ -115,6 +119,93 @@ function normalizeReviewSummaryRecord<T extends Partial<ReviewSummary>>(record: 
     reviewStage: normalizeReviewStage(record.reviewStage),
     pendingReviewCount: normalizeNonNegativeInteger(record.pendingReviewCount),
     reviewUpdatedAt: normalizeNullableString(record.reviewUpdatedAt),
+  }
+}
+
+function normalizeExecutionMode(value: unknown): ExecutionMode {
+  return value === "review_required" ? "review_required" : "automated"
+}
+
+function normalizeTerminalPresetId(value: unknown): TerminalPresetId {
+  switch (value) {
+    case "phone_landscape":
+    case "tablet_portrait":
+    case "tablet_landscape":
+      return value
+    default:
+      return "phone_portrait"
+  }
+}
+
+function createDefaultRenderSpec(terminalPresetId: TerminalPresetId) {
+  switch (terminalPresetId) {
+    case "phone_landscape":
+      return {
+        terminalPresetId,
+        width: 1920,
+        height: 1080,
+        aspectRatio: "16:9",
+        safeArea: { topPct: 8, rightPct: 6, bottomPct: 8, leftPct: 6 },
+        compositionGuideline: "主体不宜过小，适合横向叙事与左右信息分布。",
+        motionGuideline: "可用横向推进和平移，但保持主体和产品停留在主要观看区域。",
+      }
+    case "tablet_portrait":
+      return {
+        terminalPresetId,
+        width: 1536,
+        height: 2048,
+        aspectRatio: "3:4",
+        safeArea: { topPct: 7, rightPct: 6, bottomPct: 9, leftPct: 6 },
+        compositionGuideline: "保留更多环境空间，竖向构图下仍需保证主体清晰集中。",
+        motionGuideline: "可使用更缓的推进与轻微层次变化，避免主体漂到边缘。",
+      }
+    case "tablet_landscape":
+      return {
+        terminalPresetId,
+        width: 2048,
+        height: 1536,
+        aspectRatio: "4:3",
+        safeArea: { topPct: 7, rightPct: 6, bottomPct: 7, leftPct: 6 },
+        compositionGuideline: "适合横向场景展开、双主体或产品与环境并置展示。",
+        motionGuideline: "允许横向环境展开和更慢节奏镜头，但主体和产品要维持可读性。",
+      }
+    default:
+      return {
+        terminalPresetId: "phone_portrait" as const,
+        width: 1080,
+        height: 1920,
+        aspectRatio: "9:16",
+        safeArea: { topPct: 8, rightPct: 6, bottomPct: 10, leftPct: 6 },
+        compositionGuideline: "主体保持在竖屏中心安全区，优先纵向层次和中上部视觉焦点。",
+        motionGuideline: "优先轻推拉、竖向层次变化与居中主体运动，避免大幅横向扫动。",
+      }
+  }
+}
+
+function normalizeRenderSpec(value: unknown, terminalPresetId: TerminalPresetId) {
+  const fallback = createDefaultRenderSpec(terminalPresetId)
+  const parsed = renderSpecSchema.safeParse(value)
+  if (!parsed.success) {
+    return fallback
+  }
+
+  return {
+    ...parsed.data,
+    terminalPresetId: normalizeTerminalPresetId(parsed.data.terminalPresetId),
+  }
+}
+
+function normalizeBlueprintStatus(value: unknown): BlueprintStatus {
+  switch (value) {
+    case "ready_for_review":
+    case "rejected":
+    case "approved":
+    case "queued_for_video":
+    case "video_generating":
+    case "completed":
+      return value
+    default:
+      return "pending_generation"
   }
 }
 
@@ -345,12 +436,21 @@ export function normalizeStoryboardScene(
 
 export function normalizeTaskSummaryRecord(
   task: TaskSummary & {
+    projectId?: string
+    executionMode?: ExecutionMode
+    terminalPresetId?: TerminalPresetId
+    renderSpecJson?: unknown
     targetDurationSec?: number
     generationMode?: TaskSummary["generationMode"]
     generationRoute?: TaskSummary["generationRoute"]
     routeReason?: string
     planningVersion?: TaskSummary["planningVersion"]
+    blueprintVersion?: number
+    blueprintStatus?: BlueprintStatus
     actualDurationSec?: number | null
+    failureReason?: string | null
+    statusDetail?: string | null
+    cancelRequestedAt?: string | null
     reviewStage?: ReviewStageId | null
     pendingReviewCount?: number
     reviewUpdatedAt?: string | null
@@ -358,29 +458,54 @@ export function normalizeTaskSummaryRecord(
 ): TaskSummary {
   return {
     ...task,
+    projectId: typeof task.projectId === "string" && task.projectId.trim() ? task.projectId : "project_unassigned",
+    executionMode: normalizeExecutionMode(task.executionMode),
+    terminalPresetId: normalizeTerminalPresetId(task.terminalPresetId),
+    renderSpecJson: normalizeRenderSpec(task.renderSpecJson, normalizeTerminalPresetId(task.terminalPresetId)),
     targetDurationSec: task.targetDurationSec ?? 30,
     generationMode: task.generationMode ?? "user_locked",
+    audioStrategy: task.audioStrategy ?? "tts_only",
     generationRoute: task.generationRoute ?? "multi_scene",
     routeReason: task.routeReason ?? "legacy task normalized to multi-scene",
     planningVersion: task.planningVersion ?? "v1",
+    blueprintVersion: typeof task.blueprintVersion === "number" && task.blueprintVersion >= 0 ? task.blueprintVersion : 0,
+    blueprintStatus: normalizeBlueprintStatus(task.blueprintStatus),
     actualDurationSec: task.actualDurationSec ?? null,
+    failureReason: normalizeNullableString(task.failureReason),
+    statusDetail: normalizeNullableString(task.statusDetail),
+    cancelRequestedAt: normalizeNullableString(task.cancelRequestedAt),
     ...normalizeReviewSummaryRecord(task),
   }
 }
 
 export function normalizeTaskDetailRecord(
   detail: TaskDetail & {
+    projectId?: string
     actualDurationSec?: number | null
+    blueprintVersion?: number
+    blueprintStatus?: BlueprintStatus
+    failureReason?: string | null
+    statusDetail?: string | null
+    cancelRequestedAt?: string | null
     reviewStage?: ReviewStageId | null
     pendingReviewCount?: number
     reviewUpdatedAt?: string | null
   },
 ): TaskDetail {
   const taskRunConfig = detail.taskRunConfig
+  const normalizedTerminalPresetId = normalizeTerminalPresetId(taskRunConfig.terminalPresetId)
   return {
     ...detail,
+    projectId: typeof detail.projectId === "string" && detail.projectId.trim() ? detail.projectId : taskRunConfig.projectId ?? "project_unassigned",
     taskRunConfig: {
       ...taskRunConfig,
+      projectId:
+        typeof taskRunConfig.projectId === "string" && taskRunConfig.projectId.trim()
+          ? taskRunConfig.projectId
+          : "project_unassigned",
+      executionMode: normalizeExecutionMode(taskRunConfig.executionMode),
+      terminalPresetId: normalizedTerminalPresetId,
+      renderSpecJson: normalizeRenderSpec(taskRunConfig.renderSpecJson, normalizedTerminalPresetId),
       imageModel: {
         ...taskRunConfig.imageModel,
         id: normalizeTaskRuntimeModelId("imageModel", taskRunConfig.imageModel.id),
@@ -407,8 +532,22 @@ export function normalizeTaskDetailRecord(
                 : slot.capabilityJson,
           }))
         : [],
+      blueprintVersion:
+        typeof taskRunConfig.blueprintVersion === "number" && taskRunConfig.blueprintVersion >= 0
+          ? taskRunConfig.blueprintVersion
+          : 0,
+      blueprintStatus: normalizeBlueprintStatus(taskRunConfig.blueprintStatus),
+      audioStrategy: taskRunConfig.audioStrategy === "native_plus_tts_ducked" ? "native_plus_tts_ducked" : "tts_only",
     },
+    blueprintVersion:
+      typeof detail.blueprintVersion === "number" && detail.blueprintVersion >= 0
+        ? detail.blueprintVersion
+        : taskRunConfig.blueprintVersion ?? 0,
+    blueprintStatus: normalizeBlueprintStatus(detail.blueprintStatus ?? taskRunConfig.blueprintStatus),
     actualDurationSec: detail.actualDurationSec ?? null,
+    failureReason: normalizeNullableString(detail.failureReason),
+    statusDetail: normalizeNullableString(detail.statusDetail),
+    cancelRequestedAt: normalizeNullableString(detail.cancelRequestedAt),
     scenes: Array.isArray(detail.scenes)
       ? detail.scenes.map((scene) => normalizeStoryboardScene(scene))
       : [],
@@ -423,15 +562,25 @@ export function seedTaskSummaries(): TaskSummary[] {
   return [
     {
       id: "task_seed_001",
+      projectId: "project_seed_default",
       title: "Summer Product Hook Series",
       modeId: "mass_production",
+      executionMode: "automated",
       channelId: "tiktok",
+      terminalPresetId: "phone_portrait",
+      renderSpecJson: createDefaultRenderSpec("phone_portrait"),
       targetDurationSec: 30,
       generationMode: "user_locked",
+      audioStrategy: "tts_only",
       generationRoute: "multi_scene",
       routeReason: "legacy seed task normalized to multi-scene",
       planningVersion: "v1",
+      blueprintVersion: 0,
+      blueprintStatus: "pending_generation",
       actualDurationSec: null,
+      failureReason: null,
+      statusDetail: "等待 worker 开始处理",
+      cancelRequestedAt: null,
       status: "running",
       progressPct: 40,
       retryCount: 0,
@@ -442,15 +591,25 @@ export function seedTaskSummaries(): TaskSummary[] {
     },
     {
       id: "task_seed_002",
+      projectId: "project_seed_default",
       title: "Feature Review Promo V3",
       modeId: "high_quality",
+      executionMode: "review_required",
       channelId: "reels",
+      terminalPresetId: "phone_portrait",
+      renderSpecJson: createDefaultRenderSpec("phone_portrait"),
       targetDurationSec: 45,
       generationMode: "user_locked",
+      audioStrategy: "tts_only",
       generationRoute: "multi_scene",
       routeReason: "legacy seed task normalized to multi-scene",
       planningVersion: "v1",
+      blueprintVersion: 0,
+      blueprintStatus: "pending_generation",
       actualDurationSec: null,
+      failureReason: null,
+      statusDetail: "等待 worker 开始处理",
+      cancelRequestedAt: null,
       status: "failed",
       progressPct: 62,
       retryCount: 2,
@@ -506,9 +665,6 @@ export async function readTaskSummaries(): Promise<TaskSummary[]> {
       }
     >
     const normalized = tasks.map((task) => normalizeTaskSummaryRecord(task))
-    if (JSON.stringify(tasks) !== JSON.stringify(normalized)) {
-      await writeTaskSummaries(normalized)
-    }
     return normalized
   } catch {
     const tasks = seedTaskSummaries()
@@ -546,10 +702,6 @@ export async function readTaskDetails(): Promise<Record<string, TaskDetail>> {
     const normalized = Object.fromEntries(
       Object.entries(parsed).map(([taskId, detail]) => [taskId, normalizeTaskDetailRecord(detail)]),
     ) as Record<string, TaskDetail>
-    if (JSON.stringify(parsed) !== JSON.stringify(normalized)) {
-      await writeTaskDetails(normalized)
-    }
-
     return normalized
   } catch {
     return {}

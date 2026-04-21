@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { afterEach, describe, expect, it, vi } from "vitest"
@@ -10,17 +10,32 @@ describe("worker provider helpers", () => {
   function createTaskDetail(overrides: Partial<TaskDetail> = {}): TaskDetail {
     return {
       taskId: "task_review_preservation",
+      projectId: "project_default",
       title: "Desk charger launch",
       script: "Hook the viewer fast. Reveal the desk upgrade. End with a clear CTA.",
       taskRunConfig: {
+        projectId: "project_default",
         modeId: "high_quality",
+        executionMode: "review_required",
         channelId: "reels",
+        terminalPresetId: "phone_portrait",
+        renderSpecJson: {
+          terminalPresetId: "phone_portrait",
+          width: 1080,
+          height: 1920,
+          aspectRatio: "9:16",
+          safeArea: { topPct: 8, rightPct: 6, bottomPct: 10, leftPct: 6 },
+          compositionGuideline: "主体保持在竖屏中心安全区",
+          motionGuideline: "优先轻推拉",
+        },
         targetDurationSec: 15,
         generationMode: "system_enhanced",
         enhancementMode: "system_enhanced",
         generationRoute: "multi_scene",
         routeReason: "target duration exceeds the current model single-shot limit of 8s",
         planningVersion: "v1",
+        blueprintVersion: 1,
+        blueprintStatus: "pending_generation",
         textModel: { id: "text.default", label: "Claude Opus 4.6", provider: "anthropic-compatible" },
         imageModel: { id: "image.premium", label: "Gemini 3 Pro Image Preview 2k", provider: "openai-compatible" },
         videoModel: { id: "video.hd", label: "Veo 3.1 Portrait HD", provider: "openai-compatible" },
@@ -33,6 +48,8 @@ describe("worker provider helpers", () => {
         aspectRatio: "9:16",
         slotSnapshots: [],
       },
+      blueprintVersion: 1,
+      blueprintStatus: "pending_generation",
       scenes: [],
       updatedAt: "2026-04-19T00:00:00.000Z",
       ...overrides,
@@ -69,7 +86,7 @@ A few notes to make it hit:
     expect(script).toContain("Call out the pain point hard")
   })
 
-  it("preserves review metadata when rewrite rebuilds scenes with matching stable ids", async () => {
+  it("fails fast instead of silently rewriting from fallback scenes when structured planning is unavailable", async () => {
     const providers = await import("../../../apps/worker/src/lib/providers")
 
     const detail = createTaskDetail({
@@ -120,22 +137,10 @@ A few notes to make it hit:
       >
     }
 
-    const rewritten = (await providers.rewriteTaskWithTextProvider(detail)) as typeof detail
-
-    expect(rewritten.scenes).toHaveLength(2)
-    expect(rewritten.scenes[0].reviewStatus).toBe("rejected")
-    expect(rewritten.scenes[0].keyframeStatus).toBe("approved")
-    expect(rewritten.scenes[0].reviewNote).toBe("Hook still needs stronger contrast.")
-    expect(rewritten.scenes[0].reviewedAt).toBe("2026-04-19T01:00:00.000Z")
-    expect(rewritten.scenes[0].keyframeReviewNote).toBe("Keyframe composition is approved.")
-    expect(rewritten.scenes[0].keyframeReviewedAt).toBe("2026-04-19T02:00:00.000Z")
-    expect(rewritten.scenes[1].reviewStatus).toBe("approved")
-    expect(rewritten.scenes[1].keyframeStatus).toBe("rejected")
-    expect(rewritten.scenes[1].reviewNote).toBe("Approved after copy tweak.")
-    expect(rewritten.scenes[1].keyframeReviewNote).toBe("Need a cleaner final frame.")
+    await expect(providers.rewriteTaskWithTextProvider(detail)).rejects.toThrow("TEXT_PLANNING_OUTPUT_UNAVAILABLE")
   })
 
-  it("falls back to scene index when rewrite scene ids change", async () => {
+  it("does not hide planning failure behind legacy scene-id fallback behavior", async () => {
     const providers = await import("../../../apps/worker/src/lib/providers")
 
     const detail = createTaskDetail({
@@ -186,18 +191,7 @@ A few notes to make it hit:
       >
     }
 
-    const rewritten = (await providers.rewriteTaskWithTextProvider(detail)) as typeof detail
-
-    expect(rewritten.scenes.map((scene) => scene.id)).toEqual(["scene_1", "scene_2"])
-    expect(rewritten.scenes[0].reviewStatus).toBe("approved")
-    expect(rewritten.scenes[0].keyframeStatus).toBe("rejected")
-    expect(rewritten.scenes[0].reviewNote).toBe("Keep the opener pacing.")
-    expect(rewritten.scenes[0].keyframeReviewNote).toBe("Keyframe needs a cleaner crop.")
-    expect(rewritten.scenes[1].reviewStatus).toBe("rejected")
-    expect(rewritten.scenes[1].keyframeStatus).toBe("approved")
-    expect(rewritten.scenes[1].reviewNote).toBe("CTA needs a stronger ask.")
-    expect(rewritten.scenes[1].reviewedAt).toBe("2026-04-19T07:00:00.000Z")
-    expect(rewritten.scenes[1].keyframeReviewedAt).toBe("2026-04-19T08:00:00.000Z")
+    await expect(providers.rewriteTaskWithTextProvider(detail)).rejects.toThrow("TEXT_PLANNING_OUTPUT_UNAVAILABLE")
   })
 
   it("merges latest persisted review metadata back into rewritten scenes for worker upserts", () => {
@@ -264,6 +258,681 @@ A few notes to make it hit:
     expect(merged[1].reviewNote).toBe("CTA copy still needs work.")
     expect(merged[1].reviewedAt).toBe("2026-04-19T11:00:00.000Z")
     expect(merged[1].keyframeReviewedAt).toBe("2026-04-19T12:00:00.000Z")
+  })
+
+  it("builds planned execution blueprints from planning output with render-spec aware prompts", async () => {
+    const providers = await import("../../../apps/worker/src/lib/providers")
+
+    const detail = createTaskDetail()
+    const blueprint = providers.buildPlannedExecutionBlueprint(detail, {
+      generationRoute: "multi_scene",
+      targetDurationSec: 15,
+      finalVoiceoverScript: "Hook. Reveal. CTA.",
+      visualStyleGuide: "Premium vertical composition.",
+      ctaLine: "Upgrade today.",
+      scenePlan: [
+        {
+          sceneIndex: 0,
+          scenePurpose: "Open on the problem",
+          durationSec: 5,
+          script: "The desk starts cluttered.",
+          voiceoverScript: "The desk starts cluttered.",
+          startFrameDescription: "Cluttered desk opening frame",
+          imagePrompt: "Phone portrait 1080x1920, cluttered desk, centered subject.",
+          videoPrompt: "Use the input frame and slowly push into the clutter before reveal.",
+          startFrameIntent: "Introduce the problem",
+          endFrameIntent: "Hold on clutter",
+          transitionHint: "open",
+          continuityConstraints: ["product hidden"],
+        },
+      ],
+      blueprint: {
+        executionMode: "review_required",
+        renderSpec: detail.taskRunConfig.renderSpecJson,
+        globalTheme: "Desk refresh",
+        visualStyleGuide: "Premium vertical composition.",
+        subjectProfile: "Single desk hero",
+        productProfile: "Fast charging dock",
+        backgroundConstraints: ["clean desk"],
+        negativeConstraints: ["no subtitles"],
+        totalVoiceoverScript: "Hook. Reveal. CTA.",
+        sceneContracts: [],
+      },
+    })
+
+    expect(blueprint.renderSpec.width).toBe(1080)
+    expect(blueprint.renderSpec.height).toBe(1920)
+    expect(blueprint.sceneContracts[0]?.imagePrompt).toBe("Phone portrait 1080x1920, cluttered desk, centered subject.")
+    expect(blueprint.sceneContracts[0]?.videoPrompt).toBe("Use the input frame and slowly push into the clutter before reveal.")
+    expect(blueprint.sceneContracts[0]?.continuityConstraints).toEqual(["product hidden"])
+  })
+
+  it("uses the scene image prompt as-is when creating a keyframe prompt", async () => {
+    const providers = await import("../../../apps/worker/src/lib/providers")
+
+    const prompt = providers.buildKeyframePrompt(
+      {
+        id: "scene_1",
+        index: 0,
+        title: "Hook",
+        sceneGoal: "Hook",
+        voiceoverScript: "Voiceover",
+        startFrameDescription: "Start frame",
+        script: "Script",
+        imagePrompt: "A precise final image prompt from the text model.",
+        videoPrompt: "A precise final video prompt from the text model.",
+        startFrameIntent: "Hook instantly",
+        endFrameIntent: "Land the beat",
+        durationSec: 8,
+        startLabel: "00:00",
+        endLabel: "00:08",
+        reviewStatus: "pending",
+        keyframeStatus: "pending",
+        continuityConstraints: [],
+        reviewNote: null,
+        reviewedAt: null,
+        keyframeReviewNote: null,
+        keyframeReviewedAt: null,
+      },
+      "9:16",
+    )
+
+    expect(prompt).toBe("A precise final image prompt from the text model.")
+  })
+
+  it("builds scene video inputs from keyframe manifests and falls back honestly when frames are missing", async () => {
+    const providers = await import("../../../apps/worker/src/lib/providers")
+
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "genergi-scene-video-inputs-"))
+    const manifestPath = path.join(tempDir, "manifest.json")
+    const keyframePath = path.join(tempDir, "scene-01.png")
+
+    await writeFile(keyframePath, "png", "utf8")
+    await writeFile(
+      manifestPath,
+      JSON.stringify({
+        frames: [
+          {
+            sceneId: "scene_1",
+            sceneIndex: 0,
+            filePath: keyframePath,
+          },
+        ],
+      }),
+      "utf8",
+    )
+
+    const detail = createTaskDetail({
+      scenes: [
+        {
+          id: "scene_1",
+          index: 0,
+          title: "Hook",
+          sceneGoal: "Hook",
+          voiceoverScript: "Desk clutter.",
+          startFrameDescription: "Cluttered desk",
+          script: "Desk clutter.",
+          imagePrompt: "clutter prompt",
+          videoPrompt: "motion prompt",
+          startFrameIntent: "introduce clutter",
+          endFrameIntent: "hold clutter",
+          durationSec: 8,
+          startLabel: "00:00",
+          endLabel: "00:08",
+          reviewStatus: "pending",
+          keyframeStatus: "pending",
+          continuityConstraints: ["same desk"],
+          reviewNote: null,
+          reviewedAt: null,
+          keyframeReviewNote: null,
+          keyframeReviewedAt: null,
+        },
+        {
+          id: "scene_2",
+          index: 1,
+          title: "Reveal",
+          sceneGoal: "Reveal",
+          voiceoverScript: "Show the charger.",
+          startFrameDescription: "Product reveal",
+          script: "Show the charger.",
+          imagePrompt: "reveal prompt",
+          videoPrompt: "reveal motion",
+          startFrameIntent: "introduce product",
+          endFrameIntent: "hold reveal",
+          durationSec: 7,
+          startLabel: "00:08",
+          endLabel: "00:15",
+          reviewStatus: "pending",
+          keyframeStatus: "pending",
+          continuityConstraints: ["same product"],
+          reviewNote: null,
+          reviewedAt: null,
+          keyframeReviewNote: null,
+          keyframeReviewedAt: null,
+        },
+      ],
+    })
+
+    const inputs = await providers.buildSceneVideoGenerationInputs({
+      detail,
+      blueprintRecord: {
+        taskId: detail.taskId,
+        version: 1,
+        status: "queued_for_video",
+        createdAt: "2026-04-20T00:00:00.000Z",
+        updatedAt: "2026-04-20T00:00:00.000Z",
+        blueprint: {
+          taskId: detail.taskId,
+          projectId: detail.projectId,
+          version: 1,
+          createdAt: "2026-04-20T00:00:00.000Z",
+          executionMode: detail.taskRunConfig.executionMode,
+          renderSpec: detail.taskRunConfig.renderSpecJson,
+          globalTheme: detail.title,
+          visualStyleGuide: "Premium vertical composition.",
+          subjectProfile: "Single desk hero",
+          productProfile: "Fast charging dock",
+          backgroundConstraints: ["clean desk"],
+          negativeConstraints: ["no subtitles"],
+          totalVoiceoverScript: detail.script,
+          sceneContracts: detail.scenes.map((scene) => ({
+            id: scene.id,
+            index: scene.index,
+            sceneGoal: scene.sceneGoal ?? scene.title,
+            voiceoverScript: scene.voiceoverScript ?? scene.script,
+            startFrameDescription: scene.startFrameDescription ?? scene.title,
+            imagePrompt: scene.imagePrompt,
+            videoPrompt: scene.videoPrompt,
+            startFrameIntent: scene.startFrameIntent ?? scene.title,
+            endFrameIntent: scene.endFrameIntent ?? scene.title,
+            durationSec: scene.durationSec,
+            transitionHint: "cut",
+            continuityConstraints: scene.continuityConstraints ?? [],
+          })),
+        },
+        keyframeManifestPath: manifestPath,
+      },
+    })
+
+    expect(inputs[0]?.inputStrategy).toBe("keyframe_plus_prompt")
+    expect(inputs[0]?.keyframePath).toBe(keyframePath)
+    expect(inputs[1]?.inputStrategy).toBe("prompt_only")
+    expect(inputs[1]?.keyframePath).toBeNull()
+  })
+
+  it("generates scene videos concurrently instead of waiting for each scene one-by-one", async () => {
+    const providers = await import("../../../apps/worker/src/lib/providers")
+
+    const detail = createTaskDetail({
+      scenes: [
+        {
+          id: "scene_1",
+          index: 0,
+          title: "Scene 1",
+          sceneGoal: "Scene 1",
+          voiceoverScript: "Scene 1 narration.",
+          startFrameDescription: "Scene 1 frame",
+          script: "Scene 1 narration.",
+          imagePrompt: "Scene 1 image prompt.",
+          videoPrompt: "Scene 1 video prompt.",
+          startFrameIntent: "Scene 1 start",
+          endFrameIntent: "Scene 1 end",
+          durationSec: 8,
+          startLabel: "00:00",
+          endLabel: "00:08",
+          reviewStatus: "pending",
+          keyframeStatus: "pending",
+          continuityConstraints: [],
+          reviewNote: null,
+          reviewedAt: null,
+          keyframeReviewNote: null,
+          keyframeReviewedAt: null,
+        },
+        {
+          id: "scene_2",
+          index: 1,
+          title: "Scene 2",
+          sceneGoal: "Scene 2",
+          voiceoverScript: "Scene 2 narration.",
+          startFrameDescription: "Scene 2 frame",
+          script: "Scene 2 narration.",
+          imagePrompt: "Scene 2 image prompt.",
+          videoPrompt: "Scene 2 video prompt.",
+          startFrameIntent: "Scene 2 start",
+          endFrameIntent: "Scene 2 end",
+          durationSec: 8,
+          startLabel: "00:08",
+          endLabel: "00:16",
+          reviewStatus: "pending",
+          keyframeStatus: "pending",
+          continuityConstraints: [],
+          reviewNote: null,
+          reviewedAt: null,
+          keyframeReviewNote: null,
+          keyframeReviewedAt: null,
+        },
+        {
+          id: "scene_3",
+          index: 2,
+          title: "Scene 3",
+          sceneGoal: "Scene 3",
+          voiceoverScript: "Scene 3 narration.",
+          startFrameDescription: "Scene 3 frame",
+          script: "Scene 3 narration.",
+          imagePrompt: "Scene 3 image prompt.",
+          videoPrompt: "Scene 3 video prompt.",
+          startFrameIntent: "Scene 3 start",
+          endFrameIntent: "Scene 3 end",
+          durationSec: 8,
+          startLabel: "00:16",
+          endLabel: "00:24",
+          reviewStatus: "pending",
+          keyframeStatus: "pending",
+          continuityConstraints: [],
+          reviewNote: null,
+          reviewedAt: null,
+          keyframeReviewNote: null,
+          keyframeReviewedAt: null,
+        },
+      ],
+    })
+
+    const startedScenes: number[] = []
+    const resolvers: Array<() => void> = []
+
+    const bundlePromise = providers.createSceneVideoBundle(
+      {
+        taskId: detail.taskId,
+        detail,
+        model: "veo3.1",
+      },
+      {
+        createVideoFromPrompt: async ({ scene }: { scene: { index: number } }) => {
+          startedScenes.push(scene.index)
+          await new Promise<void>((resolve) => {
+            resolvers.push(resolve)
+          })
+          return {
+            videoPath: `/tmp/scene-${scene.index + 1}.mp4`,
+            remoteTaskId: `remote-${scene.index + 1}`,
+          }
+        },
+      } as any,
+    )
+
+    const waitDeadline = Date.now() + 1000
+    while (startedScenes.length < 3 && Date.now() < waitDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 25))
+    }
+
+    expect(startedScenes).toEqual([0, 1, 2])
+
+    resolvers.splice(0).forEach((resolve) => resolve())
+    const videos = await bundlePromise
+
+    expect(videos.map((video) => video.sceneIndex)).toEqual([0, 1, 2])
+  })
+
+  it("uses the approved blueprint directly for continueExecution instead of rebuilding planning", async () => {
+    const providers = await import("../../../apps/worker/src/lib/providers")
+
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "genergi-approved-blueprint-resume-"))
+    process.env.GENERGI_DATA_DIR = tempDir
+
+    const detail = createTaskDetail({
+      taskId: "task_resume_approved",
+      script: "Original source script that should not be used after approval.",
+      blueprintVersion: 2,
+      blueprintStatus: "approved",
+      taskRunConfig: {
+        ...createTaskDetail().taskRunConfig,
+        blueprintVersion: 2,
+        blueprintStatus: "approved",
+      },
+      scenes: [
+        {
+          id: "scene_1",
+          index: 0,
+          title: "Old scene",
+          sceneGoal: "Old scene",
+          voiceoverScript: "Old scene narration.",
+          startFrameDescription: "Old frame",
+          script: "Old scene narration.",
+          imagePrompt: "Old image prompt.",
+          videoPrompt: "Old video prompt.",
+          startFrameIntent: "Old start",
+          endFrameIntent: "Old end",
+          durationSec: 8,
+          startLabel: "00:00",
+          endLabel: "00:08",
+          reviewStatus: "approved",
+          keyframeStatus: "approved",
+          continuityConstraints: [],
+          reviewNote: null,
+          reviewedAt: null,
+          keyframeReviewNote: null,
+          keyframeReviewedAt: null,
+        },
+      ],
+    })
+
+    const approvedBlueprint = {
+      taskId: detail.taskId,
+      version: 2,
+      status: "approved" as const,
+      createdAt: "2026-04-20T00:00:00.000Z",
+      updatedAt: "2026-04-20T00:00:00.000Z",
+      blueprint: {
+        taskId: detail.taskId,
+        projectId: detail.projectId,
+        version: 2,
+        createdAt: "2026-04-20T00:00:00.000Z",
+        executionMode: "review_required" as const,
+        renderSpec: detail.taskRunConfig.renderSpecJson,
+        globalTheme: "Approved blueprint",
+        visualStyleGuide: "Use the reviewed panda style.",
+        subjectProfile: "Reviewed panda host",
+        productProfile: "BaZi report",
+        backgroundConstraints: ["Chinese-style room"],
+        negativeConstraints: ["no subtitles"],
+        totalVoiceoverScript: "Approved narration from the reviewed blueprint.",
+        sceneContracts: [
+          {
+            id: "scene_1",
+            index: 0,
+            sceneGoal: "Approved scene one",
+            voiceoverScript: "Approved scene one narration.",
+            startFrameDescription: "Approved start frame",
+            imagePrompt: "Approved image prompt from reviewed blueprint.",
+            videoPrompt: "Approved video prompt from reviewed blueprint.",
+            startFrameIntent: "Approved start",
+            endFrameIntent: "Approved end",
+            durationSec: 8,
+            transitionHint: "open",
+            continuityConstraints: ["same panda"],
+          },
+        ],
+      },
+      keyframeManifestPath: path.join(tempDir, "manifest.json"),
+    }
+
+    const execution = await providers.prepareExecutionSource(detail, {
+      continueExecution: true,
+      approvedBlueprintRecord: approvedBlueprint as any,
+    })
+
+    expect(execution.planningTrace).toBeNull()
+    expect(execution.blueprintRecord.status).toBe("approved")
+    expect(execution.detail.script).toBe("Approved narration from the reviewed blueprint.")
+    expect(execution.detail.scenes[0]?.imagePrompt).toBe("Approved image prompt from reviewed blueprint.")
+    expect(execution.detail.scenes[0]?.videoPrompt).toBe("Approved video prompt from reviewed blueprint.")
+  })
+
+  it("continues to reuse the reviewed blueprint after the API marks it queued_for_video", async () => {
+    const providers = await import("../../../apps/worker/src/lib/providers")
+
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "genergi-queued-blueprint-resume-"))
+    process.env.GENERGI_DATA_DIR = tempDir
+
+    const detail = createTaskDetail({
+      taskId: "task_resume_queued_blueprint",
+      script: "Original source script that should not be used once the review has passed.",
+      blueprintVersion: 3,
+      blueprintStatus: "queued_for_video",
+      taskRunConfig: {
+        ...createTaskDetail().taskRunConfig,
+        blueprintVersion: 3,
+        blueprintStatus: "queued_for_video",
+      },
+      scenes: [
+        {
+          id: "scene_1",
+          index: 0,
+          title: "Old scene",
+          sceneGoal: "Old scene",
+          voiceoverScript: "Old narration.",
+          startFrameDescription: "Old frame",
+          script: "Old narration.",
+          imagePrompt: "Old image prompt.",
+          videoPrompt: "Old video prompt.",
+          startFrameIntent: "Old start",
+          endFrameIntent: "Old end",
+          durationSec: 8,
+          startLabel: "00:00",
+          endLabel: "00:08",
+          reviewStatus: "approved",
+          keyframeStatus: "approved",
+          continuityConstraints: [],
+          reviewNote: null,
+          reviewedAt: null,
+          keyframeReviewNote: null,
+          keyframeReviewedAt: null,
+        },
+      ],
+    })
+
+    const queuedBlueprint = {
+      taskId: detail.taskId,
+      version: 3,
+      status: "queued_for_video" as const,
+      createdAt: "2026-04-21T00:00:00.000Z",
+      updatedAt: "2026-04-21T00:00:00.000Z",
+      blueprint: {
+        taskId: detail.taskId,
+        projectId: detail.projectId,
+        version: 3,
+        createdAt: "2026-04-21T00:00:00.000Z",
+        executionMode: "review_required" as const,
+        renderSpec: detail.taskRunConfig.renderSpecJson,
+        globalTheme: "Queued reviewed blueprint",
+        visualStyleGuide: "Keep the reviewed BaZi look.",
+        subjectProfile: "Reviewed host",
+        productProfile: "BaZi report",
+        backgroundConstraints: ["Chinese-style room"],
+        negativeConstraints: ["no subtitles"],
+        totalVoiceoverScript: "Queued reviewed narration.",
+        sceneContracts: [
+          {
+            id: "scene_1",
+            index: 0,
+            sceneGoal: "Queued approved scene",
+            voiceoverScript: "Queued approved narration.",
+            startFrameDescription: "Queued approved frame",
+            imagePrompt: "Queued approved image prompt from reviewed blueprint.",
+            videoPrompt: "Queued approved video prompt from reviewed blueprint.",
+            startFrameIntent: "Queued start",
+            endFrameIntent: "Queued end",
+            durationSec: 8,
+            transitionHint: "open",
+            continuityConstraints: ["same host"],
+          },
+        ],
+      },
+      keyframeManifestPath: path.join(tempDir, "manifest.json"),
+    }
+
+    const execution = await providers.prepareExecutionSource(detail, {
+      continueExecution: true,
+      approvedBlueprintRecord: queuedBlueprint as any,
+    })
+
+    expect(execution.planningTrace).toBeNull()
+    expect(execution.blueprintRecord.status).toBe("queued_for_video")
+    expect(execution.detail.script).toBe("Queued reviewed narration.")
+    expect(execution.detail.scenes[0]?.imagePrompt).toBe("Queued approved image prompt from reviewed blueprint.")
+    expect(execution.detail.scenes[0]?.videoPrompt).toBe("Queued approved video prompt from reviewed blueprint.")
+  })
+
+  it("reads an approved keyframe manifest so resume can reuse reviewed keyframes", async () => {
+    const providers = await import("../../../apps/worker/src/lib/providers")
+
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "genergi-approved-keyframe-manifest-"))
+    const manifestPath = path.join(tempDir, "manifest.json")
+    await writeFile(
+      manifestPath,
+      JSON.stringify({
+        sceneCount: 3,
+        frames: [{ sceneId: "scene_1" }, { sceneId: "scene_2" }, { sceneId: "scene_3" }],
+      }),
+      "utf8",
+    )
+
+    const snapshot = await providers.readKeyframeBundleSnapshot(manifestPath)
+
+    expect(snapshot?.manifestPath).toBe(manifestPath)
+    expect(snapshot?.frameCount).toBe(3)
+    expect(snapshot?.keyframeDir).toBe(tempDir)
+  })
+
+  it("prefers the text model's final scene scripts and prompts when they are already structured", async () => {
+    const providers = await import("../../../apps/worker/src/lib/providers")
+
+    const baseScenes = [
+      {
+        id: "scene_1",
+        index: 0,
+        title: "Scene 1",
+        sceneGoal: "Scene 1",
+        voiceoverScript: "Explain the BaZi cycle.",
+        startFrameDescription: "A calm Chinese-style reading desk.",
+        script: "Explain the BaZi cycle.",
+        imagePrompt: "Explain the BaZi cycle. Create a 9:16 key visual that matches this exact beat of the script.",
+        videoPrompt: "Explain the BaZi cycle. Generate a 9:16 short-form social video shot for this exact script beat.",
+        startFrameIntent: "Explain the cycle",
+        endFrameIntent: "Hold on the reading desk",
+        durationSec: 8,
+        startLabel: "00:00",
+        endLabel: "00:08",
+        reviewStatus: "pending" as const,
+        keyframeStatus: "pending" as const,
+        continuityConstraints: ["same room"],
+        reviewNote: null,
+        reviewedAt: null,
+        keyframeReviewNote: null,
+        keyframeReviewedAt: null,
+      },
+    ]
+
+    const canonical = providers.buildCanonicalScenePlanFromBaseScenes(baseScenes as any, {
+      generationRoute: "multi_scene",
+      targetDurationSec: 8,
+      finalVoiceoverScript: "Explain the BaZi cycle.",
+      visualStyleGuide: "Preserve original tone.",
+      ctaLine: "Link in bio.",
+      scenePlan: [
+        {
+          sceneIndex: 0,
+          scenePurpose: "Show a panda mascot selling desk products",
+          durationSec: 8,
+          script: "Buy this desk lamp now.",
+          voiceoverScript: "Buy this desk lamp now.",
+          startFrameDescription: "Chinese-style room with a reader at a desk",
+          imagePrompt: "A panda mascot with a desk lamp",
+          videoPrompt: "Sell the desk lamp with flashy camera moves",
+          startFrameIntent: "Sell product",
+          endFrameIntent: "Close on product CTA",
+          transitionHint: "open",
+          continuityConstraints: ["same room"],
+        },
+      ],
+      blueprint: {
+        executionMode: "review_required",
+        renderSpec: createTaskDetail().taskRunConfig.renderSpecJson,
+        globalTheme: "BaZi",
+        visualStyleGuide: "Preserve original tone.",
+        subjectProfile: "Reader at desk",
+        productProfile: "BaZi report",
+        backgroundConstraints: ["Chinese-style room"],
+        negativeConstraints: ["no product swap"],
+        totalVoiceoverScript: "Explain the BaZi cycle.",
+        sceneContracts: [],
+      },
+    })
+
+    expect(canonical[0]?.script).toBe("Buy this desk lamp now.")
+    expect(canonical[0]?.voiceoverScript).toBe("Buy this desk lamp now.")
+    expect(canonical[0]?.imagePrompt).toBe("A panda mascot with a desk lamp")
+    expect(canonical[0]?.videoPrompt).toBe("Sell the desk lamp with flashy camera moves")
+    expect(canonical[0]?.startFrameDescription).toBe("Chinese-style room with a reader at a desk")
+    expect(canonical[0]?.scenePurpose).toBe("Show a panda mascot selling desk products")
+    expect(canonical[0]?.endFrameIntent).toBe("Close on product CTA")
+  })
+
+  it("applies structured planning output as the final narration and prompt contract instead of resetting to the source script", async () => {
+    const providers = await import("../../../apps/worker/src/lib/providers")
+
+    const detail = createTaskDetail({
+      script: "Original source script.",
+      scenes: [
+        {
+          id: "scene_1",
+          index: 0,
+          title: "Scene 1",
+          sceneGoal: "Scene 1",
+          voiceoverScript: "Original source script.",
+          startFrameDescription: "Original frame",
+          script: "Original source script.",
+          imagePrompt: "Original image prompt",
+          videoPrompt: "Original video prompt",
+          startFrameIntent: "Original start intent",
+          endFrameIntent: "Original end intent",
+          durationSec: 15,
+          startLabel: "00:00",
+          endLabel: "00:15",
+          reviewStatus: "pending" as const,
+          keyframeStatus: "pending" as const,
+          continuityConstraints: ["same setting"],
+          reviewNote: null,
+          reviewedAt: null,
+          keyframeReviewNote: null,
+          keyframeReviewedAt: null,
+        },
+      ] as TaskDetail["scenes"],
+    })
+
+    const applied = providers.applyModelPlanningOutput(detail, {
+      generationRoute: "single_shot",
+      targetDurationSec: 15,
+      finalVoiceoverScript: "Model-approved final narration.",
+      visualStyleGuide: "Premium cinematic lighting.",
+      ctaLine: "Tap to learn more.",
+      scenePlan: [
+        {
+          sceneIndex: 0,
+          scenePurpose: "Open with the strongest visual hook",
+          durationSec: 15,
+          script: "Model scene script.",
+          voiceoverScript: "Model scene narration.",
+          startFrameDescription: "A premium product hero shot.",
+          imagePrompt: "Final polished image prompt from the text model.",
+          videoPrompt: "Final polished video prompt from the text model.",
+          startFrameIntent: "Hook instantly",
+          endFrameIntent: "Land on the CTA",
+          transitionHint: "close",
+          continuityConstraints: ["same hero product"],
+        },
+      ],
+      blueprint: {
+        executionMode: "review_required",
+        renderSpec: detail.taskRunConfig.renderSpecJson,
+        globalTheme: "Hero product launch",
+        visualStyleGuide: "Premium cinematic lighting.",
+        subjectProfile: "Single hero product",
+        productProfile: "Desk charger",
+        backgroundConstraints: ["clean premium studio"],
+        negativeConstraints: ["no subtitles"],
+        totalVoiceoverScript: "Model-approved final narration.",
+        sceneContracts: [],
+      },
+    })
+
+    expect(applied.detail.script).toBe("Model-approved final narration.")
+    expect(applied.detail.scenes[0]?.script).toBe("Model scene narration.")
+    expect(applied.detail.scenes[0]?.voiceoverScript).toBe("Model scene narration.")
+    expect(applied.blueprint.totalVoiceoverScript).toBe("Model-approved final narration.")
+    expect(applied.blueprint.sceneContracts[0]?.imagePrompt).toContain("Final polished image prompt from the text model.")
+    expect(applied.blueprint.sceneContracts[0]?.videoPrompt).toContain("Final polished video prompt from the text model.")
+    expect(applied.blueprint.sceneContracts[0]?.videoPrompt).toBe("Final polished video prompt from the text model.")
   })
 
   it("strips markdown separators and drops trailing incomplete sentence fragments", async () => {
@@ -463,6 +1132,385 @@ Here's the thing. In Chinese destiny analysis, there's a pattern called "late bl
     expect(manifest.frames).toHaveLength(2)
     expect(manifest.frames[0].sceneIndex).toBe(0)
     expect(manifest.frames[1].sceneIndex).toBe(1)
+  })
+
+  it("keeps review-gated keyframe generation on the long timeout path without fallback wording", async () => {
+    const providers = await import("../../../apps/worker/src/lib/providers")
+
+    const policy = providers.resolveKeyframeGenerationTimeoutPolicy({
+      detail: createTaskDetail({
+        taskRunConfig: {
+          ...createTaskDetail().taskRunConfig,
+          executionMode: "review_required",
+        },
+      }),
+      continueExecution: false,
+    })
+
+    expect(policy.timeoutMs).toBe(240000)
+    expect(policy.onTimeoutMessage).toBe("Image generation timed out before review assets were ready")
+  })
+
+  it("raises the automated keyframe timeout ceiling to the same 4 minute window", async () => {
+    const providers = await import("../../../apps/worker/src/lib/providers")
+
+    const policy = providers.resolveKeyframeGenerationTimeoutPolicy({
+      detail: createTaskDetail({
+        taskRunConfig: {
+          ...createTaskDetail().taskRunConfig,
+          executionMode: "automated",
+        },
+      }),
+      continueExecution: false,
+    })
+
+    expect(policy.timeoutMs).toBe(240000)
+    expect(policy.onTimeoutMessage).toBe("Image generation timeout, switching to video-derived keyframe")
+  })
+
+  it("generates keyframes for multiple scenes concurrently instead of one-by-one", async () => {
+    const providers = await import("../../../apps/worker/src/lib/providers")
+
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "genergi-keyframe-concurrency-"))
+    process.env.GENERGI_DATA_DIR = tempDir
+
+    const detail = createTaskDetail({
+      taskId: "task_keyframe_concurrency",
+      scenes: [
+        {
+          id: "scene_1",
+          index: 0,
+          title: "Scene 1",
+          sceneGoal: "Scene 1",
+          voiceoverScript: "Scene one narration.",
+          startFrameDescription: "Scene one frame",
+          script: "Scene one narration.",
+          imagePrompt: "Scene one final image prompt.",
+          videoPrompt: "Scene one video prompt.",
+          startFrameIntent: "Start one",
+          endFrameIntent: "End one",
+          durationSec: 8,
+          startLabel: "00:00",
+          endLabel: "00:08",
+          reviewStatus: "pending",
+          keyframeStatus: "pending",
+          continuityConstraints: [],
+          reviewNote: null,
+          reviewedAt: null,
+          keyframeReviewNote: null,
+          keyframeReviewedAt: null,
+        },
+        {
+          id: "scene_2",
+          index: 1,
+          title: "Scene 2",
+          sceneGoal: "Scene 2",
+          voiceoverScript: "Scene two narration.",
+          startFrameDescription: "Scene two frame",
+          script: "Scene two narration.",
+          imagePrompt: "Scene two final image prompt.",
+          videoPrompt: "Scene two video prompt.",
+          startFrameIntent: "Start two",
+          endFrameIntent: "End two",
+          durationSec: 8,
+          startLabel: "00:08",
+          endLabel: "00:16",
+          reviewStatus: "pending",
+          keyframeStatus: "pending",
+          continuityConstraints: [],
+          reviewNote: null,
+          reviewedAt: null,
+          keyframeReviewNote: null,
+          keyframeReviewedAt: null,
+        },
+      ],
+    })
+
+    const started: string[] = []
+    const releaseQueue: Array<() => void> = []
+
+    const bundlePromise = providers.createKeyframeBundle(
+      {
+        taskId: detail.taskId,
+        detail,
+        model: detail.taskRunConfig.imageModel.id,
+      },
+      {
+        createGatewayImageArtifact: async ({ prompt }) => {
+          started.push(prompt)
+          await new Promise<void>((resolve) => {
+            releaseQueue.push(resolve)
+          })
+          return {
+            bytes: Buffer.from(prompt, "utf8"),
+            extension: "png",
+            generationId: null,
+          }
+        },
+      },
+    )
+
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(started).toHaveLength(2)
+    releaseQueue.forEach((resolve) => resolve())
+
+    const bundle = await bundlePromise
+    expect(bundle.frameCount).toBe(2)
+  })
+
+  it("writes planning trace files and exposes them as supporting assets", async () => {
+    const providers = await import("../../../apps/worker/src/lib/providers")
+
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "genergi-planning-trace-assets-"))
+    process.env.GENERGI_DATA_DIR = tempDir
+
+    const detail = createTaskDetail({
+      taskId: "task_trace_assets",
+      script: "Final rewritten narration.",
+    })
+
+    const taskDir = await providers.writeTaskSourceFiles(detail, {
+      sourceScript: "Original source script.",
+      planningPrompt: "Full planning prompt.",
+      planningResponse: "{\"finalVoiceoverScript\":\"Final rewritten narration.\"}",
+      planningAudit: {
+        provider: "anthropic-compatible",
+        model: "claude-opus-4-6",
+        usedFallback: false,
+      },
+    })
+
+    const assets = await providers.buildTaskDocumentAssetRecords({
+      taskId: detail.taskId,
+      taskDir,
+      createdAt: "2026-04-20T00:00:00.000Z",
+    })
+
+    expect(assets.map((asset) => asset.assetType)).toEqual([
+      "script",
+      "source_script",
+      "planning_prompt",
+      "planning_response",
+      "planning_audit",
+      "storyboard",
+    ])
+  })
+
+  it("builds individual keyframe image assets from the keyframe manifest", async () => {
+    const providers = await import("../../../apps/worker/src/lib/providers")
+
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "genergi-keyframe-image-assets-"))
+    const keyframeDir = path.join(tempDir, "keyframes")
+    await mkdir(keyframeDir, { recursive: true })
+    await writeFile(path.join(keyframeDir, "scene-01.jpg"), "frame-1", "utf8")
+    await writeFile(path.join(keyframeDir, "scene-02.jpg"), "frame-2", "utf8")
+    const manifestPath = path.join(keyframeDir, "manifest.json")
+    await writeFile(
+      manifestPath,
+      JSON.stringify({
+        frames: [
+          {
+            sceneId: "scene_1",
+            sceneIndex: 0,
+            title: "Hook",
+            fileName: "scene-01.jpg",
+            filePath: path.join(keyframeDir, "scene-01.jpg"),
+          },
+          {
+            sceneId: "scene_2",
+            sceneIndex: 1,
+            title: "Reveal",
+            fileName: "scene-02.jpg",
+            filePath: path.join(keyframeDir, "scene-02.jpg"),
+          },
+        ],
+      }),
+      "utf8",
+    )
+
+    const assets = await providers.buildKeyframeAssetRecords({
+      taskId: "task_keyframe_assets",
+      manifestPath,
+      label: "关键帧包",
+      createdAt: "2026-04-20T00:00:00.000Z",
+    })
+
+    expect(assets.map((asset) => asset.assetType)).toEqual([
+      "keyframe_bundle",
+      "keyframe_image",
+      "keyframe_image",
+    ])
+    expect(assets[1]?.path).toContain("scene-01.jpg")
+    expect(assets[2]?.path).toContain("scene-02.jpg")
+  })
+
+  it("builds progress asset records so asset center can show generated files before the task finishes", async () => {
+    const providers = await import("../../../apps/worker/src/lib/providers")
+
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "genergi-progress-assets-"))
+    process.env.GENERGI_DATA_DIR = tempDir
+
+    const detail = createTaskDetail({
+      taskId: "task_progress_assets",
+      script: "Final rewritten narration.",
+    })
+
+    const taskDir = await providers.writeTaskSourceFiles(detail, {
+      sourceScript: "Original source script.",
+      planningPrompt: "Full planning prompt.",
+      planningResponse: "{\"finalVoiceoverScript\":\"Final rewritten narration.\"}",
+      planningAudit: {
+        provider: "anthropic-compatible",
+        model: "claude-opus-4-6",
+        usedFallback: false,
+      },
+    })
+
+    const keyframeDir = path.join(tempDir, "keyframes")
+    await mkdir(keyframeDir, { recursive: true })
+    await writeFile(path.join(keyframeDir, "scene-01.jpg"), "frame-1", "utf8")
+    const manifestPath = path.join(keyframeDir, "manifest.json")
+    await writeFile(
+      manifestPath,
+      JSON.stringify({
+        frames: [
+          {
+            sceneId: "scene_1",
+            sceneIndex: 0,
+            title: "Hook",
+            fileName: "scene-01.jpg",
+            filePath: path.join(keyframeDir, "scene-01.jpg"),
+          },
+        ],
+      }),
+      "utf8",
+    )
+
+    const assets = await providers.buildProgressAssetRecords({
+      taskId: detail.taskId,
+      taskDir,
+      createdAt: "2026-04-20T00:00:00.000Z",
+      keyframeManifestPath: manifestPath,
+      keyframeLabel: "关键帧包",
+    })
+
+    expect(assets.map((asset) => asset.assetType)).toEqual([
+      "script",
+      "source_script",
+      "planning_prompt",
+      "planning_response",
+      "planning_audit",
+      "storyboard",
+      "keyframe_bundle",
+      "keyframe_image",
+    ])
+  })
+
+  it("prepares styled subtitles and passes them into final video muxing", async () => {
+    const providers = await import("../../../apps/worker/src/lib/providers")
+
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "genergi-final-video-subtitles-"))
+    process.env.GENERGI_DATA_DIR = tempDir
+
+    const sceneOnePath = path.join(tempDir, "scene-1.mp4")
+    const sceneTwoPath = path.join(tempDir, "scene-2.mp4")
+    const narrationPath = path.join(tempDir, "narration.mp3")
+    const subtitlesPath = path.join(tempDir, "subtitles.srt")
+    await writeFile(sceneOnePath, "scene-1", "utf8")
+    await writeFile(sceneTwoPath, "scene-2", "utf8")
+    await writeFile(narrationPath, "audio", "utf8")
+    await writeFile(subtitlesPath, "1\n00:00:00,000 --> 00:00:01,000\nHello\n", "utf8")
+
+    let muxInput: {
+      videoPath: string
+      audioPath: string
+      outputPath: string
+      subtitlePath?: string | null
+    } | null = null
+
+    const result = await providers.buildFinalVideoWithNarration(
+      {
+        taskId: "task_final_subtitles",
+        sourceVideoPaths: [sceneOnePath, sceneTwoPath],
+        narrationPath,
+        subtitlesPath,
+        renderSpec: createTaskDetail().taskRunConfig.renderSpecJson,
+        targetDurationSec: 15,
+      },
+      {
+        concatVideos: async ({ outputPath }) => {
+          await writeFile(outputPath, "stitched", "utf8")
+        },
+        trimVideoDuration: async ({ outputPath }) => {
+          await writeFile(outputPath, "trimmed", "utf8")
+        },
+        writeStyledAssSubtitleFile: async ({ assPath }) => {
+          await writeFile(assPath, "[Script Info]", "utf8")
+          return assPath
+        },
+        muxNarrationIntoVideo: async (input) => {
+          muxInput = input
+          await writeFile(input.outputPath, "final", "utf8")
+        },
+        getMediaDurationSeconds: async () => 14.8,
+      },
+    )
+
+    expect(muxInput?.subtitlePath).toContain("subtitles.ass")
+    expect(result.outputPath).toContain("final-with-audio.mp4")
+    expect(result.actualDurationSec).toBe(14.8)
+  })
+
+  it("mixes preserved native video audio with narration when the task audio strategy requests ducked native audio", async () => {
+    const providers = await import("../../../apps/worker/src/lib/providers")
+
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "genergi-final-video-native-audio-mix-"))
+    process.env.GENERGI_DATA_DIR = tempDir
+
+    const sceneOnePath = path.join(tempDir, "scene-1.mp4")
+    const narrationPath = path.join(tempDir, "narration.mp3")
+    await writeFile(sceneOnePath, "scene-1", "utf8")
+    await writeFile(narrationPath, "audio", "utf8")
+
+    let trimInput: { videoPath: string; outputPath: string; durationSec: number; preserveAudio?: boolean } | null = null
+    let mixedInput: { videoPath: string; audioPath: string; outputPath: string; subtitlePath?: string | null } | null = null
+    let muxInput: { videoPath: string; audioPath: string; outputPath: string; subtitlePath?: string | null } | null = null
+
+    const result = await providers.buildFinalVideoWithNarration(
+      {
+        taskId: "task_final_native_mix",
+        sourceVideoPaths: [sceneOnePath],
+        narrationPath,
+        targetDurationSec: 8,
+        audioStrategy: "native_plus_tts_ducked" as any,
+      } as any,
+      {
+        concatVideos: async ({ outputPath }) => {
+          await writeFile(outputPath, "stitched", "utf8")
+        },
+        trimVideoDuration: async (input: any) => {
+          trimInput = input
+          await writeFile(input.outputPath, "trimmed", "utf8")
+        },
+        mixNarrationWithVideoAudio: async (input: any) => {
+          mixedInput = input
+          await writeFile(input.outputPath, "final", "utf8")
+        },
+        muxNarrationIntoVideo: async (input) => {
+          muxInput = input
+          await writeFile(input.outputPath, "final", "utf8")
+        },
+        getMediaDurationSeconds: async () => 8,
+      } as any,
+    )
+
+    expect(trimInput?.preserveAudio).toBe(true)
+    expect(mixedInput?.videoPath).toContain("trimmed-scenes.mp4")
+    expect(mixedInput?.audioPath).toBe(narrationPath)
+    expect(muxInput).toBeNull()
+    expect(result.actualDurationSec).toBe(8)
   })
 
   it("uses Gemini native image generation for flash-image models that declare gemini transport", async () => {

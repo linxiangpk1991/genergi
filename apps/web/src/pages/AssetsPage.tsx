@@ -5,8 +5,8 @@ import {
   buildAssetDownloadUrl,
   buildAssetPreviewUrl,
   buildBatchDashboardUrl,
-  buildKeyframeReviewUrl,
-  buildStoryboardReviewUrl,
+  buildTaskReviewUrl,
+  getAudioStrategyLabel,
   type AssetRecord,
   type RuntimeStatusResponse,
   type TaskSummary,
@@ -32,20 +32,48 @@ function getToleranceLabel(delta: number | null) {
   return "需复核"
 }
 
-function getReviewStageLabel(task: TaskSummary | null) {
-  if (!task?.reviewStage) {
+function getTaskFlowLabel(task: TaskSummary | null) {
+  if (!task) {
     return "待同步"
   }
 
-  if (task.reviewStage === "storyboard_review") {
-    return `待审分镜 (${task.pendingReviewCount ?? 0})`
+  if (task.statusDetail?.trim()) {
+    return task.statusDetail.trim()
   }
 
-  if (task.reviewStage === "keyframe_review") {
-    return `待审关键帧 (${task.pendingReviewCount ?? 0})`
+  if (task.executionMode === "review_required" && task.blueprintStatus === "ready_for_review") {
+    return `整任务待审 (蓝图 v${task.blueprintVersion})`
   }
 
-  return "自动 QA"
+  if (task.executionMode === "review_required" && task.blueprintStatus === "approved") {
+    return `审核已通过，待继续执行 (蓝图 v${task.blueprintVersion})`
+  }
+
+  if (task.executionMode === "review_required" && task.blueprintStatus === "rejected") {
+    return `蓝图已驳回 (蓝图 v${task.blueprintVersion})`
+  }
+
+  if (task.status === "completed") {
+    return "任务已完成"
+  }
+
+  if (task.status === "failed") {
+    return "任务失败"
+  }
+
+  if (task.status === "running") {
+    return "生成进行中"
+  }
+
+  return "等待生成"
+}
+
+function canCancelTask(task: TaskSummary | null) {
+  return task?.status === "queued" || task?.status === "running"
+}
+
+function canResumeFailedTask(task: TaskSummary | null) {
+  return task?.status === "failed"
 }
 
 function sortAssetsForDelivery(assets: AssetRecord[]) {
@@ -54,8 +82,13 @@ function sortAssetsForDelivery(assets: AssetRecord[]) {
     subtitles: 1,
     script: 2,
     audio: 3,
-    storyboard: 4,
-    keyframe_bundle: 5,
+    source_script: 4,
+    planning_prompt: 5,
+    planning_response: 6,
+    planning_audit: 7,
+    storyboard: 8,
+    keyframe_bundle: 9,
+    keyframe_image: 10,
   }
 
   return [...assets].sort((left, right) => {
@@ -75,9 +108,16 @@ export function AssetsPage() {
   const [runtime, setRuntime] = useState<RuntimeStatusResponse["runtime"] | null>(null)
   const [selectedTaskId, setSelectedTaskId] = useState("")
   const [assets, setAssets] = useState<AssetRecord[]>([])
+  const [previewAsset, setPreviewAsset] = useState<AssetRecord | null>(null)
+  const [previewText, setPreviewText] = useState("")
+  const [previewLoading, setPreviewLoading] = useState(false)
+  const [previewError, setPreviewError] = useState("")
   const [lastRefreshAt, setLastRefreshAt] = useState<string>("")
   const [isStale, setIsStale] = useState(false)
   const [loadError, setLoadError] = useState("")
+  const [actionError, setActionError] = useState("")
+  const [cancelingTaskId, setCancelingTaskId] = useState("")
+  const [resumingTaskId, setResumingTaskId] = useState("")
 
   function syncTaskContext(taskId?: string, replace = true) {
     const currentTaskId = searchParams.get("taskId") ?? ""
@@ -182,6 +222,32 @@ export function AssetsPage() {
     syncTaskContext(selectedTaskId, true)
   }, [selectedTaskId])
 
+  async function handleCancelTask(taskId: string) {
+    setActionError("")
+    setCancelingTaskId(taskId)
+    try {
+      const response = await api.cancelTask(taskId)
+      setTasks((current) => current.map((task) => (task.id === taskId ? response.task : task)))
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "终止任务失败")
+    } finally {
+      setCancelingTaskId("")
+    }
+  }
+
+  async function handleResumeFailedTask(taskId: string) {
+    setActionError("")
+    setResumingTaskId(taskId)
+    try {
+      const response = await api.resumeFailedTask(taskId)
+      setTasks((current) => current.map((task) => (task.id === taskId ? response.task : task)))
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "恢复运行失败")
+    } finally {
+      setResumingTaskId("")
+    }
+  }
+
   const selectedTask = useMemo(
     () => tasks.find((task) => task.id === selectedTaskId) ?? null,
     [tasks, selectedTaskId],
@@ -209,6 +275,50 @@ export function AssetsPage() {
   const sortedAssets = useMemo(() => sortAssetsForDelivery(assets), [assets])
   const deliverableAssets = sortedAssets.filter((asset) => ["video_bundle", "subtitles", "script", "audio"].includes(asset.assetType))
   const supportingAssets = sortedAssets.filter((asset) => !["video_bundle", "subtitles", "script", "audio"].includes(asset.assetType))
+
+  useEffect(() => {
+    if (previewAsset && !assets.some((asset) => asset.id === previewAsset.id)) {
+      setPreviewAsset(null)
+      setPreviewText("")
+      setPreviewError("")
+      setPreviewLoading(false)
+    }
+  }, [assets, previewAsset])
+
+  async function openInlinePreview(asset: AssetRecord) {
+    setPreviewAsset(asset)
+    setPreviewError("")
+
+    if (asset.previewKind === "text" || asset.previewKind === "json") {
+      setPreviewLoading(true)
+      try {
+        const response = await fetch(buildAssetPreviewUrl(asset.taskId, asset.id))
+        const content = await response.text()
+        if (!response.ok) {
+          throw new Error(content || `预览失败 (${response.status})`)
+        }
+
+        if (asset.previewKind === "json") {
+          try {
+            setPreviewText(JSON.stringify(JSON.parse(content), null, 2))
+          } catch {
+            setPreviewText(content)
+          }
+        } else {
+          setPreviewText(content)
+        }
+      } catch (error) {
+        setPreviewError(error instanceof Error ? error.message : "文本预览加载失败")
+        setPreviewText("")
+      } finally {
+        setPreviewLoading(false)
+      }
+      return
+    }
+
+    setPreviewLoading(false)
+    setPreviewText("")
+  }
 
   function renderAssetList(title: string, description: string, items: AssetRecord[]) {
     return (
@@ -266,14 +376,13 @@ export function AssetsPage() {
                 </div>
                 <div className="asset-item-actions">
                   {asset.previewable ? (
-                    <a
+                    <button
                       className="ghost-button"
-                      href={buildAssetPreviewUrl(asset.taskId, asset.id)}
-                      target="_blank"
-                      rel="noreferrer"
+                      onClick={() => void openInlinePreview(asset)}
+                      type="button"
                     >
                       预览
-                    </a>
+                    </button>
                   ) : (
                     <span className="ghost-button" aria-disabled="true">
                       预览不可用
@@ -331,9 +440,10 @@ export function AssetsPage() {
 
           <div className="planning-summary-card">
             <strong>{selectedTask?.planning?.generationRouteLabel ?? "待预判"}</strong>
-            <span>{selectedTask?.planning?.planningSummary ?? "这里会展示 route、时长和生成方式的真实摘要。"}</span>
+            <span>{selectedTask?.planning?.planningSummary ?? "这里会展示分镜路由、目标时长和规划原则的真实摘要。"}</span>
             <div className="planning-summary-tags">
               <span className="pill pill--sm">{selectedTask?.planning?.generationPreferenceLabel ?? "待接入"}</span>
+              <span className="pill pill--sm">{getAudioStrategyLabel(selectedTask?.audioStrategy)}</span>
               <span className="pill pill--sm">目标 {selectedTask?.targetDurationSec ?? 0}s</span>
               {selectedTask?.actualDurationSec ? (
                 <span className="pill pill--sm">实际 {selectedTask.actualDurationSec.toFixed(1)}s</span>
@@ -356,6 +466,11 @@ export function AssetsPage() {
           {loadError ? (
             <div className="review-inline-note review-inline-note--danger" role="alert">
               {loadError}
+            </div>
+          ) : null}
+          {actionError ? (
+            <div className="review-inline-note review-inline-note--danger" role="alert">
+              {actionError}
             </div>
           ) : null}
 
@@ -381,8 +496,8 @@ export function AssetsPage() {
               <strong className="metric-value">{assetStats.deliverableReadyCount}/{assetStats.deliverableTotal || 0}</strong>
             </div>
             <div className="asset-metric-card">
-              <div className="metric-label">审阅阶段</div>
-              <strong className="metric-value">{getReviewStageLabel(selectedTask)}</strong>
+              <div className="metric-label">当前链路</div>
+              <strong className="metric-value">{getTaskFlowLabel(selectedTask)}</strong>
             </div>
           </div>
 
@@ -390,6 +505,55 @@ export function AssetsPage() {
             <div className="asset-missing-notice">
               {assetStats.missingCount} 个记录指向的文件当前不可访问，列表仍保留元数据以兼容历史资产。
             </div>
+          ) : null}
+
+          {previewAsset ? (
+            <section className="planning-summary-card">
+              <div className="section-header">
+                <div>
+                  <strong>页内预览</strong>
+                  <div className="muted">{previewAsset.label} · {previewAsset.fileName}</div>
+                </div>
+                <button
+                  className="ghost-button"
+                  onClick={() => {
+                    setPreviewAsset(null)
+                    setPreviewText("")
+                    setPreviewError("")
+                    setPreviewLoading(false)
+                  }}
+                  type="button"
+                >
+                  关闭预览
+                </button>
+              </div>
+              {previewLoading ? <div className="muted">正在加载预览...</div> : null}
+              {previewError ? <div className="review-inline-note review-inline-note--danger">{previewError}</div> : null}
+              {!previewLoading && !previewError && (previewAsset.previewKind === "text" || previewAsset.previewKind === "json") ? (
+                <pre className="review-content" style={{ whiteSpace: "pre-wrap", maxHeight: 420, overflow: "auto" }}>{previewText}</pre>
+              ) : null}
+              {!previewLoading && !previewError && previewAsset.mimeType.startsWith("image/") ? (
+                <img
+                  alt={previewAsset.label}
+                  className="visual-preview__image"
+                  src={buildAssetPreviewUrl(previewAsset.taskId, previewAsset.id)}
+                />
+              ) : null}
+              {!previewLoading && !previewError && previewAsset.mimeType.startsWith("video/") ? (
+                <video
+                  controls
+                  className="visual-preview__image"
+                  src={buildAssetPreviewUrl(previewAsset.taskId, previewAsset.id)}
+                />
+              ) : null}
+              {!previewLoading && !previewError && previewAsset.mimeType.startsWith("audio/") ? (
+                <audio
+                  controls
+                  style={{ width: "100%" }}
+                  src={buildAssetPreviewUrl(previewAsset.taskId, previewAsset.id)}
+                />
+              ) : null}
+            </section>
           ) : null}
 
           {renderAssetList("最终交付物", "优先确认成片、字幕、脚本和音频是否已经齐全。", deliverableAssets)}
@@ -419,16 +583,35 @@ export function AssetsPage() {
             <h3>当前处理入口</h3>
             <div className="task-list compact-list">
               <div className="task-item">
-                <strong>{getReviewStageLabel(selectedTask)}</strong>
-                <span>资产排查完成后，可以直接跳回当前任务真正需要处理的工作台。</span>
+                <strong>{getTaskFlowLabel(selectedTask)}</strong>
+                <span>资产排查完成后，直接回到当前任务真正需要处理的唯一主工作台。</span>
                 <div className="task-item__actions">
-                  {selectedTask?.reviewStage === "storyboard_review" ? (
-                    <Link className="primary-button" to={buildStoryboardReviewUrl(selectedTask.id)}>
-                      进入分镜审阅
-                    </Link>
-                  ) : selectedTask?.reviewStage === "keyframe_review" ? (
-                    <Link className="primary-button" to={buildKeyframeReviewUrl(selectedTask.id)}>
-                      进入关键帧审阅
+                  {selectedTaskId && canCancelTask(selectedTask) ? (
+                    <button
+                      className="ghost-button"
+                      disabled={cancelingTaskId === selectedTaskId}
+                      onClick={() => void handleCancelTask(selectedTaskId)}
+                      type="button"
+                    >
+                      {cancelingTaskId === selectedTaskId ? "终止中..." : "终止任务"}
+                    </button>
+                  ) : null}
+                  {selectedTaskId && canResumeFailedTask(selectedTask) ? (
+                    <button
+                      className="ghost-button"
+                      disabled={resumingTaskId === selectedTaskId}
+                      onClick={() => void handleResumeFailedTask(selectedTaskId)}
+                      type="button"
+                    >
+                      {resumingTaskId === selectedTaskId ? "恢复中..." : "恢复运行"}
+                    </button>
+                  ) : null}
+                  {selectedTask?.executionMode === "review_required" &&
+                  (selectedTask.blueprintStatus === "ready_for_review" ||
+                    selectedTask.blueprintStatus === "approved" ||
+                    selectedTask.blueprintStatus === "rejected") ? (
+                    <Link className="primary-button" to={buildTaskReviewUrl(selectedTask)}>
+                      进入任务审核
                     </Link>
                   ) : (
                     <Link className="primary-button" to={buildBatchDashboardUrl(selectedTaskId || undefined)}>
@@ -446,9 +629,13 @@ export function AssetsPage() {
           <section className="card card--compact">
             <h3>规划依据</h3>
             <div className="task-list compact-list">
-              <div className="task-item"><strong>路由原因</strong><span>{selectedTask?.routeReason ?? "待接入"}</span></div>
-              <div className="task-item"><strong>内容策略</strong><span>{selectedTask?.planning?.generationPreferenceLabel ?? "待接入"}</span></div>
-              <div className="task-item"><strong>审阅状态</strong><span>{getReviewStageLabel(selectedTask)}</span></div>
+              {selectedTask?.status === "failed" && selectedTask?.failureReason ? (
+                <div className="task-item"><strong>失败原因</strong><span>{selectedTask.failureReason}</span></div>
+              ) : null}
+              <div className="task-item"><strong>分镜路由依据</strong><span>{selectedTask?.routeReason ?? "待接入"}</span></div>
+              <div className="task-item"><strong>规划原则</strong><span>{selectedTask?.planning?.generationPreferenceLabel ?? "待接入"}</span></div>
+              <div className="task-item"><strong>音频策略</strong><span>{getAudioStrategyLabel(selectedTask?.audioStrategy)}</span></div>
+              <div className="task-item"><strong>当前链路</strong><span>{getTaskFlowLabel(selectedTask)}</span></div>
               <div className="task-item"><strong>可预览资产</strong><span>{assetStats.previewableCount} 个</span></div>
               <div className="task-item"><strong>已就绪资产</strong><span>{assetStats.readyCount} 个</span></div>
             </div>

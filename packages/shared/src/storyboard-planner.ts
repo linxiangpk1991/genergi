@@ -5,14 +5,20 @@ export type PlannedStoryboardScene = {
   id: string
   index: number
   title: string
+  sceneGoal: string
+  voiceoverScript: string
+  startFrameDescription: string
   script: string
   imagePrompt: string
   videoPrompt: string
+  startFrameIntent: string
+  endFrameIntent: string
   durationSec: number
   startLabel: string
   endLabel: string
   reviewStatus: "pending" | "approved" | "rejected"
   keyframeStatus: "pending" | "approved" | "rejected"
+  continuityConstraints: string[]
 }
 
 export type SceneReviewMetadata = {
@@ -134,19 +140,48 @@ function formatTimestamp(totalSeconds: number) {
   return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`
 }
 
-function buildImagePrompt(sceneScript: string, aspectRatio: string) {
+function buildImagePrompt(input: {
+  sceneScript: string
+  aspectRatio: string
+  sceneGoal: string
+  startFrameDescription: string
+  startFrameIntent: string
+  continuityConstraints: string[]
+}) {
   return [
-    sceneScript,
-    `Create a ${aspectRatio} key visual that matches this exact beat of the script.`,
-    "Keep the subject, action, and emotional beat aligned with the script wording. No captions or UI elements.",
+    input.sceneScript,
+    `Scene goal: ${input.sceneGoal}.`,
+    `Start frame: ${input.startFrameDescription}.`,
+    `Opening intent: ${input.startFrameIntent}.`,
+    `Create a ${input.aspectRatio} key visual that matches this exact beat of the script.`,
+    input.continuityConstraints.length
+      ? `Continuity constraints: ${input.continuityConstraints.join(" / ")}.`
+      : "Preserve the same primary subject and setting unless the source script explicitly changes them.",
+    "Keep the subject, action, and emotional beat aligned with the source wording. No captions or UI elements.",
   ].join(" ")
 }
 
-function buildVideoPrompt(sceneScript: string, aspectRatio: string, durationSec: number) {
+function buildVideoPrompt(input: {
+  sceneScript: string
+  aspectRatio: string
+  durationSec: number
+  sceneGoal: string
+  startFrameDescription: string
+  startFrameIntent: string
+  endFrameIntent: string
+  continuityConstraints: string[]
+}) {
   return [
-    sceneScript,
-    `Generate a ${aspectRatio} short-form social video shot for this exact script beat.`,
-    `Target duration: ${durationSec} seconds.`,
+    input.sceneScript,
+    `Scene goal: ${input.sceneGoal}.`,
+    `Start frame: ${input.startFrameDescription}.`,
+    `Opening intent: ${input.startFrameIntent}.`,
+    `Ending intent: ${input.endFrameIntent}.`,
+    `Generate a ${input.aspectRatio} short-form social video shot for this exact script beat.`,
+    `Target duration: ${input.durationSec} seconds.`,
+    input.continuityConstraints.length
+      ? `Continuity constraints: ${input.continuityConstraints.join(" / ")}.`
+      : "Preserve the same primary subject and setting unless the source script explicitly changes them.",
     "The action, visual focus, and pacing must stay faithful to the script beat.",
   ].join(" ")
 }
@@ -218,19 +253,46 @@ export function buildStoryboardScenes(input: {
     cursorSec += durationSec
     const endLabel = formatTimestamp(cursorSec)
     const reviewDefaults = resolveSceneReviewDefaults(index, input.reviewRequirements)
+    const sceneGoal = buildSceneTitle(index, sceneScript)
+    const startFrameDescription = buildSceneTitle(index, sceneScript)
+    const startFrameIntent = buildSceneTitle(index, sceneScript)
+    const endFrameIntent = index === sceneCount - 1 ? "Close on the final scene." : `Hand off from scene ${index + 1}.`
+    const continuityConstraints: string[] = []
 
     return {
       id: `scene_${index + 1}`,
       index,
-      title: buildSceneTitle(index, sceneScript),
+      title: sceneGoal,
+      sceneGoal,
+      voiceoverScript: sceneScript,
+      startFrameDescription,
       script: sceneScript,
-      imagePrompt: buildImagePrompt(sceneScript, input.aspectRatio),
-      videoPrompt: buildVideoPrompt(sceneScript, input.aspectRatio, durationSec),
+      imagePrompt: buildImagePrompt({
+        sceneScript,
+        aspectRatio: input.aspectRatio,
+        sceneGoal,
+        startFrameDescription,
+        startFrameIntent,
+        continuityConstraints,
+      }),
+      videoPrompt: buildVideoPrompt({
+        sceneScript,
+        aspectRatio: input.aspectRatio,
+        durationSec,
+        sceneGoal,
+        startFrameDescription,
+        startFrameIntent,
+        endFrameIntent,
+        continuityConstraints,
+      }),
+      startFrameIntent,
+      endFrameIntent,
       durationSec,
       startLabel,
       endLabel,
       reviewStatus: reviewDefaults.reviewStatus,
       keyframeStatus: reviewDefaults.keyframeStatus,
+      continuityConstraints,
       reviewNote: null,
       reviewedAt: null,
       keyframeReviewNote: null,

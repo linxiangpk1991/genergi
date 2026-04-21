@@ -12,6 +12,7 @@ export default defineConfig({
       react: path.resolve(__dirname, "apps/web/node_modules/react/index.js"),
       "react-dom/client": path.resolve(__dirname, "apps/web/node_modules/react-dom/client.js"),
       "react-dom": path.resolve(__dirname, "apps/web/node_modules/react-dom/index.js"),
+      "react-router-dom": path.resolve(__dirname, "apps/web/node_modules/react-router-dom/dist/index.mjs"),
     },
   },
   test: {

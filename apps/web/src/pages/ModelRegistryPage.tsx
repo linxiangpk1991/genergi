@@ -185,7 +185,7 @@ export function ModelRegistryPage() {
         setNotice("模型记录已更新。若 provider 或能力元数据改过，请重新校验。")
       } else {
         await api.createModelRegistryEntry(payload)
-        setNotice("模型记录已创建。只有校验通过后才会进入任务覆盖可选池。")
+        setNotice("模型记录已创建。只有校验通过后才会进入默认值可选池。")
       }
 
       resetForm()
@@ -237,7 +237,7 @@ export function ModelRegistryPage() {
             <div className="eyebrow">Model Registry</div>
             <h2>模型注册表</h2>
             <p className="section-note">
-              每条记录都要明确绑定一个 provider、一个槽位和一份能力元数据。只有 `available` 的记录才会被任务启动页看到。
+              每条记录都要明确绑定一个 provider、一个槽位和一份能力元数据。只有 `available` 的记录才会进入默认值选择池。
             </p>
           </div>
           <div className="planning-summary-tags">
@@ -487,7 +487,7 @@ export function ModelRegistryPage() {
                           model.lifecycleStatus === "disabled" ? "draft" : "disabled",
                           model.lifecycleStatus === "disabled"
                             ? "模型已恢复到草稿状态，请重新校验。"
-                            : "模型已标记为禁用，不再出现在任务覆盖池中。",
+                            : "模型已标记为禁用，不再出现在默认值选择池中。",
                         )
                       }
                       type="button"

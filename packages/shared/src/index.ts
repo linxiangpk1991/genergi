@@ -9,6 +9,17 @@ import {
   resolvedSlotSnapshotSchema,
   taskModelOverrideSchema,
 } from "./model-control.js"
+import {
+  blueprintStatusSchema,
+  executionBlueprintSchema,
+  executionModeSchema,
+  projectApprovedBlueprintRecordSchema,
+  projectRecordSchema,
+  renderSpecSchema,
+  taskBlueprintRecordSchema,
+  taskBlueprintReviewRecordSchema,
+  terminalPresetIdSchema,
+} from "./video-blueprint.js"
 
 export type AppId = "web" | "api" | "worker"
 
@@ -20,6 +31,9 @@ export type VideoDurationSec = z.infer<typeof videoDurationSecSchema>
 
 export const channelProfileSchema = z.enum(["tiktok", "reels", "shorts"])
 export type ChannelProfileId = z.infer<typeof channelProfileSchema>
+
+export const audioStrategySchema = z.enum(["tts_only", "native_plus_tts_ducked"])
+export type AudioStrategy = z.infer<typeof audioStrategySchema>
 
 export const taskStatusSchema = z.enum([
   "draft",
@@ -78,18 +92,25 @@ export const modelRefSchema = z.object({
 export type ModelRef = z.infer<typeof modelRefSchema>
 
 export const taskRunConfigSchema = z.object({
+  projectId: z.string().min(1),
   modeId: productionModeSchema,
+  executionMode: executionModeSchema.default("automated"),
   channelId: channelProfileSchema,
+  terminalPresetId: terminalPresetIdSchema.default("phone_portrait"),
+  renderSpecJson: renderSpecSchema,
   targetDurationSec: videoDurationSecSchema,
   generationMode: generationModeSchema,
   enhancementMode: enhancementModeSchema,
   generationRoute: generationRouteSchema,
   routeReason: z.string(),
   planningVersion: planningVersionSchema,
+  blueprintVersion: z.number().int().nonnegative().default(0),
+  blueprintStatus: blueprintStatusSchema.default("pending_generation"),
   textModel: modelRefSchema,
   imageModel: modelRefSchema,
   videoModel: modelRefSchema,
   ttsProvider: z.string(),
+  audioStrategy: audioStrategySchema.default("tts_only"),
   contentLocale: z.literal("en"),
   operatorLocale: z.literal("zh-CN"),
   requireStoryboardReview: z.boolean(),
@@ -112,15 +133,25 @@ export type CostEstimate = z.infer<typeof costEstimateSchema>
 
 export const taskSummarySchema = z.object({
   id: z.string(),
+  projectId: z.string().min(1),
   title: z.string(),
   modeId: productionModeSchema,
+  executionMode: executionModeSchema.default("automated"),
   channelId: channelProfileSchema,
+  terminalPresetId: terminalPresetIdSchema.default("phone_portrait"),
+  renderSpecJson: renderSpecSchema,
   targetDurationSec: videoDurationSecSchema,
   generationMode: generationModeSchema,
   generationRoute: generationRouteSchema,
   routeReason: z.string(),
   planningVersion: planningVersionSchema,
+  blueprintVersion: z.number().int().nonnegative().default(0),
+  blueprintStatus: blueprintStatusSchema.default("pending_generation"),
+  audioStrategy: audioStrategySchema.default("tts_only"),
   actualDurationSec: z.number().positive().nullable(),
+  failureReason: z.string().nullable().optional(),
+  statusDetail: z.string().nullable().optional(),
+  cancelRequestedAt: z.string().nullable().optional(),
   status: taskStatusSchema,
   progressPct: z.number().min(0).max(100),
   retryCount: z.number().int().nonnegative(),
@@ -134,14 +165,20 @@ export const storyboardSceneSchema = z.object({
   id: z.string(),
   index: z.number().int().nonnegative(),
   title: z.string(),
+  sceneGoal: z.string().optional(),
+  voiceoverScript: z.string().optional(),
+  startFrameDescription: z.string().optional(),
   script: z.string(),
   imagePrompt: z.string(),
   videoPrompt: z.string(),
+  startFrameIntent: z.string().optional(),
+  endFrameIntent: z.string().optional(),
   durationSec: z.number().positive(),
   startLabel: z.string(),
   endLabel: z.string(),
   reviewStatus: z.enum(["pending", "approved", "rejected"]),
   keyframeStatus: z.enum(["pending", "approved", "rejected"]),
+  continuityConstraints: z.array(z.string()).optional(),
   reviewNote: z.string().nullable().optional(),
   reviewedAt: z.string().nullable().optional(),
   keyframeReviewNote: z.string().nullable().optional(),
@@ -151,12 +188,18 @@ export type StoryboardScene = z.infer<typeof storyboardSceneSchema>
 
 export const taskDetailSchema = z.object({
   taskId: z.string(),
+  projectId: z.string().min(1),
   title: z.string(),
   script: z.string(),
   taskRunConfig: taskRunConfigSchema,
+  blueprintVersion: z.number().int().nonnegative().default(0),
+  blueprintStatus: blueprintStatusSchema.default("pending_generation"),
   visualStyleGuide: z.string().optional(),
   ctaLine: z.string().optional(),
   actualDurationSec: z.number().positive().nullable().optional(),
+  failureReason: z.string().nullable().optional(),
+  statusDetail: z.string().nullable().optional(),
+  cancelRequestedAt: z.string().nullable().optional(),
   scenes: z.array(storyboardSceneSchema),
   updatedAt: z.string(),
 }).extend(reviewSummarySchema.shape)
@@ -165,7 +208,19 @@ export type TaskDetail = z.infer<typeof taskDetailSchema>
 export const assetRecordSchema = z.object({
   id: z.string(),
   taskId: z.string(),
-  assetType: z.enum(["script", "storyboard", "subtitles", "audio", "keyframe_bundle", "video_bundle"]),
+  assetType: z.enum([
+    "script",
+    "source_script",
+    "planning_prompt",
+    "planning_response",
+    "planning_audit",
+    "storyboard",
+    "subtitles",
+    "audio",
+    "keyframe_bundle",
+    "keyframe_image",
+    "video_bundle",
+  ]),
   label: z.string(),
   status: z.enum(["ready", "pending"]),
   path: z.string(),
@@ -174,13 +229,16 @@ export const assetRecordSchema = z.object({
 export type AssetRecord = z.infer<typeof assetRecordSchema>
 
 export const createTaskInputSchema = z.object({
+  projectId: z.string().min(1),
   title: z.string().min(1),
   script: z.string().min(1),
-  modeId: productionModeSchema,
-  channelId: channelProfileSchema,
+  modeId: productionModeSchema.default("high_quality"),
+  channelId: channelProfileSchema.default("tiktok"),
+  terminalPresetId: terminalPresetIdSchema.default("phone_portrait"),
   aspectRatio: z.string().default("9:16"),
   targetDurationSec: videoDurationSecSchema.default(30),
   generationMode: generationModeSchema.default("user_locked"),
+  audioStrategy: audioStrategySchema.default("tts_only"),
   modelOverrides: taskModelOverrideSchema.optional(),
 })
 export type CreateTaskInput = z.infer<typeof createTaskInputSchema>
@@ -251,3 +309,5 @@ export * from "./generation-route.js"
 export * from "./planning-contract.js"
 export * from "./model-control.js"
 export * from "./provider-model-ids.js"
+export * from "./video-blueprint.js"
+export * from "./blueprint-persistence.js"
