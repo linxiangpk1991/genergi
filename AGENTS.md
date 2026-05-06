@@ -1,5 +1,7 @@
 # AGENTS.md for E:\genergi
 
+Before starting implementation work, follow the `Agent Working Agreement` section in this file.
+
 ## Product Identity
 - Main brand: `GENERGI`
 - Product display name: `GENERGI 自动化视频平台`
@@ -45,6 +47,33 @@
 - Keep examples in `.env.example`, `provider.example.json`, and `mode.example.json`.
 - Prefer Chinese documentation by default. Add English docs only when necessary.
 - Key code comments should be Chinese-first for orchestration, budget, retry, migration, and provider fallback logic.
+
+## Agent Working Agreement
+
+### Think Before Coding
+- Do not silently assume ambiguous requirements. State assumptions explicitly before implementation when they matter.
+- If there are multiple reasonable interpretations, surface them instead of picking one invisibly.
+- If the request can be solved with a simpler approach, prefer the simpler approach and say so.
+- If something is materially unclear, stop and ask rather than writing speculative code.
+
+### Simplicity First
+- Implement the minimum code and minimum change set that solves the actual problem.
+- Do not add speculative flexibility, configuration, abstraction, or error handling that was not requested.
+- Avoid introducing reusable layers for one-off logic.
+- If a solution feels larger than the problem, simplify it before shipping.
+
+### Surgical Changes
+- Touch only the files and lines that are necessary for the request.
+- Do not refactor, restyle, reformat, or “clean up” adjacent code unless the current task requires it.
+- Match the existing local style of the file or module, even if a different style would be personally preferred.
+- Remove only the dead code or imports made obsolete by the current change, not unrelated historical leftovers.
+
+### Goal-Driven Execution
+- Convert requests into explicit, verifiable success criteria before implementing.
+- For multi-step work, prefer a short plan where each step has a concrete verification check.
+- For bug fixes, reproduce the issue first, then fix it, then verify the original symptom is gone.
+- For behavior changes, prefer tests or direct evidence over intuition.
+- Do not claim completion without fresh verification evidence.
 
 ## Deployment Direction
 - Reuse the same production host family as `E:\anhe_automation`, but keep full directory isolation.
