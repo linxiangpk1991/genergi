@@ -96,4 +96,180 @@ export const workflowGuides: HelpWorkflowGuide[] = [
     ],
     relatedFeatureIds: ["batch-dashboard", "asset-center", "task-review"],
   },
+  {
+    id: "production-dispatch-sop",
+    title: "生产调度 SOP",
+    summary: "用于值班运营按 queued / running / waiting_review / blocked / failed / completed lane 管理当天生产节奏。",
+    audienceNote: "适合日常排队、卡住任务、worker 容量和交付节奏调度。",
+    stages: [
+      {
+        id: "when",
+        title: "何时操作",
+        description: "每天开班、批量提交后、worker 或 redis 降级时，先进入生产调度台确认 lane 数量和卡住任务。",
+        notes: ["看到 blocked 或 failed 增长时，先停下追加任务。", "queued 明显高于 running 时，说明容量正在排队消化。"],
+      },
+      {
+        id: "where",
+        title: "点哪里",
+        description: "点侧栏「生产看板」，先看顶部生产 lane，再看「Worker / Redis 容量」和「卡住任务」。",
+        notes: ["blocked 任务先点「打开资产排查」。", "waiting_review 任务点「进入任务审核」。"],
+      },
+      {
+        id: "acceptance",
+        title: "验收什么",
+        description: "验收 queued 能进入 running、running 有新心跳、waiting_review 被处理、blocked 不继续堆积、completed 可进入资产验收。",
+        notes: ["最近刷新时间不能长期过期。", "worker 与 redis 至少要能说明当前是否健康。"],
+      },
+      {
+        id: "do-not",
+        title: "不要做什么",
+        description: "不要把看板当作重试按钮合集，不要在容量异常时重复提交同一母本，不要跳过资产排查直接恢复卡住任务。",
+      },
+    ],
+    decisionPoints: [
+      "blocked 优先级高于 queued；先排除卡住任务，再追加生产。",
+      "worker / redis 降级时只做安全动作入口，不把前端判断当作 BullMQ 内核状态。",
+      "completed 只代表生产链完成，交付是否可用仍要进资产中心验收。",
+    ],
+    relatedFeatureIds: ["batch-dashboard", "asset-center", "task-review"],
+  },
+  {
+    id: "failed-task-triage-sop",
+    title: "失败任务排查 SOP",
+    summary: "用于 failed lane 任务的失败分类、资产确认和恢复运行判断。",
+    audienceNote: "适合排障值班、交付复核和恢复运行前确认。",
+    stages: [
+      {
+        id: "when",
+        title: "何时操作",
+        description: "当生产调度台出现 failed，或任务卡在同一阶段并转为失败时，先执行失败任务排查。",
+        notes: ["先看失败分类，再看失败原因原文。", "Provider timeout 与资产缺失的处理顺序不同。"],
+      },
+      {
+        id: "where",
+        title: "点哪里",
+        description: "在 failed 卡片点「查看失败任务资产」或「打开资产排查」，进入资产中心核对最终视频和中间资产。",
+        notes: ["如果蓝图或提示词有明显问题，再从资产中心回到任务审核。"],
+      },
+      {
+        id: "acceptance",
+        title: "验收什么",
+        description: "验收当前已产出的资产、缺失资产类型、失败分类、最近心跳和恢复后状态是否回到 queued / running。",
+      },
+      {
+        id: "do-not",
+        title: "不要做什么",
+        description: "不要只凭 failed 文案猜原因，不要没看资产就恢复运行，不要把内容质量问题当成 provider 故障。",
+      },
+    ],
+    decisionPoints: [
+      "provider_timeout 可在确认资产缺口后恢复运行。",
+      "asset_missing 先确认文件是否真实缺失，再决定恢复或重新生成。",
+      "blueprint_contract 先回任务审核修正内容契约，不要直接恢复。",
+    ],
+    relatedFeatureIds: ["batch-dashboard", "asset-center", "task-review"],
+  },
+  {
+    id: "partial-retry-sop",
+    title: "局部重试选择 SOP",
+    summary: "用于判断应该恢复失败任务、恢复卡住任务，还是回到审核环节重建蓝图。",
+    audienceNote: "适合需要控制成本、避免整条链路重跑的运营场景。",
+    stages: [
+      {
+        id: "when",
+        title: "何时操作",
+        description: "当任务 failed、blocked，或资产中心显示部分资产已经就绪但最终交付缺失时，再考虑局部重试。",
+      },
+      {
+        id: "where",
+        title: "点哪里",
+        description: "先在生产调度台点「打开资产排查」；确认可恢复后，再点「恢复运行」或「恢复卡住任务」。",
+        notes: ["蓝图待审或已驳回时点「进入任务审核」，不要从看板硬恢复。"],
+      },
+      {
+        id: "acceptance",
+        title: "验收什么",
+        description: "验收恢复后任务回到 queued / running、retryCount 合理增长、心跳恢复、已存在资产没有被误判为缺失。",
+      },
+      {
+        id: "do-not",
+        title: "不要做什么",
+        description: "不要在没确认缺口前连续点恢复，不要为了省时间跳过蓝图审核，不要把局部重试当成内容返工工具。",
+      },
+    ],
+    decisionPoints: [
+      "保守顺序是：资产排查 -> 判断缺口 -> 再恢复。",
+      "如果失败点在内容契约，局部重试通常不会解决质量问题。",
+      "如果容量已经降级，先处理现有队列，不追加新的重试压力。",
+    ],
+    relatedFeatureIds: ["batch-dashboard", "asset-center", "task-review"],
+  },
+  {
+    id: "delivery-acceptance-sop",
+    title: "交付验收 SOP",
+    summary: "用于 completed 任务的最终视频、字幕、脚本和下载交付确认。",
+    audienceNote: "适合交付前最后一轮检查。",
+    stages: [
+      {
+        id: "when",
+        title: "何时操作",
+        description: "当生产调度台 lane 显示 completed，或交付负责人需要确认可发给客户/渠道时执行。",
+      },
+      {
+        id: "where",
+        title: "点哪里",
+        description: "在 completed 任务点「打开任务资产」，进入资产中心先看最终视频，再看字幕、脚本和中间资产。",
+      },
+      {
+        id: "acceptance",
+        title: "验收什么",
+        description: "验收最终视频能预览或下载、字幕和音频对齐、时长偏差在可接受范围、关键画面与母本语义一致。",
+      },
+      {
+        id: "do-not",
+        title: "不要做什么",
+        description: "不要只看到 completed 就交付，不要先翻中间资产忽略最终视频，不要把下载成功当成内容验收通过。",
+      },
+    ],
+    decisionPoints: [
+      "最终视频优先级高于中间资产。",
+      "时长、字幕、音频、主体一致性都通过后，才算交付可用。",
+      "交付缺失回资产中心排查，不在生产调度台直接猜原因。",
+    ],
+    relatedFeatureIds: ["batch-dashboard", "asset-center"],
+  },
+  {
+    id: "blueprint-review-sop",
+    title: "蓝图审核 SOP",
+    summary: "用于 waiting_review lane 的蓝图通过、驳回和继续完整生成判断。",
+    audienceNote: "适合高质量链路的内容审核和继续执行。",
+    stages: [
+      {
+        id: "when",
+        title: "何时操作",
+        description: "当生产调度台出现 waiting_review，或任务审核页显示蓝图待审、已通过待继续、已驳回待处理时执行。",
+      },
+      {
+        id: "where",
+        title: "点哪里",
+        description: "在 waiting_review 卡片点「进入任务审核」，逐段查看蓝图、关键画面、图片提示词、视频提示词和终端尺寸。",
+      },
+      {
+        id: "acceptance",
+        title: "验收什么",
+        description: "验收母本语义没有跑偏、分镜连续、关键画面可执行、提示词不互相矛盾、通过后任务能继续完整生成。",
+      },
+      {
+        id: "do-not",
+        title: "不要做什么",
+        description: "不要只看单张关键画面，不要把审核通过当成自动生成完成，不要在蓝图明显跑偏时直接继续执行。",
+      },
+    ],
+    decisionPoints: [
+      "内容契约可用才通过蓝图。",
+      "蓝图已通过后仍要显式继续完整生成。",
+      "蓝图驳回后先重建契约，再考虑重新生产视频。",
+    ],
+    relatedFeatureIds: ["task-review", "batch-dashboard", "project-library"],
+  },
 ]

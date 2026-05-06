@@ -13,6 +13,11 @@ import type {
   ReviewStageId,
   ReviewSummary,
   ProviderRecord,
+  RetryRequest,
+  RetryRequestInput,
+  RetryRequestQueueMetadata,
+  RetryRequestScope,
+  RetryRequestStatus,
   StoryboardScene,
   StoredUser,
   TaskDetail,
@@ -49,6 +54,8 @@ function resolveFiles() {
     tempRuntimeFile: path.join(dataDir, "runtime-status.tmp.json"),
     timelinesFile: path.join(dataDir, "task-timelines.json"),
     tempTimelinesFile: path.join(dataDir, "task-timelines.tmp.json"),
+    retryRequestsFile: path.join(dataDir, "task-retry-requests.json"),
+    tempRetryRequestsFile: path.join(dataDir, "task-retry-requests.tmp.json"),
     assetsFile: path.join(dataDir, "assets.json"),
     tempAssetsFile: path.join(dataDir, "assets.tmp.json"),
     usersFile: path.join(dataDir, "users.json"),
@@ -231,6 +238,83 @@ function normalizeTaskTimelineEvent(record: TaskTimelineEvent, fallbackSequence:
 
 function normalizeNonNegativeInteger(value: unknown) {
   return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : 0
+}
+
+function normalizeNullableNonNegativeInteger(value: unknown) {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null
+}
+
+function normalizeRetryRequestScope(value: unknown): RetryRequestScope {
+  return value === "scene" ? "scene" : "task"
+}
+
+function normalizeRetryRequestStatus(value: unknown): RetryRequestStatus {
+  switch (value) {
+    case "accepted":
+    case "enqueue_failed":
+    case "rejected":
+      return value
+    default:
+      return "pending"
+  }
+}
+
+function normalizeRetryRequestQueue(value: unknown): RetryRequestQueueMetadata | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null
+  }
+
+  const queue = value as Partial<RetryRequestQueueMetadata>
+  return {
+    queued: queue.queued === true,
+    jobId: normalizeNullableString(queue.jobId),
+    reason: normalizeNullableString(queue.reason) ?? "retry_failed_task",
+    continueExecution: queue.continueExecution === true,
+    blueprintVersion: normalizeNullableNonNegativeInteger(queue.blueprintVersion),
+    stage: normalizeNullableString(queue.stage),
+    resumeFrom: normalizeNullableString(queue.resumeFrom),
+  }
+}
+
+function normalizeTaskStatus(value: unknown): TaskSummary["status"] {
+  switch (value) {
+    case "draft":
+    case "queued":
+    case "running":
+    case "waiting_review":
+    case "paused":
+    case "failed":
+    case "completed":
+    case "canceled":
+      return value
+    default:
+      return "failed"
+  }
+}
+
+function normalizeRetryRequestRecord(
+  record: Partial<RetryRequest>,
+  taskId: string,
+  fallbackSequence: number,
+): RetryRequest {
+  const createdAt = normalizeNullableString(record.createdAt) ?? now()
+  const scope = normalizeRetryRequestScope(record.scope)
+  const sceneId = scope === "scene" ? normalizeNullableString(record.sceneId) : null
+  return {
+    id: normalizeNullableString(record.id) ?? `${taskId}_retry_${fallbackSequence}`,
+    taskId,
+    scope,
+    sceneId,
+    sceneIndex: scope === "scene" ? normalizeNullableNonNegativeInteger(record.sceneIndex) : null,
+    sceneTitle: scope === "scene" ? normalizeNullableString(record.sceneTitle) : null,
+    reason: normalizeNullableString(record.reason),
+    status: normalizeRetryRequestStatus(record.status),
+    statusDetail: normalizeNullableString(record.statusDetail),
+    taskStatusAtRequest: normalizeTaskStatus(record.taskStatusAtRequest),
+    queue: normalizeRetryRequestQueue(record.queue),
+    createdAt,
+    updatedAt: normalizeNullableString(record.updatedAt) ?? createdAt,
+  }
 }
 
 function normalizeReviewStage(value: unknown): ReviewStageId | null {
@@ -1015,6 +1099,82 @@ export async function appendTaskTimelineEvent(taskId: string, input: TaskTimelin
   records[taskId] = [...events, event].slice(-MAX_TASK_TIMELINE_EVENTS)
   await writeTaskTimelineRecords(records)
   return event
+}
+
+async function writeTaskRetryRequestRecords(records: Record<string, RetryRequest[]>) {
+  const { dataDir, retryRequestsFile, tempRetryRequestsFile } = resolveFiles()
+  await mkdir(dataDir, { recursive: true })
+  await commitTempFile(tempRetryRequestsFile, retryRequestsFile, JSON.stringify(records, null, 2))
+}
+
+export async function readTaskRetryRequestRecords(): Promise<Record<string, RetryRequest[]>> {
+  const { dataDir, retryRequestsFile } = resolveFiles()
+  await mkdir(dataDir, { recursive: true })
+  try {
+    const content = await readFile(retryRequestsFile, "utf8")
+    if (!content.trim()) {
+      return {}
+    }
+
+    const parsed = JSON.parse(content) as Record<string, RetryRequest[]>
+    return Object.fromEntries(
+      Object.entries(parsed).map(([taskId, requests]) => [
+        taskId,
+        Array.isArray(requests)
+          ? requests.map((request, index) => normalizeRetryRequestRecord(request, taskId, index + 1))
+          : [],
+      ]),
+    )
+  } catch {
+    return {}
+  }
+}
+
+export async function readTaskRetryRequests(taskId: string) {
+  const records = await readTaskRetryRequestRecords()
+  return records[taskId] ?? []
+}
+
+export async function appendTaskRetryRequest(taskId: string, input: RetryRequestInput) {
+  const records = await readTaskRetryRequestRecords()
+  const requests = records[taskId] ?? []
+  const sequence = requests.length + 1
+  const request = normalizeRetryRequestRecord(
+    {
+      ...input,
+      id: `${taskId}_retry_${sequence}`,
+      taskId,
+    },
+    taskId,
+    sequence,
+  )
+  records[taskId] = [...requests, request]
+  await writeTaskRetryRequestRecords(records)
+  return request
+}
+
+export async function updateTaskRetryRequest(
+  taskId: string,
+  retryRequestId: string,
+  updater: (request: RetryRequest) => RetryRequest,
+) {
+  const records = await readTaskRetryRequestRecords()
+  const requests = records[taskId] ?? []
+  let updated: RetryRequest | null = null
+  records[taskId] = requests.map((request, index) => {
+    if (request.id !== retryRequestId) {
+      return request
+    }
+
+    updated = normalizeRetryRequestRecord(updater(request), taskId, index + 1)
+    return updated
+  })
+  if (!updated) {
+    return null
+  }
+
+  await writeTaskRetryRequestRecords(records)
+  return updated
 }
 
 async function writeAssetRecords(records: Record<string, AssetRecord[]>) {

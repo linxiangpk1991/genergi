@@ -50,6 +50,41 @@ export const taskStatusSchema = z.enum([
 ])
 export type TaskStatus = z.infer<typeof taskStatusSchema>
 
+export const retryRequestScopeSchema = z.enum(["task", "scene", "keyframe", "video"])
+export type RetryRequestScope = z.infer<typeof retryRequestScopeSchema>
+
+export const retryRequestStatusSchema = z.enum(["pending", "accepted", "enqueue_failed", "rejected"])
+export type RetryRequestStatus = z.infer<typeof retryRequestStatusSchema>
+
+export const retryRequestQueueMetadataSchema = z.object({
+  queued: z.boolean(),
+  jobId: z.string().nullable(),
+  reason: z.string(),
+  continueExecution: z.boolean(),
+  blueprintVersion: z.number().int().nonnegative().nullable(),
+  stage: z.string().nullable(),
+  resumeFrom: z.string().nullable(),
+})
+export type RetryRequestQueueMetadata = z.infer<typeof retryRequestQueueMetadataSchema>
+
+export const retryRequestSchema = z.object({
+  id: z.string(),
+  taskId: z.string(),
+  scope: retryRequestScopeSchema,
+  sceneId: z.string().nullable(),
+  sceneIndex: z.number().int().nonnegative().nullable(),
+  sceneTitle: z.string().nullable(),
+  reason: z.string().nullable(),
+  status: retryRequestStatusSchema,
+  statusDetail: z.string().nullable(),
+  taskStatusAtRequest: taskStatusSchema,
+  queue: retryRequestQueueMetadataSchema.nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+})
+export type RetryRequest = z.infer<typeof retryRequestSchema>
+export type RetryRequestInput = Omit<RetryRequest, "id" | "taskId">
+
 export const reviewStageSchema = z.enum([
   "storyboard_review",
   "keyframe_review",

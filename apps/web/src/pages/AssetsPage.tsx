@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react"
 import { Link, useSearchParams } from "react-router-dom"
 import {
+  API_BASE_URL,
   api,
   buildAssetDownloadUrl,
   buildAssetPreviewUrl,
@@ -118,6 +119,527 @@ function getAssetDeleteLockLabel(task: TaskSummary | null) {
   return "任务仍在生成链路中，资产已锁定"
 }
 
+type DeliveryCheckKey =
+  | "finalVideo"
+  | "subtitles"
+  | "script"
+  | "cover"
+  | "title"
+  | "description"
+  | "manifest"
+
+type DeliveryItemStatus = "ready" | "needs_check" | "missing" | "failed" | "pending" | "unknown"
+type DeliveryWorkbenchSource = "api" | "fallback"
+type DeliveryRetryKind = "keyframe" | "video" | "scene"
+
+type DeliveryCheck = {
+  key: DeliveryCheckKey
+  label: string
+  status: DeliveryItemStatus
+  message: string
+  assetId?: string
+}
+
+type DeliverySceneCell = {
+  status: DeliveryItemStatus
+  label: string
+  message: string
+}
+
+type DeliverySceneRow = {
+  sceneId: string
+  index: number
+  title: string
+  keyframe: DeliverySceneCell
+  video: DeliverySceneCell
+  review: DeliverySceneCell
+}
+
+type DeliveryRecommendation = {
+  id: string
+  label: string
+  description: string
+  retryKind?: DeliveryRetryKind
+  sceneId?: string
+}
+
+type DeliveryWorkbench = {
+  source: DeliveryWorkbenchSource
+  checks: DeliveryCheck[]
+  scenes: DeliverySceneRow[]
+  recommendedActions: DeliveryRecommendation[]
+  retryEndpoints: Partial<Record<DeliveryRetryKind, string>>
+  message: string
+  updatedAt?: string
+}
+
+type DeliveryStatusSummary = {
+  id: "ready_to_publish" | "needs_delivery_check" | "missing_assets" | "failed_recovery"
+  label: string
+  description: string
+  tone: "success" | "warning" | "danger"
+}
+
+const DELIVERY_CHECK_ORDER: DeliveryCheckKey[] = [
+  "finalVideo",
+  "subtitles",
+  "script",
+  "cover",
+  "title",
+  "description",
+  "manifest",
+]
+
+const DELIVERY_CHECK_LABELS: Record<DeliveryCheckKey, string> = {
+  finalVideo: "final video / 成片",
+  subtitles: "subtitles / 字幕",
+  script: "script / 脚本",
+  cover: "cover / 封面",
+  title: "title / 标题",
+  description: "description / 描述",
+  manifest: "manifest / 清单",
+}
+
+const DELIVERY_STATUS_COPY: DeliveryStatusSummary[] = [
+  {
+    id: "ready_to_publish",
+    label: "Ready to Publish",
+    description: "最终交付物齐全，可以进入发布复核。",
+    tone: "success",
+  },
+  {
+    id: "needs_delivery_check",
+    label: "交付待检查",
+    description: "有待确认项，先看检查清单和 scene 矩阵。",
+    tone: "warning",
+  },
+  {
+    id: "missing_assets",
+    label: "缺资产",
+    description: "关键交付物缺失或文件不可访问。",
+    tone: "danger",
+  },
+  {
+    id: "failed_recovery",
+    label: "失败待恢复",
+    description: "任务失败或可恢复，需要局部重试或恢复运行。",
+    tone: "danger",
+  },
+]
+
+const RETRY_IMPACT_COPY: Record<DeliveryRetryKind, string> = {
+  keyframe: "只重做该 scene 的关键帧，可能影响后续视频画面一致性。",
+  video: "复用当前关键帧重做视频片段，会增加视频模型成本。",
+  scene: "重跑该 scene 的关键帧与视频，成本最高，适合画面方向错误。",
+}
+
+const ASSET_TYPE_BY_CHECK: Partial<Record<DeliveryCheckKey, AssetRecord["assetType"]>> = {
+  finalVideo: "video_bundle",
+  subtitles: "subtitles",
+  script: "script",
+  manifest: "keyframe_bundle",
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+function readString(value: unknown) {
+  return typeof value === "string" && value.trim() ? value.trim() : ""
+}
+
+function normalizeDeliveryStatus(value: unknown): DeliveryItemStatus {
+  const status = readString(value).toLowerCase().replaceAll("-", "_")
+
+  if (["ready", "ok", "pass", "passed", "available", "approved", "complete", "completed"].includes(status)) {
+    return "ready"
+  }
+
+  if (["review", "needs_review", "needs_check", "warning", "warn", "check"].includes(status)) {
+    return "needs_check"
+  }
+
+  if (["missing", "not_found", "absent", "unavailable"].includes(status)) {
+    return "missing"
+  }
+
+  if (["failed", "error", "rejected", "blocked"].includes(status)) {
+    return "failed"
+  }
+
+  if (["pending", "running", "queued", "generating", "in_progress"].includes(status)) {
+    return "pending"
+  }
+
+  return "unknown"
+}
+
+function normalizeCheckKey(value: string): DeliveryCheckKey | null {
+  const key = value.trim().toLowerCase().replaceAll("-", "_").replaceAll(" ", "_")
+
+  if (["final_video", "finalvideo", "video", "video_bundle", "final"].includes(key)) {
+    return "finalVideo"
+  }
+
+  if (["subtitles", "subtitle", "srt"].includes(key)) {
+    return "subtitles"
+  }
+
+  if (["script", "voiceover_script", "final_script"].includes(key)) {
+    return "script"
+  }
+
+  if (["cover", "cover_image", "thumbnail"].includes(key)) {
+    return "cover"
+  }
+
+  if (key === "title") {
+    return "title"
+  }
+
+  if (["description", "post_description", "caption"].includes(key)) {
+    return "description"
+  }
+
+  if (["manifest", "delivery_manifest", "keyframe_manifest"].includes(key)) {
+    return "manifest"
+  }
+
+  return null
+}
+
+function normalizeDeliveryCheck(rawKey: DeliveryCheckKey, value: unknown): DeliveryCheck {
+  if (!isRecord(value)) {
+    const status = normalizeDeliveryStatus(value)
+    return {
+      key: rawKey,
+      label: DELIVERY_CHECK_LABELS[rawKey],
+      status,
+      message: getDeliveryStatusLabel(status),
+    }
+  }
+
+  const status = normalizeDeliveryStatus(value.status ?? value.state ?? value.result)
+  return {
+    key: rawKey,
+    label: readString(value.label) || DELIVERY_CHECK_LABELS[rawKey],
+    status,
+    message: readString(value.message) || readString(value.reason) || getDeliveryStatusLabel(status),
+    assetId: readString(value.assetId) || undefined,
+  }
+}
+
+function normalizeSceneCell(value: unknown): DeliverySceneCell {
+  if (!isRecord(value)) {
+    const status = normalizeDeliveryStatus(value)
+    return {
+      status,
+      label: getDeliveryStatusLabel(status),
+      message: "",
+    }
+  }
+
+  const status = normalizeDeliveryStatus(value.status ?? value.state ?? value.result)
+  return {
+    status,
+    label: readString(value.label) || getDeliveryStatusLabel(status),
+    message: readString(value.message) || readString(value.reason),
+  }
+}
+
+function normalizeRetryKind(value: unknown): DeliveryRetryKind | undefined {
+  const kind = readString(value).toLowerCase()
+  if (kind === "keyframe" || kind === "video" || kind === "scene") {
+    return kind
+  }
+  return undefined
+}
+
+function normalizeRetryEndpoints(value: unknown): Partial<Record<DeliveryRetryKind, string>> {
+  if (!isRecord(value)) {
+    return {}
+  }
+
+  return {
+    keyframe: readString(value.keyframe) || undefined,
+    video: readString(value.video) || undefined,
+    scene: readString(value.scene) || undefined,
+  }
+}
+
+function normalizeRecommendedActions(value: unknown): DeliveryRecommendation[] {
+  if (!Array.isArray(value)) {
+    return []
+  }
+
+  return value.map((item, index) => {
+    if (!isRecord(item)) {
+      return {
+        id: `action_${index}`,
+        label: String(item),
+        description: "",
+      }
+    }
+
+    return {
+      id: readString(item.id) || `action_${index}`,
+      label: readString(item.label) || readString(item.title) || "建议动作",
+      description: readString(item.description) || readString(item.message),
+      retryKind: normalizeRetryKind(item.retryKind ?? item.kind),
+      sceneId: readString(item.sceneId) || undefined,
+    }
+  })
+}
+
+function normalizeSceneRows(value: unknown): DeliverySceneRow[] {
+  if (!Array.isArray(value)) {
+    return []
+  }
+
+  return value.map((item, index) => {
+    const row = isRecord(item) ? item : {}
+    const sceneId = readString(row.sceneId) || readString(row.id) || `scene_${index + 1}`
+    const sceneIndex = typeof row.index === "number" ? row.index : index
+
+    return {
+      sceneId,
+      index: sceneIndex,
+      title: readString(row.title) || `Scene ${sceneIndex + 1}`,
+      keyframe: normalizeSceneCell(row.keyframe ?? row.keyframeStatus),
+      video: normalizeSceneCell(row.video ?? row.videoStatus),
+      review: normalizeSceneCell(row.review ?? row.reviewStatus),
+    }
+  })
+}
+
+export function normalizeDeliveryWorkbench(payload: unknown): DeliveryWorkbench {
+  const root = isRecord(payload) && isRecord(payload.delivery) ? payload.delivery : payload
+  const record = isRecord(root) ? root : {}
+  const checksValue = record.checks
+  const checksByKey = new Map<DeliveryCheckKey, DeliveryCheck>()
+
+  if (Array.isArray(checksValue)) {
+    checksValue.forEach((item) => {
+      if (!isRecord(item)) {
+        return
+      }
+      const rawKey = readString(item.key) || readString(item.id) || readString(item.type)
+      const key = normalizeCheckKey(rawKey)
+      if (key) {
+        checksByKey.set(key, normalizeDeliveryCheck(key, item))
+      }
+    })
+  } else if (isRecord(checksValue)) {
+    Object.entries(checksValue).forEach(([rawKey, value]) => {
+      const key = normalizeCheckKey(rawKey)
+      if (key) {
+        checksByKey.set(key, normalizeDeliveryCheck(key, value))
+      }
+    })
+  }
+
+  const checks = DELIVERY_CHECK_ORDER.map(
+    (key) =>
+      checksByKey.get(key) ?? {
+        key,
+        label: DELIVERY_CHECK_LABELS[key],
+        status: "unknown" as const,
+        message: "等待交付接口确认",
+      },
+  )
+
+  return {
+    source: "api",
+    checks,
+    scenes: normalizeSceneRows(record.sceneMatrix ?? record.scenes),
+    recommendedActions: normalizeRecommendedActions(record.recommendedActions ?? record.actions),
+    retryEndpoints: normalizeRetryEndpoints(record.retryEndpoints),
+    message: readString(record.operatorMessage) || readString(record.message),
+    updatedAt: readString(record.updatedAt) || undefined,
+  }
+}
+
+function getDeliveryStatusLabel(status: DeliveryItemStatus) {
+  switch (status) {
+    case "ready":
+      return "就绪"
+    case "needs_check":
+      return "待检查"
+    case "missing":
+      return "缺失"
+    case "failed":
+      return "失败"
+    case "pending":
+      return "生成中"
+    default:
+      return "待确认"
+  }
+}
+
+function isReadyAsset(asset: AssetRecord) {
+  return asset.exists && asset.status === "ready"
+}
+
+function findAssetForCheck(assets: AssetRecord[], key: DeliveryCheckKey) {
+  const assetType = ASSET_TYPE_BY_CHECK[key]
+  if (!assetType) {
+    return null
+  }
+  return assets.find((asset) => asset.assetType === assetType) ?? null
+}
+
+export function buildFallbackDeliveryWorkbench(input: {
+  task: TaskSummary | null
+  assets: AssetRecord[]
+  diagnostics: TaskDiagnostics | null
+}): DeliveryWorkbench {
+  const checks = DELIVERY_CHECK_ORDER.map<DeliveryCheck>((key) => {
+    const asset = findAssetForCheck(input.assets, key)
+
+    if (!asset && ASSET_TYPE_BY_CHECK[key]) {
+      return {
+        key,
+        label: DELIVERY_CHECK_LABELS[key],
+        status: "missing",
+        message: "现有资产列表未找到该交付物",
+      }
+    }
+
+    if (asset) {
+      const status = isReadyAsset(asset) ? "ready" : asset.exists ? "pending" : "missing"
+      return {
+        key,
+        label: DELIVERY_CHECK_LABELS[key],
+        status,
+        message: isReadyAsset(asset) ? asset.fileName : asset.exists ? "文件仍在生成或待刷新" : "记录存在但文件不可访问",
+        assetId: asset.id,
+      }
+    }
+
+    return {
+      key,
+      label: DELIVERY_CHECK_LABELS[key],
+      status: "unknown",
+      message: "等待 /delivery 接口返回发布字段",
+    }
+  })
+
+  const currentSceneTotal = input.diagnostics?.runtimeTrace.currentSceneTotal ?? input.task?.currentSceneTotal ?? 0
+  const currentSceneIndex = input.diagnostics?.runtimeTrace.currentSceneIndex ?? input.task?.currentSceneIndex ?? null
+  const scenes = Array.from({ length: currentSceneTotal }, (_, index) => {
+    const isCurrentScene = currentSceneIndex === index
+    const pendingStatus: DeliverySceneCell = {
+      status: isCurrentScene ? "pending" : "unknown",
+      label: isCurrentScene ? "生成中" : "待确认",
+      message: isCurrentScene ? "当前运行阶段指向此 scene" : "等待 scene 矩阵接口确认",
+    }
+    const reviewStatus: DeliverySceneCell = {
+      status: "unknown",
+      label: "待确认",
+      message: "等待 review 状态同步",
+    }
+
+    return {
+      sceneId: `scene_${index + 1}`,
+      index,
+      title: `Scene ${index + 1}`,
+      keyframe: pendingStatus,
+      video: pendingStatus,
+      review: reviewStatus,
+    }
+  })
+
+  return {
+    source: "fallback",
+    checks,
+    scenes,
+    recommendedActions: input.diagnostics?.recoverable
+      ? [
+          {
+            id: "resume_failed_task",
+            label: "恢复失败任务",
+            description: input.diagnostics.operatorMessage,
+          },
+        ]
+      : [],
+    retryEndpoints: {},
+    message: "交付接口暂未接入，当前根据资产、诊断和 timeline 保守推断。",
+  }
+}
+
+export function classifyDeliveryWorkbench(
+  workbench: DeliveryWorkbench | null,
+  task: TaskSummary | null,
+): DeliveryStatusSummary {
+  if (task?.status === "failed" || workbench?.checks.some((check) => check.status === "failed")) {
+    return DELIVERY_STATUS_COPY.find((item) => item.id === "failed_recovery") ?? DELIVERY_STATUS_COPY[3]
+  }
+
+  if (workbench?.checks.some((check) => check.status === "missing")) {
+    return DELIVERY_STATUS_COPY.find((item) => item.id === "missing_assets") ?? DELIVERY_STATUS_COPY[2]
+  }
+
+  const hasAllExplicitChecks = Boolean(workbench && workbench.checks.every((check) => check.status === "ready"))
+  if (task?.status === "completed" && hasAllExplicitChecks) {
+    return DELIVERY_STATUS_COPY.find((item) => item.id === "ready_to_publish") ?? DELIVERY_STATUS_COPY[0]
+  }
+
+  return DELIVERY_STATUS_COPY.find((item) => item.id === "needs_delivery_check") ?? DELIVERY_STATUS_COPY[1]
+}
+
+function resolveApiUrl(pathOrUrl: string) {
+  if (/^https?:\/\//i.test(pathOrUrl)) {
+    return pathOrUrl
+  }
+
+  const path = pathOrUrl.startsWith("/") ? pathOrUrl : `/${pathOrUrl}`
+  return `${API_BASE_URL}${path}`
+}
+
+async function fetchTaskDeliveryWorkbench(taskId: string) {
+  const response = await fetch(resolveApiUrl(`/api/tasks/${encodeURIComponent(taskId)}/delivery`), {
+    credentials: "include",
+  })
+  const content = await response.text()
+
+  if (!response.ok) {
+    throw new Error(content || `交付检查加载失败 (${response.status})`)
+  }
+
+  return normalizeDeliveryWorkbench(content ? JSON.parse(content) : {})
+}
+
+async function postDeliveryRetry(input: {
+  taskId: string
+  workbench: DeliveryWorkbench | null
+  kind: DeliveryRetryKind
+  sceneId?: string
+}) {
+  const endpoint =
+    input.workbench?.retryEndpoints[input.kind] ??
+    `/api/tasks/${encodeURIComponent(input.taskId)}/retry`
+  const response = await fetch(resolveApiUrl(endpoint), {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      scope: input.kind,
+      sceneId: input.sceneId,
+      reason: `${input.kind}${input.sceneId ? `:${input.sceneId}` : ""}`,
+      source: "asset_center_delivery_workbench",
+    }),
+  })
+  const content = await response.text()
+
+  if (!response.ok) {
+    throw new Error(content || `局部重试失败 (${response.status})`)
+  }
+
+  return content ? JSON.parse(content) : {}
+}
+
 function sortAssetsForDelivery(assets: AssetRecord[]) {
   const priority: Record<AssetRecord["assetType"], number> = {
     video_bundle: 0,
@@ -153,6 +675,8 @@ export function AssetsPage() {
   const [timeline, setTimeline] = useState<TaskTimelineEvent[]>([])
   const [diagnostics, setDiagnostics] = useState<TaskDiagnostics | null>(null)
   const [diagnosticsError, setDiagnosticsError] = useState("")
+  const [deliveryWorkbench, setDeliveryWorkbench] = useState<DeliveryWorkbench | null>(null)
+  const [deliveryError, setDeliveryError] = useState("")
   const [previewAsset, setPreviewAsset] = useState<AssetRecord | null>(null)
   const [previewText, setPreviewText] = useState("")
   const [previewLoading, setPreviewLoading] = useState(false)
@@ -166,6 +690,7 @@ export function AssetsPage() {
   const [resumingTaskId, setResumingTaskId] = useState("")
   const [deletingAssetId, setDeletingAssetId] = useState("")
   const [deletingTaskAssets, setDeletingTaskAssets] = useState(false)
+  const [retryingDeliveryAction, setRetryingDeliveryAction] = useState("")
 
   function syncTaskContext(taskId?: string, replace = true) {
     const currentTaskId = searchParams.get("taskId") ?? ""
@@ -184,6 +709,47 @@ export function AssetsPage() {
     }
 
     setSearchParams(nextSearchParams, { replace })
+  }
+
+  async function loadTaskWorkData(taskId: string) {
+    if (!taskId) {
+      setAssets([])
+      setTimeline([])
+      setDiagnostics(null)
+      setDiagnosticsError("")
+      setDeliveryWorkbench(null)
+      setDeliveryError("")
+      return
+    }
+
+    const [assetResult, timelineResult, diagnosticsResult, deliveryResult] = await Promise.all([
+      api.getTaskAssets(taskId),
+      api.getTaskTimeline(taskId).catch(() => ({ timeline: [] })),
+      api
+        .getTaskDiagnostics(taskId)
+        .then((result) => ({ diagnostics: result.diagnostics, error: "" }))
+        .catch(() => ({ diagnostics: null, error: "诊断暂不可用，资产列表仍可查看。" })),
+      fetchTaskDeliveryWorkbench(taskId)
+        .then((delivery) => ({ delivery, error: "" }))
+        .catch(() => ({ delivery: null, error: "交付检查接口暂不可用，已根据资产和诊断保守推断。" })),
+    ])
+
+    const taskForFallback = tasks.find((task) => task.id === taskId) ?? null
+    const fallbackWorkbench = buildFallbackDeliveryWorkbench({
+      task: taskForFallback,
+      assets: assetResult.assets,
+      diagnostics: diagnosticsResult.diagnostics,
+    })
+
+    setAssets(assetResult.assets)
+    setTimeline(timelineResult.timeline)
+    setDiagnostics(diagnosticsResult.diagnostics)
+    setDiagnosticsError(diagnosticsResult.error)
+    setDeliveryWorkbench(deliveryResult.delivery ?? fallbackWorkbench)
+    setDeliveryError(deliveryResult.error)
+    setLastRefreshAt(new Date().toLocaleTimeString("zh-CN"))
+    setIsStale(false)
+    setLoadError("")
   }
 
   useEffect(() => {
@@ -232,45 +798,19 @@ export function AssetsPage() {
   }, [routeTaskId, selectedTaskId, tasks])
 
   useEffect(() => {
-    async function loadAssets() {
-      if (!selectedTaskId) {
-        setAssets([])
-        setTimeline([])
-        setDiagnostics(null)
-        setDiagnosticsError("")
-        return
-      }
-
-      const [assetResult, timelineResult] = await Promise.all([
-        api.getTaskAssets(selectedTaskId),
-        api.getTaskTimeline(selectedTaskId).catch(() => ({ timeline: [] })),
-      ])
-      setAssets(assetResult.assets)
-      setTimeline(timelineResult.timeline)
-      void api.getTaskDiagnostics(selectedTaskId)
-        .then((diagnosticsResult) => {
-          setDiagnostics(diagnosticsResult.diagnostics)
-          setDiagnosticsError("")
-        })
-        .catch(() => {
-          setDiagnostics(null)
-          setDiagnosticsError("诊断暂不可用，资产列表仍可查看。")
-        })
-      setLastRefreshAt(new Date().toLocaleTimeString("zh-CN"))
-      setIsStale(false)
-      setLoadError("")
-    }
-
-    void loadAssets().catch(() => {
+    void loadTaskWorkData(selectedTaskId).catch(() => {
       setAssets([])
       setTimeline([])
+      setDeliveryWorkbench(null)
+      setDeliveryError("")
       setIsStale(true)
       setLoadError("资产列表加载失败，当前无法确认交付物完整性。")
     })
 
     const timer = window.setInterval(() => {
-      void loadAssets().catch(() => {
+      void loadTaskWorkData(selectedTaskId).catch(() => {
         setAssets([])
+        setDeliveryWorkbench(null)
         setIsStale(true)
         setLoadError("资产自动刷新失败，当前可能显示的是旧结果。")
       })
@@ -333,8 +873,7 @@ export function AssetsPage() {
     setDeletingAssetId(asset.id)
     try {
       await api.deleteTaskAsset(asset.taskId, asset.id)
-      const assetResult = await api.getTaskAssets(asset.taskId)
-      setAssets(assetResult.assets)
+      await loadTaskWorkData(asset.taskId)
       setActionSuccess(`已删除资产：${asset.label}`)
     } catch (error) {
       setActionError(error instanceof Error ? error.message : "删除资产失败")
@@ -362,13 +901,43 @@ export function AssetsPage() {
     setDeletingTaskAssets(true)
     try {
       await api.deleteTaskAssets(selectedTask.id)
-      const assetResult = await api.getTaskAssets(selectedTask.id)
-      setAssets(assetResult.assets)
+      await loadTaskWorkData(selectedTask.id)
       setActionSuccess(`已清空任务资产：${selectedTask.title}`)
     } catch (error) {
       setActionError(error instanceof Error ? error.message : "清空任务资产失败")
     } finally {
       setDeletingTaskAssets(false)
+    }
+  }
+
+  async function handleDeliveryRetry(kind: DeliveryRetryKind, sceneId?: string) {
+    if (!selectedTaskId) {
+      return
+    }
+
+    const impact = RETRY_IMPACT_COPY[kind]
+    const targetLabel = sceneId ? `scene ${sceneId}` : "当前任务"
+    if (!window.confirm(`确认发起 ${kind} 局部重试吗？\n\n影响提示：${impact}\n\n目标：${targetLabel}`)) {
+      return
+    }
+
+    const actionKey = `${kind}:${sceneId ?? "task"}`
+    setActionError("")
+    setActionSuccess("")
+    setRetryingDeliveryAction(actionKey)
+    try {
+      await postDeliveryRetry({
+        taskId: selectedTaskId,
+        workbench: deliveryWorkbench,
+        kind,
+        sceneId,
+      })
+      await loadTaskWorkData(selectedTaskId)
+      setActionSuccess(`已提交 ${kind} 局部重试：${targetLabel}`)
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "局部重试失败")
+    } finally {
+      setRetryingDeliveryAction("")
     }
   }
 
@@ -401,6 +970,18 @@ export function AssetsPage() {
   const supportingAssets = sortedAssets.filter((asset) => !["video_bundle", "subtitles", "script", "audio"].includes(asset.assetType))
   const assetDeleteLocked = !canDeleteTaskAssets(selectedTask)
   const assetDeleteLockLabel = getAssetDeleteLockLabel(selectedTask)
+  const deliveryStatus = useMemo(
+    () => classifyDeliveryWorkbench(deliveryWorkbench, selectedTask),
+    [deliveryWorkbench, selectedTask],
+  )
+  const deliveryChecks = useMemo(
+    () =>
+      [...(deliveryWorkbench?.checks ?? [])].sort(
+        (left, right) => DELIVERY_CHECK_ORDER.indexOf(left.key) - DELIVERY_CHECK_ORDER.indexOf(right.key),
+      ),
+    [deliveryWorkbench],
+  )
+  const deliveryScenes = deliveryWorkbench?.scenes ?? []
   const recentTimeline = useMemo(() => [...timeline].slice(-6).reverse(), [timeline])
   const heartbeatAgeLabel = useMemo(() => {
     const ageMs = diagnostics?.stale.ageMs
@@ -563,6 +1144,30 @@ export function AssetsPage() {
     )
   }
 
+  function renderDeliveryRetryButton(kind: DeliveryRetryKind, sceneId?: string) {
+    const actionKey = `${kind}:${sceneId ?? "task"}`
+    return (
+      <button
+        className="ghost-button ghost-button--compact"
+        disabled={!selectedTaskId || retryingDeliveryAction === actionKey}
+        onClick={() => void handleDeliveryRetry(kind, sceneId)}
+        title={RETRY_IMPACT_COPY[kind]}
+        type="button"
+      >
+        {retryingDeliveryAction === actionKey ? "提交中..." : `retry ${kind}`}
+      </button>
+    )
+  }
+
+  function renderSceneCell(cell: DeliverySceneCell) {
+    return (
+      <div className={`delivery-scene-cell delivery-scene-cell--${cell.status}`}>
+        <strong>{cell.label}</strong>
+        {cell.message ? <span>{cell.message}</span> : null}
+      </div>
+    )
+  }
+
   return (
     <>
       <header className="topbar">
@@ -635,6 +1240,127 @@ export function AssetsPage() {
               {actionSuccess}
             </div>
           ) : null}
+          {deliveryError ? (
+            <div className="review-inline-note" role="status">
+              {deliveryError}
+            </div>
+          ) : null}
+
+          <section className="delivery-workbench">
+            <div className="section-header section-header--stack">
+              <div>
+                <div className="eyebrow">Delivery Workbench</div>
+                <h2>交付工作台</h2>
+                <div className="muted">
+                  当前判断：{deliveryStatus.label}
+                  {deliveryWorkbench?.source === "fallback" ? " · 使用资产/诊断回退推断" : " · 来自交付检查接口"}
+                  {deliveryWorkbench?.updatedAt ? ` · ${new Date(deliveryWorkbench.updatedAt).toLocaleString("zh-CN")}` : ""}
+                </div>
+              </div>
+              <span className={`delivery-status-pill delivery-status-pill--${deliveryStatus.tone}`}>
+                {deliveryStatus.label}
+              </span>
+            </div>
+
+            <div className="delivery-status-grid">
+              {DELIVERY_STATUS_COPY.map((item) => (
+                <div
+                  className={`delivery-status-card delivery-status-card--${item.tone}${deliveryStatus.id === item.id ? " delivery-status-card--active" : ""}`}
+                  key={item.id}
+                >
+                  <strong>{item.label}</strong>
+                  <span>{item.description}</span>
+                </div>
+              ))}
+            </div>
+
+            <div className="delivery-check-grid">
+              {deliveryChecks.map((check) => (
+                <div className={`delivery-check delivery-check--${check.status}`} key={check.key}>
+                  <div className="delivery-check__header">
+                    <strong>{check.label}</strong>
+                    <span>{getDeliveryStatusLabel(check.status)}</span>
+                  </div>
+                  <div className="muted">{check.message}</div>
+                  {check.assetId ? (
+                    <div className="mono delivery-check__asset">asset {check.assetId}</div>
+                  ) : null}
+                </div>
+              ))}
+              {!deliveryChecks.length ? (
+                <div className="task-item">
+                  <strong>等待任务上下文</strong>
+                  <span>选择任务后会显示 final video、subtitles、script、cover、title、description、manifest 检查。</span>
+                </div>
+              ) : null}
+            </div>
+
+            {deliveryWorkbench?.message ? (
+              <div className="delivery-message">
+                {deliveryWorkbench.message}
+              </div>
+            ) : null}
+
+            <div className="delivery-retry-guide">
+              {(Object.keys(RETRY_IMPACT_COPY) as DeliveryRetryKind[]).map((kind) => (
+                <div key={kind}>
+                  <strong>{kind}</strong>
+                  <span>{RETRY_IMPACT_COPY[kind]}</span>
+                </div>
+              ))}
+            </div>
+
+            <div className="delivery-scene-matrix">
+              <div className="delivery-scene-matrix__head">
+                <span>scene</span>
+                <span>keyframe</span>
+                <span>video</span>
+                <span>review</span>
+                <span>局部重试</span>
+              </div>
+              {deliveryScenes.map((scene) => (
+                <div className="delivery-scene-matrix__row" key={scene.sceneId}>
+                  <div className="delivery-scene-title">
+                    <strong>{scene.index + 1}. {scene.title}</strong>
+                    <span className="mono">{scene.sceneId}</span>
+                  </div>
+                  {renderSceneCell(scene.keyframe)}
+                  {renderSceneCell(scene.video)}
+                  {renderSceneCell(scene.review)}
+                  <div className="delivery-retry-actions">
+                    {renderDeliveryRetryButton("keyframe", scene.sceneId)}
+                    {renderDeliveryRetryButton("video", scene.sceneId)}
+                    {renderDeliveryRetryButton("scene", scene.sceneId)}
+                  </div>
+                </div>
+              ))}
+              {!deliveryScenes.length ? (
+                <div className="delivery-scene-matrix__empty">
+                  <strong>暂无 scene 矩阵</strong>
+                  <span>后端返回 sceneMatrix 后，这里会逐段显示 keyframe / video / review 状态。</span>
+                </div>
+              ) : null}
+            </div>
+
+            {deliveryWorkbench?.recommendedActions.length ? (
+              <div className="delivery-actions-panel">
+                <div className="field-label">推荐动作</div>
+                <div className="task-list compact-list">
+                  {deliveryWorkbench.recommendedActions.map((action) => (
+                    <div className="task-item" key={action.id}>
+                      <strong>{action.label}</strong>
+                      <span>{action.description || "根据当前交付检查结果推荐。"}</span>
+                      {action.retryKind ? (
+                        <div className="task-item__actions">
+                          {renderDeliveryRetryButton(action.retryKind, action.sceneId)}
+                        </div>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+          </section>
 
           <div className="asset-metrics">
             <div className="asset-metric-card">

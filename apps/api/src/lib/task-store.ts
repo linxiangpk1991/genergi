@@ -1433,6 +1433,61 @@ export async function resumeFailedTask(taskId: string) {
   }
 }
 
+export async function markTaskRetryPending(taskId: string) {
+  const tasks = await listTasks()
+  const task = tasks.find((entry) => entry.id === taskId)
+  if (!task) {
+    return null
+  }
+
+  const detail = await readTaskDetail(taskId)
+  if (!detail) {
+    return null
+  }
+
+  const retryAt = now()
+  const nextSummary = normalizeTaskSummaryRecord({
+    ...task,
+    status: "queued",
+    failureReason: null,
+    statusDetail: "等待 worker 局部重试",
+    cancelRequestedAt: null,
+    retryCount: task.retryCount + 1,
+    currentStage: "retry_pending",
+    currentStageLabel: "等待 worker 局部重试",
+    currentSceneIndex: null,
+    currentSceneTotal: null,
+    stageStartedAt: retryAt,
+    lastHeartbeatAt: retryAt,
+    workerId: null,
+    activeJobId: null,
+    updatedAt: retryAt,
+  })
+  const nextDetail = normalizeTaskDetailRecord({
+    ...detail,
+    failureReason: null,
+    statusDetail: "等待 worker 局部重试",
+    cancelRequestedAt: null,
+    currentStage: "retry_pending",
+    currentStageLabel: "等待 worker 局部重试",
+    currentSceneIndex: null,
+    currentSceneTotal: null,
+    stageStartedAt: retryAt,
+    lastHeartbeatAt: retryAt,
+    workerId: null,
+    activeJobId: null,
+    updatedAt: retryAt,
+  })
+
+  await writeTaskSummaries(tasks.map((entry) => (entry.id === taskId ? nextSummary : entry)))
+  await upsertTaskDetail(nextDetail)
+
+  return {
+    summary: nextSummary,
+    detail: nextDetail,
+  }
+}
+
 export async function restoreTaskState(taskSnapshot: TaskSummary, detailSnapshot: TaskDetail) {
   const tasks = await listTasks()
   await writeTaskSummaries(tasks.map((entry) =>

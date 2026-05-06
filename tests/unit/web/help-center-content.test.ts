@@ -67,4 +67,32 @@ describe("help center content integrity", () => {
       expect(entry.operatorNotes.length).toBeGreaterThan(0)
     }
   })
+
+  it("documents production SOPs with operation timing, click targets, acceptance checks, and guardrails", () => {
+    const allHelpText = [
+      ...workflowGuides.flatMap((workflow) => [
+        workflow.title,
+        workflow.summary,
+        workflow.audienceNote,
+        ...workflow.stages.flatMap((stage) => [stage.title, stage.description, ...(stage.notes ?? [])]),
+        ...workflow.decisionPoints,
+      ]),
+      ...featureGuides.flatMap((feature) => [
+        feature.title,
+        feature.purpose,
+        feature.whenToUse,
+        ...feature.sections.flatMap((section) => [section.title, ...section.points]),
+      ]),
+    ].join("\n")
+
+    expect(allHelpText).toContain("失败任务排查")
+    expect(allHelpText).toContain("局部重试选择")
+    expect(allHelpText).toContain("交付验收")
+    expect(allHelpText).toContain("生产调度")
+    expect(allHelpText).toContain("蓝图审核")
+    expect(allHelpText).toContain("何时操作")
+    expect(allHelpText).toContain("点哪里")
+    expect(allHelpText).toContain("验收什么")
+    expect(allHelpText).toContain("不要做什么")
+  })
 })

@@ -406,6 +406,90 @@ describe("task status details and cancel actions", () => {
     })
   })
 
+  it("shows production lanes, stuck-task signals, ETA, heartbeat, and capacity guidance", async () => {
+    vi.mocked(api.listTasks).mockResolvedValue({
+      tasks: [
+        createRunningTask({
+          id: "task_queued",
+          title: "Queued task",
+          status: "queued",
+          progressPct: 0,
+          currentStageLabel: null,
+          statusDetail: "等待 worker 接单",
+          updatedAt: new Date(Date.now() - 2 * 60 * 1000).toISOString(),
+        }),
+        createRunningTask({
+          id: "task_blocked",
+          title: "Blocked task",
+          statusDetail: "关键画面生成中 3/4",
+          updatedAt: new Date(Date.now() - 25 * 60 * 1000).toISOString(),
+          lastHeartbeatAt: new Date(Date.now() - 25 * 60 * 1000).toISOString(),
+          currentStageLabel: "关键画面生成",
+          stageStartedAt: new Date(Date.now() - 32 * 60 * 1000).toISOString(),
+          workerId: "worker-a",
+          activeJobId: "job-123",
+        }),
+        createFailedTask({
+          id: "task_provider_failed",
+          title: "Provider failed task",
+          failureReason: "Video provider timeout after 60s",
+          statusDetail: "视频 Provider 超时",
+          updatedAt: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
+        }),
+        createRunningTask({
+          id: "task_review",
+          title: "Waiting review task",
+          status: "running",
+          progressPct: 45,
+          blueprintStatus: "ready_for_review",
+          statusDetail: "蓝图待人工审核",
+          lastHeartbeatAt: new Date(Date.now() - 3 * 60 * 1000).toISOString(),
+        }),
+        createRunningTask({
+          id: "task_completed",
+          title: "Completed task",
+          status: "completed",
+          progressPct: 100,
+          actualDurationSec: 30,
+          statusDetail: "已完成",
+        }),
+      ],
+    } as any)
+
+    await act(async () => {
+      root.render(
+        createElement(
+          MemoryRouter,
+          { initialEntries: ["/batch-dashboard"] },
+          createElement(
+            Routes,
+            null,
+            createElement(Route, { path: "/batch-dashboard", element: createElement(BatchDashboardPage) }),
+          ),
+        ),
+      )
+    })
+
+    await waitFor(() => {
+      const text = container.textContent ?? ""
+
+      expect(text).toContain("生产调度台")
+      expect(text).toContain("queued")
+      expect(text).toContain("running")
+      expect(text).toContain("waiting_review")
+      expect(text).toContain("blocked")
+      expect(text).toContain("failed")
+      expect(text).toContain("completed")
+      expect(text).toContain("卡住任务")
+      expect(text).toContain("心跳")
+      expect(text).toContain("预计剩余")
+      expect(text).toContain("失败分类")
+      expect(text).toContain("provider_timeout")
+      expect(text).toContain("Worker / Redis 容量")
+      expect(text).toContain("保守继续：先打开资产排查，再恢复卡住任务")
+    })
+  })
+
   it("shows a resume button for failed tasks in asset center and updates the task after resume", async () => {
     vi.mocked(api.listTasks).mockResolvedValue({
       tasks: [createFailedTask()],

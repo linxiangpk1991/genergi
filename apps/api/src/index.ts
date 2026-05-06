@@ -26,11 +26,14 @@ import {
   readModelRecords,
   readProviderRecords,
   readRuntimeStatus,
+  appendTaskRetryRequest,
   readTaskTimeline,
+  readTaskRetryRequests,
   replaceModelDefaults,
   replaceModelRecords,
   replaceProviderRecords,
   resetUserPasswordInputSchema,
+  updateTaskRetryRequest,
   updateRuntimeStatus,
   updateUserInputSchema,
 } from "@genergi/shared"
@@ -46,6 +49,7 @@ import {
   getTaskAssets,
   getTaskDetail,
   listTasks,
+  markTaskRetryPending,
   resumeFailedTask,
   restoreTaskState,
   updateTaskAudioStrategy,
@@ -95,6 +99,11 @@ const createBlueprintInputSchema = z.object({
 const STALE_RUNNING_THRESHOLD_MS = 10 * 60 * 1000
 const taskAudioStrategyBodySchema = z.object({
   audioStrategy: audioStrategySchema,
+})
+const retryTaskBodySchema = z.object({
+  scope: z.enum(["task", "scene", "keyframe", "video"]).optional(),
+  sceneId: z.string().trim().min(1).optional(),
+  reason: z.string().trim().min(1).optional(),
 })
 const blueprintReviewBodySchema = z.object({
   decision: blueprintReviewDecisionSchema,
@@ -371,6 +380,154 @@ async function buildTaskDiagnostics(
     },
     operatorMessage,
   }
+}
+
+async function buildTaskDelivery(
+  task: Awaited<ReturnType<typeof listTasks>>[number],
+  detail: NonNullable<Awaited<ReturnType<typeof getTaskDetail>>>,
+) {
+  const [assets, timeline, diagnostics] = await Promise.all([
+    getTaskAssets(task.id),
+    readTaskTimeline(task.id),
+    buildTaskDiagnostics(task, detail),
+  ])
+  const readyAssets = assets.filter((asset) => asset.exists && asset.status === "ready")
+  const readyTypes = new Set(readyAssets.map((asset) => asset.assetType))
+  const expectedTypes = ["video_bundle", "subtitles", "script"] as const
+  const missingTypes = expectedTypes.filter((assetType) => !readyTypes.has(assetType))
+  const finalVideo = readyAssets.find((asset) => asset.assetType === "video_bundle") ?? null
+  const subtitleAsset = readyAssets.find((asset) => asset.assetType === "subtitles") ?? null
+  const scriptAsset = readyAssets.find((asset) => asset.assetType === "script") ?? null
+  const keyframeAssets = readyAssets.filter((asset) =>
+    asset.assetType === "keyframe_bundle" || asset.assetType === "keyframe_image"
+  )
+  const ready = Boolean(finalVideo) && missingTypes.length === 0
+
+  return {
+    taskId: task.id,
+    projectId: task.projectId,
+    title: task.title,
+    status: task.status,
+    channelId: task.channelId,
+    targetDurationSec: task.targetDurationSec,
+    actualDurationSec: detail.actualDurationSec ?? task.actualDurationSec,
+    renderSpecJson: detail.taskRunConfig.renderSpecJson,
+    ready,
+    readiness: ready ? "ready" : task.status === "failed" ? "blocked" : "pending",
+    finalVideoAssetId: finalVideo?.id ?? null,
+    subtitleAssetId: subtitleAsset?.id ?? null,
+    scriptAssetId: scriptAsset?.id ?? null,
+    keyframeAssetIds: keyframeAssets.map((asset) => asset.id),
+    assetSummary: {
+      readyCount: readyAssets.length,
+      totalCount: assets.length,
+      expectedTypes: [...expectedTypes],
+      missingTypes,
+    },
+    scenes: detail.scenes.map((scene) => ({
+      id: scene.id,
+      index: scene.index,
+      title: scene.title,
+      durationSec: scene.durationSec,
+      reviewStatus: scene.reviewStatus,
+      keyframeStatus: scene.keyframeStatus,
+    })),
+    diagnostics,
+    timelineTail: timeline.slice(-10),
+    retryEndpoints: {
+      keyframe: `/api/tasks/${task.id}/retry`,
+      video: `/api/tasks/${task.id}/retry`,
+      scene: `/api/tasks/${task.id}/retry`,
+    },
+    updatedAt: detail.updatedAt,
+  }
+}
+
+function buildProductionLane(status: Awaited<ReturnType<typeof listTasks>>[number]["status"]) {
+  if (status === "queued" || status === "draft") {
+    return "queued"
+  }
+  if (status === "running" || status === "waiting_review" || status === "paused") {
+    return "active"
+  }
+  return status
+}
+
+async function buildProductionSchedule() {
+  const tasks = await listTasks()
+  const items = await Promise.all(tasks.map(async (task) => {
+    const detail = await getTaskDetail(task.id)
+    const assets = await getTaskAssets(task.id)
+    const readyAssets = assets.filter((asset) => asset.exists && asset.status === "ready")
+    const hasFinalVideo = readyAssets.some((asset) => asset.assetType === "video_bundle")
+    const hasSubtitles = readyAssets.some((asset) => asset.assetType === "subtitles")
+    const hasScript = readyAssets.some((asset) => asset.assetType === "script")
+    const deliveryReady = hasFinalVideo && hasSubtitles && hasScript
+
+    return {
+      taskId: task.id,
+      projectId: task.projectId,
+      title: task.title,
+      lane: buildProductionLane(task.status),
+      status: task.status,
+      channelId: task.channelId,
+      targetDurationSec: task.targetDurationSec,
+      actualDurationSec: detail?.actualDurationSec ?? task.actualDurationSec,
+      sceneCount: detail?.scenes.length ?? 0,
+      progressPct: task.progressPct,
+      deliveryReady,
+      expectedNextAssetType:
+        !readyAssets.some((asset) => asset.assetType === "keyframe_bundle")
+          ? "keyframe_bundle"
+          : !hasFinalVideo
+            ? "video_bundle"
+            : !hasSubtitles
+              ? "subtitles"
+              : null,
+      updatedAt: task.updatedAt,
+      createdAt: task.createdAt,
+    }
+  }))
+
+  const lanes = items.reduce<Record<string, number>>((counts, item) => {
+    counts[item.lane] = (counts[item.lane] ?? 0) + 1
+    counts[item.status] = (counts[item.status] ?? 0) + 1
+    return counts
+  }, {
+    queued: 0,
+    active: 0,
+    failed: 0,
+    completed: 0,
+    canceled: 0,
+  })
+
+  return {
+    generatedAt: new Date().toISOString(),
+    lanes,
+    items,
+  }
+}
+
+function inferRetryContinueExecution(
+  task: Awaited<ReturnType<typeof listTasks>>[number],
+  detail: NonNullable<Awaited<ReturnType<typeof getTaskDetail>>>,
+) {
+  const recoverableFailureText = `${task.failureReason ?? detail.failureReason ?? ""} ${task.statusDetail ?? detail.statusDetail ?? ""}`
+  return (
+    /scene|video|keyframe|subtitle|audio|timeout|成片|视频|画面|关键帧|字幕|音频/i.test(recoverableFailureText) ||
+    task.blueprintStatus === "approved" ||
+    task.blueprintStatus === "queued_for_video" ||
+    task.blueprintStatus === "video_generating" ||
+    task.blueprintStatus === "completed" ||
+    detail.blueprintStatus === "approved" ||
+    detail.blueprintStatus === "queued_for_video" ||
+    detail.blueprintStatus === "video_generating" ||
+    detail.blueprintStatus === "completed" ||
+    detail.taskRunConfig.blueprintStatus === "approved" ||
+    detail.taskRunConfig.blueprintStatus === "queued_for_video" ||
+    detail.taskRunConfig.blueprintStatus === "video_generating" ||
+    detail.taskRunConfig.blueprintStatus === "completed"
+  )
 }
 
 const modelControlSlotSchema = z.enum([
@@ -1724,6 +1881,12 @@ app.get("/api/model-control/selectable", async (c) => {
   })
 })
 
+requireAuthNamespace("/api/production")
+
+app.get("/api/production/schedule", async (c) => {
+  return c.json({ schedule: await buildProductionSchedule() })
+})
+
 requireAuthNamespace("/api/tasks")
 
 app.get("/api/tasks", async (c) => {
@@ -1761,6 +1924,145 @@ app.get("/api/tasks/:taskId/timeline", async (c) => {
 
   return c.json({ timeline: await readTaskTimeline(taskId) })
 })
+
+app.get("/api/tasks/:taskId/retry-requests", async (c) => {
+  const taskId = c.req.param("taskId")
+  const [tasks, detail] = await Promise.all([listTasks(), getTaskDetail(taskId)])
+  const task = tasks.find((entry) => entry.id === taskId) ?? null
+  if (!task || !detail) {
+    return c.json({ message: "TASK_NOT_FOUND" }, 404)
+  }
+
+  return c.json({ retryRequests: await readTaskRetryRequests(taskId) })
+})
+
+app.get("/api/tasks/:taskId/delivery", async (c) => {
+  const taskId = c.req.param("taskId")
+  const [tasks, detail] = await Promise.all([listTasks(), getTaskDetail(taskId)])
+  const task = tasks.find((entry) => entry.id === taskId) ?? null
+  if (!task || !detail) {
+    return c.json({ message: "TASK_NOT_FOUND" }, 404)
+  }
+
+  return c.json({ delivery: await buildTaskDelivery(task, detail) })
+})
+
+app.post(
+  "/api/tasks/:taskId/retry",
+  zValidator("json", retryTaskBodySchema),
+  async (c) => {
+    const taskId = c.req.param("taskId")
+    const payload = c.req.valid("json")
+    const [tasks, detail] = await Promise.all([listTasks(), getTaskDetail(taskId)])
+    const task = tasks.find((entry) => entry.id === taskId) ?? null
+    if (!task || !detail) {
+      return c.json({ message: "TASK_NOT_FOUND" }, 404)
+    }
+
+    const scene = payload.sceneId
+      ? detail.scenes.find((item) => item.id === payload.sceneId) ?? null
+      : null
+    if (payload.sceneId && !scene) {
+      return c.json({
+        message: "RETRY_SCENE_NOT_FOUND",
+        sceneId: payload.sceneId,
+        validSceneIds: detail.scenes.map((item) => item.id),
+      }, 400)
+    }
+
+    let queueJobs
+    try {
+      queueJobs = await inspectTaskJobs(taskId)
+    } catch (error) {
+      return toQueueUnavailableResponse(c, error)
+    }
+
+    const activeJobIds = queueJobs.active.length > 0
+      ? queueJobs.active
+      : task.activeJobId
+        ? [task.activeJobId]
+        : []
+    if (task.status === "running" && activeJobIds.length > 0) {
+      return c.json({
+        message: "TASK_RUNNING_ACTIVE_JOB",
+        activeJobIds,
+      }, 409)
+    }
+
+    if (task.status !== "failed") {
+      return c.json({
+        message: "TASK_RETRY_NOT_RECOVERABLE",
+        status: task.status,
+      }, 409)
+    }
+
+    const scope = payload.scope ?? (scene ? "scene" : "task")
+    const retryRequest = await appendTaskRetryRequest(taskId, {
+      scope,
+      sceneId: scene?.id ?? null,
+      sceneIndex: scene?.index ?? null,
+      sceneTitle: scene?.title ?? null,
+      reason: payload.reason ?? null,
+      status: "pending",
+      statusDetail: "等待 worker 局部重试",
+      taskStatusAtRequest: task.status,
+      queue: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    })
+
+    const marked = await markTaskRetryPending(taskId)
+    if (!marked) {
+      return c.json({ message: "TASK_NOT_FOUND" }, 404)
+    }
+
+    const continueExecution = inferRetryContinueExecution(task, detail)
+    const queueOptions = {
+      reason: scope === "task" ? "retry_failed_task" : `retry_failed_${scope}`,
+      continueExecution,
+      blueprintVersion: detail.blueprintVersion,
+      stage: `retry_${scope}`,
+      resumeFrom: scene?.id ?? "failed_task",
+    }
+
+    let queue
+    try {
+      queue = await enqueueTask(taskId, queueOptions)
+    } catch (error) {
+      await restoreTaskState(task, detail)
+      await updateTaskRetryRequest(taskId, retryRequest.id, (request) => ({
+        ...request,
+        status: "enqueue_failed",
+        statusDetail: error instanceof Error ? error.message : "TASK_QUEUE_UNAVAILABLE",
+        updatedAt: new Date().toISOString(),
+      }))
+      return toQueueUnavailableResponse(c, error)
+    }
+
+    const acceptedRequest = await updateTaskRetryRequest(taskId, retryRequest.id, (request) => ({
+      ...request,
+      status: "accepted",
+      statusDetail: "已入队等待 worker 局部重试",
+      queue: {
+        queued: queue.queued,
+        jobId: queue.jobId,
+        reason: queue.reason,
+        continueExecution: queue.continueExecution,
+        blueprintVersion: queue.blueprintVersion,
+        stage: queue.stage,
+        resumeFrom: queue.resumeFrom,
+      },
+      updatedAt: new Date().toISOString(),
+    }))
+
+    return c.json({
+      retryRequest: acceptedRequest,
+      task: marked.summary,
+      detail: marked.detail,
+      queue,
+    }, 202)
+  },
+)
 
 app.get("/api/tasks/:taskId/blueprints", async (c) => {
   const blueprints = await listTaskBlueprints(c.req.param("taskId"))
