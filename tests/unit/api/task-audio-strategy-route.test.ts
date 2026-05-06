@@ -55,8 +55,9 @@ describe("API task audio strategy route", () => {
     dataDir = await mkdtemp(path.join(os.tmpdir(), "genergi-task-audio-strategy-"))
     process.env.GENERGI_DATA_DIR = dataDir
 
-    const [{ app }, store, shared] = await Promise.all([
+    const [{ app }, { buildSessionValue }, store, shared] = await Promise.all([
       import("../../../apps/api/src/index"),
+      import("../../../apps/api/src/lib/auth"),
       import("../../../apps/api/src/lib/task-store"),
       import("../../../packages/shared/src/index"),
     ])
@@ -100,6 +101,7 @@ describe("API task audio strategy route", () => {
 
     return {
       app,
+      cookie: `genergi_session=${buildSessionValue("admin", "test-secret")}`,
       store,
       shared,
       taskId: created.task.id,
@@ -107,11 +109,11 @@ describe("API task audio strategy route", () => {
   }
 
   it("updates task audio strategy during review without touching blueprint status", async () => {
-    const { app, store, taskId } = await createReviewableTask()
+    const { app, cookie, store, taskId } = await createReviewableTask()
 
     const response = await app.request(`http://localhost/api/tasks/${taskId}/audio-strategy`, {
       method: "PATCH",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", Cookie: cookie },
       body: JSON.stringify({ audioStrategy: "native_plus_tts_ducked" }),
     })
 
@@ -135,7 +137,7 @@ describe("API task audio strategy route", () => {
   })
 
   it("locks audio strategy updates after the task enters queued_for_video", async () => {
-    const { app, shared, store, taskId } = await createReviewableTask()
+    const { app, cookie, shared, store, taskId } = await createReviewableTask()
 
     await shared.updateTaskSummary(taskId, (task: any) => ({
       ...task,
@@ -163,7 +165,7 @@ describe("API task audio strategy route", () => {
 
     const response = await app.request(`http://localhost/api/tasks/${taskId}/audio-strategy`, {
       method: "PATCH",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", Cookie: cookie },
       body: JSON.stringify({ audioStrategy: "native_plus_tts_ducked" }),
     })
 

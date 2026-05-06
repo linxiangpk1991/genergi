@@ -22,6 +22,9 @@ describe("API task asset deletion", () => {
 
   beforeEach(() => {
     process.env.NODE_ENV = "test"
+    process.env.GENERGI_SESSION_SECRET = "test-secret"
+    process.env.GENERGI_ADMIN_USERNAME = "admin"
+    process.env.GENERGI_ADMIN_PASSWORD = "password"
     assertQueueAvailableMock.mockResolvedValue(undefined)
     enqueueTaskMock.mockResolvedValue({
       queued: true,
@@ -36,6 +39,9 @@ describe("API task asset deletion", () => {
       await rm(dataDir, { recursive: true, force: true })
     }
     delete process.env.GENERGI_DATA_DIR
+    delete process.env.GENERGI_SESSION_SECRET
+    delete process.env.GENERGI_ADMIN_USERNAME
+    delete process.env.GENERGI_ADMIN_PASSWORD
     process.env.NODE_ENV = "test"
     dataDir = ""
     vi.clearAllMocks()
@@ -46,8 +52,9 @@ describe("API task asset deletion", () => {
     dataDir = await mkdtemp(path.join(os.tmpdir(), "genergi-task-assets-delete-"))
     process.env.GENERGI_DATA_DIR = dataDir
 
-    const [{ app }, store, shared] = await Promise.all([
+    const [{ app }, { buildSessionValue }, store, shared] = await Promise.all([
       import("../../../apps/api/src/index"),
+      import("../../../apps/api/src/lib/auth"),
       import("../../../apps/api/src/lib/task-store"),
       import("../../../packages/shared/src/index"),
     ])
@@ -100,6 +107,7 @@ describe("API task asset deletion", () => {
 
     return {
       app,
+      cookie: `genergi_session=${buildSessionValue("admin", "test-secret")}`,
       shared,
       store,
       taskId: created.task.id,
@@ -112,11 +120,12 @@ describe("API task asset deletion", () => {
   }
 
   it("deletes one task asset only when its file is under the task exports or assets directory", async () => {
-    const { app, shared, taskId, generatedImagePath, unsafePath } = await createTaskWithAssets()
+    const { app, cookie, shared, taskId, generatedImagePath, unsafePath } = await createTaskWithAssets()
     await shared.updateTaskSummary(taskId, (task) => ({ ...task, status: "completed" }))
 
     const response = await app.request(`/api/tasks/${taskId}/assets/generated_image`, {
       method: "DELETE",
+      headers: { Cookie: cookie },
     })
 
     expect(response.status).toBe(200)
@@ -126,11 +135,12 @@ describe("API task asset deletion", () => {
   })
 
   it("rejects single-asset deletion when the stored file path is outside the task asset roots", async () => {
-    const { app, shared, taskId, unsafePath } = await createTaskWithAssets()
+    const { app, cookie, shared, taskId, unsafePath } = await createTaskWithAssets()
     await shared.updateTaskSummary(taskId, (task) => ({ ...task, status: "completed" }))
 
     const response = await app.request(`/api/tasks/${taskId}/assets/unsafe_asset`, {
       method: "DELETE",
+      headers: { Cookie: cookie },
     })
 
     expect(response.status).toBe(403)
@@ -138,12 +148,13 @@ describe("API task asset deletion", () => {
   })
 
   it("deletes the task export/assets directories and clears persisted asset records", async () => {
-    const { app, shared, taskId, scriptPath, generatedImagePath, unsafePath, exportDir, sharedAssetsDir } =
+    const { app, cookie, shared, taskId, scriptPath, generatedImagePath, unsafePath, exportDir, sharedAssetsDir } =
       await createTaskWithAssets()
     await shared.updateTaskSummary(taskId, (task) => ({ ...task, status: "failed" }))
 
     const response = await app.request(`/api/tasks/${taskId}/assets`, {
       method: "DELETE",
+      headers: { Cookie: cookie },
     })
 
     expect(response.status).toBe(200)
@@ -156,10 +167,11 @@ describe("API task asset deletion", () => {
   })
 
   it("blocks asset deletion while a task is still queued or running through the generation chain", async () => {
-    const { app, shared, taskId, generatedImagePath } = await createTaskWithAssets()
+    const { app, cookie, shared, taskId, generatedImagePath } = await createTaskWithAssets()
 
     const queuedResponse = await app.request(`/api/tasks/${taskId}/assets/generated_image`, {
       method: "DELETE",
+      headers: { Cookie: cookie },
     })
     expect(queuedResponse.status).toBe(409)
     expect(await queuedResponse.json()).toEqual({ message: "TASK_ASSETS_LOCKED", status: "queued" })
@@ -169,6 +181,7 @@ describe("API task asset deletion", () => {
 
     const runningResponse = await app.request(`/api/tasks/${taskId}/assets`, {
       method: "DELETE",
+      headers: { Cookie: cookie },
     })
     expect(runningResponse.status).toBe(409)
     expect(await runningResponse.json()).toEqual({ message: "TASK_ASSETS_LOCKED", status: "running" })
@@ -176,7 +189,7 @@ describe("API task asset deletion", () => {
   })
 
   it("rejects encoded traversal task ids and does not delete sibling directories", async () => {
-    const { app } = await createTaskWithAssets()
+    const { app, cookie } = await createTaskWithAssets()
     const victimExportDir = path.join(dataDir, "exports", "victim")
     const victimAssetDir = path.join(dataDir, "assets", "victim")
     const victimExportFile = path.join(victimExportDir, "keep.txt")
@@ -189,6 +202,7 @@ describe("API task asset deletion", () => {
     for (const encodedTaskId of ["..%5Cvictim", "..%2Fvictim", "%2e%2e%5cvictim"]) {
       const response = await app.request(`/api/tasks/${encodedTaskId}/assets`, {
         method: "DELETE",
+        headers: { Cookie: cookie },
       })
 
       expect(response.status).toBe(403)
@@ -199,10 +213,11 @@ describe("API task asset deletion", () => {
   })
 
   it("returns not found instead of deleting directories for nonexistent task ids", async () => {
-    const { app } = await createTaskWithAssets()
+    const { app, cookie } = await createTaskWithAssets()
 
     const response = await app.request("/api/tasks/task_missing/assets", {
       method: "DELETE",
+      headers: { Cookie: cookie },
     })
 
     expect(response.status).toBe(404)

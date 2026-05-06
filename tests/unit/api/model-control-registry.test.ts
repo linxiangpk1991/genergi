@@ -72,6 +72,22 @@ describe("API model control registry routes", () => {
     }
   }
 
+  it("requires authentication for model control registry read routes", async () => {
+    dataDir = await mkdtemp(path.join(os.tmpdir(), "genergi-model-control-registry-"))
+    process.env.GENERGI_DATA_DIR = dataDir
+
+    const { app } = await import("../../../apps/api/src/index")
+
+    const responses = await Promise.all([
+      app.request("/api/model-control/providers"),
+      app.request("/api/model-control/models"),
+      app.request("/api/model-control/defaults"),
+      app.request("/api/model-control/selectable?modeId=high_quality"),
+    ])
+
+    expect(responses.map((response) => response.status)).toEqual([401, 401, 401, 401])
+  })
+
   it("exposes only four runtime slots and collapses legacy media defaults into unified image/video defaults", async () => {
     dataDir = await mkdtemp(path.join(os.tmpdir(), "genergi-model-control-registry-"))
     process.env.GENERGI_DATA_DIR = dataDir

@@ -122,13 +122,27 @@ async function deleteRemotePath(relativePath) {
   });
 }
 
-async function runRemoteRebuild() {
+async function getGitSha() {
+  const { stdout } = await runLocal("git", ["-C", repoRoot, "rev-parse", "--short=12", "HEAD"]);
+  return stdout.trim();
+}
+
+async function runRemoteRebuild(gitSha) {
   const script = `
 set -euo pipefail
 cd ${remoteRoot}
 set -a
 . /opt/genergi/shared.env
 set +a
+release_id="hotfix_$(date +%Y%m%d%H%M%S)"
+deployed_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+cat > release.json <<RELEASE_JSON
+{
+  "id": "$release_id",
+  "gitSha": "${gitSha}",
+  "deployedAt": "$deployed_at"
+}
+RELEASE_JSON
 corepack pnpm --filter @genergi/shared build
 corepack pnpm --filter @genergi/config build
 corepack pnpm --filter @genergi/api build
@@ -190,6 +204,8 @@ Behavior:
     return;
   }
 
+  const gitSha = await getGitSha();
+
   for (const entry of actionable) {
     if (entry.type === "delete") {
       await deleteRemotePath(entry.path);
@@ -198,7 +214,7 @@ Behavior:
     await syncFile(entry.path);
   }
 
-  await runRemoteRebuild();
+  await runRemoteRebuild(gitSha);
 }
 
 await main();

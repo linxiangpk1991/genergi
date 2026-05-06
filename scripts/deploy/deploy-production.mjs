@@ -79,6 +79,11 @@ async function uploadArchive() {
   });
 }
 
+async function getGitSha() {
+  const { stdout } = await run("git", ["rev-parse", "--short=12", "HEAD"]);
+  return stdout.trim();
+}
+
 function buildSharedEnvLoadScript() {
   return [
     "set -a",
@@ -87,7 +92,7 @@ function buildSharedEnvLoadScript() {
   ].join("\n");
 }
 
-async function runDeploymentRemoteScript() {
+async function runDeploymentRemoteScript(gitSha) {
   const script = `
 set -euo pipefail
 
@@ -107,6 +112,14 @@ tar -xzf ${remoteArchivePath} -C "$release_dir"
 rm -f ${remoteArchivePath}
 
 cd "$release_dir"
+deployed_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+cat > release.json <<RELEASE_JSON
+{
+  "id": "$release_id",
+  "gitSha": "${gitSha}",
+  "deployedAt": "$deployed_at"
+}
+RELEASE_JSON
 corepack enable
 corepack pnpm install --frozen-lockfile=false
 corepack pnpm build
@@ -274,9 +287,10 @@ find ${remoteRoot}/releases -maxdepth 1 -mindepth 1 -type d | sort
 
 async function main() {
   try {
+    const gitSha = await getGitSha();
     await buildArchive();
     await uploadArchive();
-    await runDeploymentRemoteScript();
+    await runDeploymentRemoteScript(gitSha);
   } finally {
     if (existsSync(archivePath)) {
       rmSync(archivePath, { force: true });

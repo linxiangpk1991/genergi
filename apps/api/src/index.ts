@@ -101,6 +101,11 @@ const blueprintReviewBodySchema = z.object({
   note: z.string().trim().min(1).optional(),
 })
 
+function requireAuthNamespace(prefix: string) {
+  app.use(prefix, requireAuth())
+  app.use(`${prefix}/*`, requireAuth())
+}
+
 type TaskPlanningSnapshot = {
   generationPreference: "user_locked" | "system_enhanced"
   generationPreferenceLabel: string
@@ -1168,11 +1173,55 @@ function isSelectableTarget(
   return selectable[slotType].some((entry) => entry.valueId === valueId)
 }
 
-app.get("/api/health", (c) => {
+type ReleaseMetadata = {
+  id: string | null
+  gitSha: string | null
+  deployedAt: string | null
+}
+
+async function readReleaseMetadata(): Promise<ReleaseMetadata> {
+  const fromEnv: ReleaseMetadata = {
+    id: process.env.GENERGI_RELEASE_ID ?? null,
+    gitSha: process.env.GENERGI_GIT_SHA ?? null,
+    deployedAt: process.env.GENERGI_DEPLOYED_AT ?? null,
+  }
+
+  if (fromEnv.id || fromEnv.gitSha || fromEnv.deployedAt) {
+    return fromEnv
+  }
+
+  let currentDir = process.cwd()
+  try {
+    for (let depth = 0; depth < 5; depth += 1) {
+      try {
+        const raw = await fs.readFile(path.join(currentDir, "release.json"), "utf8")
+        const parsed = JSON.parse(raw) as Partial<ReleaseMetadata>
+        return {
+          id: typeof parsed.id === "string" ? parsed.id : null,
+          gitSha: typeof parsed.gitSha === "string" ? parsed.gitSha : null,
+          deployedAt: typeof parsed.deployedAt === "string" ? parsed.deployedAt : null,
+        }
+      } catch {
+        const nextDir = path.dirname(currentDir)
+        if (nextDir === currentDir) {
+          break
+        }
+        currentDir = nextDir
+      }
+    }
+  } catch {
+    // Ignore malformed cwd/path state and fall back to explicit env metadata.
+  }
+
+  return fromEnv
+}
+
+app.get("/api/health", async (c) => {
   return c.json({
     status: "ok",
     service: "genergi-api",
     version: "0.1.0",
+    release: await readReleaseMetadata(),
   })
 })
 
@@ -1220,7 +1269,7 @@ app.post("/api/auth/logout", (c) => {
   return c.json({ authenticated: false })
 })
 
-app.use("/api/users", requireAuth())
+requireAuthNamespace("/api/users")
 
 app.get("/api/users", async (c) => {
   const users = await listUsers()
@@ -1295,7 +1344,7 @@ app.get("/api/bootstrap", (c) => {
   })
 })
 
-app.use("/api/projects", requireAuth())
+requireAuthNamespace("/api/projects")
 
 app.get("/api/projects", async (c) => {
   const projects = await listProjects()
@@ -1313,7 +1362,7 @@ app.get("/api/projects/:projectId/library", async (c) => {
   return c.json({ entries })
 })
 
-app.use("/api/model-control", requireAuth())
+requireAuthNamespace("/api/model-control")
 
 app.get("/api/model-control/providers", async (c) => {
   const state = await ensureModelControlState()
@@ -1675,7 +1724,7 @@ app.get("/api/model-control/selectable", async (c) => {
   })
 })
 
-app.use("/api/tasks", requireAuth())
+requireAuthNamespace("/api/tasks")
 
 app.get("/api/tasks", async (c) => {
   const tasks = await listTasks()
