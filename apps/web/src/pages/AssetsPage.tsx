@@ -11,6 +11,7 @@ import {
   type RuntimeStatusResponse,
   type TaskDiagnostics,
   type TaskSummary,
+  type TaskTimelineEvent,
 } from "../api"
 
 function getDurationDelta(task: TaskSummary | null) {
@@ -77,6 +78,14 @@ function canResumeFailedTask(task: TaskSummary | null) {
   return task?.status === "failed"
 }
 
+function formatTimelineTime(value: string) {
+  const parsed = Date.parse(value)
+  if (!Number.isFinite(parsed)) {
+    return "时间未知"
+  }
+  return new Date(parsed).toLocaleTimeString("zh-CN")
+}
+
 function isStaleRunningTask(task: TaskSummary | null) {
   if (task?.status !== "running") {
     return false
@@ -130,6 +139,7 @@ export function AssetsPage() {
   const [runtime, setRuntime] = useState<RuntimeStatusResponse["runtime"] | null>(null)
   const [selectedTaskId, setSelectedTaskId] = useState("")
   const [assets, setAssets] = useState<AssetRecord[]>([])
+  const [timeline, setTimeline] = useState<TaskTimelineEvent[]>([])
   const [diagnostics, setDiagnostics] = useState<TaskDiagnostics | null>(null)
   const [diagnosticsError, setDiagnosticsError] = useState("")
   const [previewAsset, setPreviewAsset] = useState<AssetRecord | null>(null)
@@ -140,8 +150,11 @@ export function AssetsPage() {
   const [isStale, setIsStale] = useState(false)
   const [loadError, setLoadError] = useState("")
   const [actionError, setActionError] = useState("")
+  const [actionSuccess, setActionSuccess] = useState("")
   const [cancelingTaskId, setCancelingTaskId] = useState("")
   const [resumingTaskId, setResumingTaskId] = useState("")
+  const [deletingAssetId, setDeletingAssetId] = useState("")
+  const [deletingTaskAssets, setDeletingTaskAssets] = useState(false)
 
   function syncTaskContext(taskId?: string, replace = true) {
     const currentTaskId = searchParams.get("taskId") ?? ""
@@ -211,13 +224,18 @@ export function AssetsPage() {
     async function loadAssets() {
       if (!selectedTaskId) {
         setAssets([])
+        setTimeline([])
         setDiagnostics(null)
         setDiagnosticsError("")
         return
       }
 
-      const assetResult = await api.getTaskAssets(selectedTaskId)
+      const [assetResult, timelineResult] = await Promise.all([
+        api.getTaskAssets(selectedTaskId),
+        api.getTaskTimeline(selectedTaskId).catch(() => ({ timeline: [] })),
+      ])
       setAssets(assetResult.assets)
+      setTimeline(timelineResult.timeline)
       void api.getTaskDiagnostics(selectedTaskId)
         .then((diagnosticsResult) => {
           setDiagnostics(diagnosticsResult.diagnostics)
@@ -234,6 +252,7 @@ export function AssetsPage() {
 
     void loadAssets().catch(() => {
       setAssets([])
+      setTimeline([])
       setIsStale(true)
       setLoadError("资产列表加载失败，当前无法确认交付物完整性。")
     })
@@ -259,6 +278,7 @@ export function AssetsPage() {
 
   async function handleCancelTask(taskId: string) {
     setActionError("")
+    setActionSuccess("")
     setCancelingTaskId(taskId)
     try {
       const response = await api.cancelTask(taskId)
@@ -272,6 +292,7 @@ export function AssetsPage() {
 
   async function handleResumeFailedTask(taskId: string) {
     setActionError("")
+    setActionSuccess("")
     setResumingTaskId(taskId)
     try {
       const response = await api.resumeFailedTask(taskId)
@@ -283,6 +304,50 @@ export function AssetsPage() {
       setActionError(error instanceof Error ? error.message : "恢复运行失败")
     } finally {
       setResumingTaskId("")
+    }
+  }
+
+  async function handleDeleteAsset(asset: AssetRecord) {
+    if (!window.confirm(`确认删除资产「${asset.label}」吗？该操作会删除任务自己的资产文件，无法从资产中心恢复。`)) {
+      return
+    }
+
+    setActionError("")
+    setActionSuccess("")
+    setDeletingAssetId(asset.id)
+    try {
+      await api.deleteTaskAsset(asset.taskId, asset.id)
+      const assetResult = await api.getTaskAssets(asset.taskId)
+      setAssets(assetResult.assets)
+      setActionSuccess(`已删除资产：${asset.label}`)
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "删除资产失败")
+    } finally {
+      setDeletingAssetId("")
+    }
+  }
+
+  async function handleDeleteTaskAssets() {
+    if (!selectedTask) {
+      return
+    }
+
+    if (!window.confirm(`确认清空任务「${selectedTask.title}」的全部资产吗？该操作只会删除该任务的 exports/assets 目录和资产记录。`)) {
+      return
+    }
+
+    setActionError("")
+    setActionSuccess("")
+    setDeletingTaskAssets(true)
+    try {
+      await api.deleteTaskAssets(selectedTask.id)
+      const assetResult = await api.getTaskAssets(selectedTask.id)
+      setAssets(assetResult.assets)
+      setActionSuccess(`已清空任务资产：${selectedTask.title}`)
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "清空任务资产失败")
+    } finally {
+      setDeletingTaskAssets(false)
     }
   }
 
@@ -313,6 +378,7 @@ export function AssetsPage() {
   const sortedAssets = useMemo(() => sortAssetsForDelivery(assets), [assets])
   const deliverableAssets = sortedAssets.filter((asset) => ["video_bundle", "subtitles", "script", "audio"].includes(asset.assetType))
   const supportingAssets = sortedAssets.filter((asset) => !["video_bundle", "subtitles", "script", "audio"].includes(asset.assetType))
+  const recentTimeline = useMemo(() => [...timeline].slice(-6).reverse(), [timeline])
   const heartbeatAgeLabel = useMemo(() => {
     const ageMs = diagnostics?.stale.ageMs
     if (ageMs == null) {
@@ -441,6 +507,14 @@ export function AssetsPage() {
                   <a className="primary-button" href={buildAssetDownloadUrl(asset.taskId, asset.id)} target="_blank" rel="noreferrer">
                     下载文件
                   </a>
+                  <button
+                    className="ghost-button"
+                    disabled={deletingAssetId === asset.id}
+                    onClick={() => void handleDeleteAsset(asset)}
+                    type="button"
+                  >
+                    {deletingAssetId === asset.id ? "删除中..." : "删除资产"}
+                  </button>
                 </div>
               </div>
             </div>
@@ -521,6 +595,11 @@ export function AssetsPage() {
           {actionError ? (
             <div className="review-inline-note review-inline-note--danger" role="alert">
               {actionError}
+            </div>
+          ) : null}
+          {actionSuccess ? (
+            <div className="review-inline-note review-inline-note--success" role="status">
+              {actionSuccess}
             </div>
           ) : null}
 
@@ -717,6 +796,30 @@ export function AssetsPage() {
                 <strong>下一资产</strong>
                 <span>{diagnostics ? diagnostics.assets.expectedNextAssetType ?? "暂无缺口" : "等待诊断同步"}</span>
               </div>
+            </div>
+          </section>
+
+          <section className="card card--compact">
+            <h3>任务时间线</h3>
+            <div className="task-list compact-list">
+              {recentTimeline.length ? (
+                recentTimeline.map((event) => (
+                  <div className="task-item" key={event.id}>
+                    <strong>{event.label}</strong>
+                    <span>
+                      {formatTimelineTime(event.createdAt)}
+                      {" · "}
+                      {event.level === "error" ? "错误" : event.level === "warning" ? "提醒" : "阶段"}
+                      {event.reason ? ` · ${event.reason}` : ""}
+                    </span>
+                  </div>
+                ))
+              ) : (
+                <div className="task-item">
+                  <strong>当前暂无记录</strong>
+                  <span>worker 进入下一阶段后，这里会记录关键过程和失败原因。</span>
+                </div>
+              )}
             </div>
           </section>
 

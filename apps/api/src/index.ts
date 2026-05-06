@@ -26,6 +26,7 @@ import {
   readModelRecords,
   readProviderRecords,
   readRuntimeStatus,
+  readTaskTimeline,
   replaceModelDefaults,
   replaceModelRecords,
   replaceProviderRecords,
@@ -35,7 +36,19 @@ import {
 } from "@genergi/shared"
 import { clearSession, getAuthStatus, getSessionUser, loginWithPassword, requireAuth } from "./lib/auth.js"
 import { assertQueueAvailable, cancelTaskJobs, enqueueTask, inspectTaskJobs, QueueUnavailableError, recoverTaskJobs } from "./lib/queue/enqueue.js"
-import { cancelTask, createTask, deleteTask, getTaskAsset, getTaskAssets, getTaskDetail, listTasks, resumeFailedTask, updateTaskAudioStrategy } from "./lib/task-store.js"
+import {
+  cancelTask,
+  createTask,
+  deleteTask,
+  deleteTaskAsset,
+  deleteTaskAssetCollection,
+  getTaskAsset,
+  getTaskAssets,
+  getTaskDetail,
+  listTasks,
+  resumeFailedTask,
+  updateTaskAudioStrategy,
+} from "./lib/task-store.js"
 import {
   approveTaskBlueprint,
   createTaskBlueprintVersion,
@@ -1688,6 +1701,17 @@ app.get("/api/tasks/:taskId/diagnostics", async (c) => {
   return c.json({ diagnostics: await buildTaskDiagnostics(task, detail) })
 })
 
+app.get("/api/tasks/:taskId/timeline", async (c) => {
+  const taskId = c.req.param("taskId")
+  const [tasks, detail] = await Promise.all([listTasks(), getTaskDetail(taskId)])
+  const task = tasks.find((entry) => entry.id === taskId) ?? null
+  if (!task || !detail) {
+    return c.json({ message: "TASK_NOT_FOUND" }, 404)
+  }
+
+  return c.json({ timeline: await readTaskTimeline(taskId) })
+})
+
 app.get("/api/tasks/:taskId/blueprints", async (c) => {
   const blueprints = await listTaskBlueprints(c.req.param("taskId"))
   return c.json({ blueprints })
@@ -1739,6 +1763,12 @@ app.get("/api/tasks/:taskId/blueprints/current", async (c) => {
 app.get("/api/tasks/:taskId/assets", async (c) => {
   const assets = await getTaskAssets(c.req.param("taskId"))
   return c.json({ assets })
+})
+
+app.delete("/api/tasks/:taskId/assets", async (c) => {
+  const taskId = c.req.param("taskId")
+  await deleteTaskAssetCollection(taskId)
+  return c.json({ deleted: true, taskId })
 })
 
 async function sendAssetFile(
@@ -1809,6 +1839,22 @@ function buildBlueprintNextStage(taskId: string, status: string) {
 app.get("/api/tasks/:taskId/assets/:assetId/download", async (c) => {
   const asset = await getTaskAsset(c.req.param("taskId"), c.req.param("assetId"))
   return sendAssetFile(c, asset, "attachment")
+})
+
+app.delete("/api/tasks/:taskId/assets/:assetId", async (c) => {
+  const taskId = c.req.param("taskId")
+  const assetId = c.req.param("assetId")
+  const result = await deleteTaskAsset(taskId, assetId)
+
+  if (result.deleted) {
+    return c.json({ deleted: true, taskId, assetId })
+  }
+
+  if (result.reason === "ASSET_DELETE_PATH_FORBIDDEN") {
+    return c.json({ message: result.reason }, 403)
+  }
+
+  return c.json({ message: result.reason }, 404)
 })
 
 app.get("/api/tasks/:taskId/assets/:assetId/preview", async (c) => {

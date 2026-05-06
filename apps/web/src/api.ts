@@ -101,6 +101,27 @@ export type TaskPlanningSnapshot = {
   planningSourceLabel: string
 }
 
+export type TaskTimelineEvent = {
+  id: string
+  taskId: string
+  sequence: number
+  type: "stage" | "provider" | "error"
+  stage: string
+  label: string
+  level: "info" | "warning" | "error"
+  summary?: string | null
+  reason?: string | null
+  provider?: {
+    provider?: string | null
+    model?: string | null
+    request?: Record<string, unknown>
+    response?: Record<string, unknown>
+    error?: string | null
+  } | null
+  metadata?: Record<string, unknown>
+  createdAt: string
+}
+
 export type BootstrapResponse = {
   brand: { productName: string; companyName: string; domain: string }
   durationOptions: number[]
@@ -704,6 +725,8 @@ export const api = {
     request<BlueprintCurrentResponse>(`/api/tasks/${taskId}/blueprints/current`),
   getTaskDiagnostics: (taskId: string) =>
     request<{ diagnostics: TaskDiagnostics }>(`/api/tasks/${taskId}/diagnostics`),
+  getTaskTimeline: (taskId: string) =>
+    request<{ timeline: TaskTimelineEvent[] }>(`/api/tasks/${taskId}/timeline`),
   createTaskBlueprint: (taskId: string, payload: {
     blueprint: PlannedExecutionBlueprint
     keyframeManifestPath?: string
@@ -741,6 +764,14 @@ export const api = {
       method: "POST",
     }),
   getTaskAssets: (taskId: string) => request<{ assets: AssetRecord[] }>(`/api/tasks/${taskId}/assets`),
+  deleteTaskAssets: (taskId: string) =>
+    request<{ deleted: boolean; taskId: string }>(`/api/tasks/${taskId}/assets`, {
+      method: "DELETE",
+    }),
+  deleteTaskAsset: (taskId: string, assetId: string) =>
+    request<{ deleted: boolean; taskId: string; assetId: string }>(`/api/tasks/${taskId}/assets/${assetId}`, {
+      method: "DELETE",
+    }),
   cancelTask: (taskId: string) =>
     request<TaskCancelResponse>(`/api/tasks/${taskId}/cancel`, {
       method: "POST",

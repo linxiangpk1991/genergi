@@ -4,7 +4,7 @@ import { buildDefaultTaskRunConfig, estimateCost, resolveVideoModelCapability } 
 import {
   buildStoryboardScenes,
   createDefaultReviewSummary,
-  deleteTaskAssets,
+  deleteTaskAssets as deletePersistedTaskAssets,
   deleteTaskDetail,
   normalizeTaskSummaryRecord,
   normalizeStoryboardScene,
@@ -14,6 +14,7 @@ import {
   readTaskDetail,
   readTaskDetails,
   readTaskSummaries,
+  upsertTaskAssets,
   upsertTaskDetail,
   writeTaskSummaries,
 } from "@genergi/shared"
@@ -59,6 +60,10 @@ function resolveTaskDataDir() {
 
 function resolveTaskExportDir(taskId: string) {
   return path.join(resolveTaskDataDir(), "exports", taskId)
+}
+
+function resolveTaskSharedAssetDir(taskId: string) {
+  return path.join(resolveTaskDataDir(), "assets", taskId)
 }
 
 export type AssetPreviewKind = "text" | "json" | "media" | "directory" | "binary"
@@ -419,6 +424,20 @@ async function readMergedTaskAssets(taskId: string) {
   }
 
   return [...merged.values()]
+}
+
+function isPathInsideOrEqual(candidatePath: string, rootPath: string) {
+  const resolvedCandidate = path.resolve(candidatePath)
+  const resolvedRoot = path.resolve(rootPath)
+  const relativePath = path.relative(resolvedRoot, resolvedCandidate)
+  return relativePath === "" || (!!relativePath && !relativePath.startsWith("..") && !path.isAbsolute(relativePath))
+}
+
+function isSafeTaskAssetPath(taskId: string, candidatePath: string) {
+  return (
+    isPathInsideOrEqual(candidatePath, resolveTaskExportDir(taskId)) ||
+    isPathInsideOrEqual(candidatePath, resolveTaskSharedAssetDir(taskId))
+  )
 }
 
 export function normalizeSceneReviewMetadata(scene: StoryboardScene) {
@@ -1062,6 +1081,35 @@ export async function getTaskAsset(taskId: string, assetId: string) {
   return asset ? resolveAssetRecord(asset) : null
 }
 
+export async function deleteTaskAsset(taskId: string, assetId: string) {
+  const asset = await getTaskAsset(taskId, assetId)
+  if (!asset) {
+    return { deleted: false as const, reason: "ASSET_NOT_FOUND" }
+  }
+
+  if (!isSafeTaskAssetPath(taskId, asset.path)) {
+    return { deleted: false as const, reason: "ASSET_DELETE_PATH_FORBIDDEN" }
+  }
+
+  await fs.rm(asset.path, { recursive: asset.isDirectory, force: true })
+
+  const storedAssets = await readTaskAssets(taskId)
+  const nextStoredAssets = storedAssets.filter((item) => item.id !== assetId)
+  if (nextStoredAssets.length !== storedAssets.length) {
+    await upsertTaskAssets(taskId, nextStoredAssets)
+  }
+
+  return { deleted: true as const, asset }
+}
+
+export async function deleteTaskAssetCollection(taskId: string) {
+  await Promise.all([
+    fs.rm(resolveTaskExportDir(taskId), { recursive: true, force: true }),
+    fs.rm(resolveTaskSharedAssetDir(taskId), { recursive: true, force: true }),
+  ])
+  await deletePersistedTaskAssets(taskId)
+}
+
 export async function createTask(input: CreateTaskInput): Promise<{ task: TaskSummary; taskRunConfig: unknown }> {
   const project = await getProjectById(input.projectId)
   if (!project) {
@@ -1082,6 +1130,7 @@ export async function createTask(input: CreateTaskInput): Promise<{ task: TaskSu
       projectId: input.projectId,
       terminalPresetId: input.terminalPresetId,
       audioStrategy: input.audioStrategy,
+      subtitleStrategy: input.subtitleStrategy,
     },
   )
   const resolvedSlots = await resolveEffectiveSlots({
@@ -1341,7 +1390,7 @@ export async function deleteTask(taskId: string) {
   }
 
   await deleteTaskDetail(taskId)
-  await deleteTaskAssets(taskId)
+  await deletePersistedTaskAssets(taskId)
 }
 
 export async function applySceneReviewDecision(

@@ -16,6 +16,8 @@ import type {
   StoryboardScene,
   StoredUser,
   TaskDetail,
+  TaskTimelineEvent,
+  TaskTimelineEventInput,
   TaskRuntimeTrace,
   TaskSummary,
   TerminalPresetId,
@@ -25,6 +27,8 @@ import {
   normalizeVideoProviderModelId,
 } from "./provider-model-ids.js"
 import { renderSpecSchema } from "./video-blueprint.js"
+
+const subtitleStrategyValues = new Set(["tts_aligned", "whisper_cpp"])
 
 function resolveDataDir() {
   return process.env.GENERGI_DATA_DIR
@@ -42,6 +46,8 @@ function resolveFiles() {
     tempDetailsFile: path.join(dataDir, "task-details.tmp.json"),
     runtimeFile: path.join(dataDir, "runtime-status.json"),
     tempRuntimeFile: path.join(dataDir, "runtime-status.tmp.json"),
+    timelinesFile: path.join(dataDir, "task-timelines.json"),
+    tempTimelinesFile: path.join(dataDir, "task-timelines.tmp.json"),
     assetsFile: path.join(dataDir, "assets.json"),
     tempAssetsFile: path.join(dataDir, "assets.tmp.json"),
     usersFile: path.join(dataDir, "users.json"),
@@ -61,7 +67,15 @@ async function commitTempFile(tempPath: string, finalPath: string, content: stri
     await rename(tempPath, finalPath)
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
-    if (!message.includes("ENOENT")) {
+    const canFallbackToDirectWrite =
+      message.includes("ENOENT") ||
+      (process.platform === "win32" && (
+        message.includes("EPERM") ||
+        message.includes("EACCES") ||
+        message.includes("EBUSY")
+      ))
+
+    if (!canFallbackToDirectWrite) {
       throw error
     }
     await writeFile(finalPath, content, "utf8")
@@ -116,6 +130,100 @@ function normalizeTaskRuntimeTraceRecord<T extends Partial<TaskRuntimeTrace>>(re
 
 function normalizeNullableString(value: unknown) {
   return typeof value === "string" && value.trim().length > 0 ? value : null
+}
+
+const sensitiveKeyPattern = /(^|[-_])(authorization|api[-_]?key|access[-_]?token|refresh[-_]?token|secret|password|bearer|token|key)($|[-_])/i
+
+function redactEndpoint(value: string) {
+  try {
+    const url = new URL(value)
+    url.search = ""
+    url.hash = ""
+    return url.toString()
+  } catch {
+    return value.replace(/[?&#].*$/, "")
+  }
+}
+
+function redactTimelineValue(value: unknown, parentKey = ""): unknown {
+  if (sensitiveKeyPattern.test(parentKey)) {
+    return "[REDACTED]"
+  }
+
+  if (typeof value === "string") {
+    return parentKey.toLowerCase().includes("endpoint") || parentKey.toLowerCase().includes("url")
+      ? redactEndpoint(value)
+      : value
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => redactTimelineValue(item, parentKey))
+  }
+
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([key, entryValue]) => [
+        key,
+        redactTimelineValue(entryValue, key),
+      ]),
+    )
+  }
+
+  return value
+}
+
+function normalizeTimelineLevel(value: unknown): TaskTimelineEvent["level"] {
+  switch (value) {
+    case "warning":
+    case "error":
+      return value
+    default:
+      return "info"
+  }
+}
+
+function normalizeTimelineType(value: unknown): TaskTimelineEvent["type"] {
+  switch (value) {
+    case "provider":
+    case "error":
+      return value
+    default:
+      return "stage"
+  }
+}
+
+function sanitizeTaskTimelineEvent(event: TaskTimelineEvent): TaskTimelineEvent {
+  const sanitized = redactTimelineValue(event) as TaskTimelineEvent
+  return {
+    ...sanitized,
+    level: normalizeTimelineLevel(sanitized.level),
+    type: normalizeTimelineType(sanitized.type),
+    summary: normalizeNullableString(sanitized.summary),
+    reason: normalizeNullableString(sanitized.reason),
+    provider: sanitized.provider && typeof sanitized.provider === "object" ? sanitized.provider : null,
+    metadata: sanitized.metadata && typeof sanitized.metadata === "object" ? sanitized.metadata : undefined,
+  }
+}
+
+function normalizeTaskTimelineEvent(record: TaskTimelineEvent, fallbackSequence: number): TaskTimelineEvent {
+  const createdAt = normalizeNullableString(record.createdAt) ?? now()
+  return sanitizeTaskTimelineEvent({
+    id: normalizeNullableString(record.id) ?? `timeline_${fallbackSequence}`,
+    taskId: normalizeNullableString(record.taskId) ?? "task_unknown",
+    sequence:
+      typeof record.sequence === "number" && Number.isInteger(record.sequence) && record.sequence > 0
+        ? record.sequence
+        : fallbackSequence,
+    type: normalizeTimelineType(record.type),
+    stage: normalizeNullableString(record.stage) ?? "unknown",
+    label: normalizeNullableString(record.label) ?? "未命名事件",
+    level: normalizeTimelineLevel(record.level),
+    summary: normalizeNullableString(record.summary),
+    reason: normalizeNullableString(record.reason),
+    provider: record.provider && typeof record.provider === "object" ? record.provider : null,
+    metadata: record.metadata && typeof record.metadata === "object" ? record.metadata : undefined,
+    createdAt,
+  })
 }
 
 function normalizeNonNegativeInteger(value: unknown) {
@@ -578,6 +686,9 @@ export function normalizeTaskDetailRecord(
           : 0,
       blueprintStatus: normalizeBlueprintStatus(taskRunConfig.blueprintStatus),
       audioStrategy: taskRunConfig.audioStrategy === "native_plus_tts_ducked" ? "native_plus_tts_ducked" : "tts_only",
+      subtitleStrategy: subtitleStrategyValues.has(taskRunConfig.subtitleStrategy)
+        ? taskRunConfig.subtitleStrategy
+        : "tts_aligned",
     },
     blueprintVersion:
       typeof detail.blueprintVersion === "number" && detail.blueprintVersion >= 0
@@ -834,6 +945,58 @@ export async function updateRuntimeStatus(
   const next = updater(current)
   await writeRuntimeStatus(next)
   return next
+}
+
+async function writeTaskTimelineRecords(records: Record<string, TaskTimelineEvent[]>) {
+  const { dataDir, timelinesFile, tempTimelinesFile } = resolveFiles()
+  await mkdir(dataDir, { recursive: true })
+  await commitTempFile(tempTimelinesFile, timelinesFile, JSON.stringify(records, null, 2))
+}
+
+export async function readTaskTimelineRecords(): Promise<Record<string, TaskTimelineEvent[]>> {
+  const { dataDir, timelinesFile } = resolveFiles()
+  await mkdir(dataDir, { recursive: true })
+  try {
+    const content = await readFile(timelinesFile, "utf8")
+    if (!content.trim()) {
+      return {}
+    }
+
+    const parsed = JSON.parse(content) as Record<string, TaskTimelineEvent[]>
+    return Object.fromEntries(
+      Object.entries(parsed).map(([taskId, events]) => [
+        taskId,
+        Array.isArray(events)
+          ? events.map((event, index) =>
+              normalizeTaskTimelineEvent({ ...event, taskId }, index + 1),
+            )
+          : [],
+      ]),
+    )
+  } catch {
+    return {}
+  }
+}
+
+export async function readTaskTimeline(taskId: string) {
+  const records = await readTaskTimelineRecords()
+  return records[taskId] ?? []
+}
+
+export async function appendTaskTimelineEvent(taskId: string, input: TaskTimelineEventInput) {
+  const records = await readTaskTimelineRecords()
+  const events = records[taskId] ?? []
+  const sequence = events.length + 1
+  const event = sanitizeTaskTimelineEvent({
+    ...input,
+    id: `${taskId}_timeline_${sequence}`,
+    taskId,
+    sequence,
+    createdAt: now(),
+  })
+  records[taskId] = [...events, event]
+  await writeTaskTimelineRecords(records)
+  return event
 }
 
 async function writeAssetRecords(records: Record<string, AssetRecord[]>) {

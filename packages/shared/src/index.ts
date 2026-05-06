@@ -35,6 +35,9 @@ export type ChannelProfileId = z.infer<typeof channelProfileSchema>
 export const audioStrategySchema = z.enum(["tts_only", "native_plus_tts_ducked"])
 export type AudioStrategy = z.infer<typeof audioStrategySchema>
 
+export const subtitleStrategySchema = z.enum(["tts_aligned", "whisper_cpp"])
+export type SubtitleStrategy = z.infer<typeof subtitleStrategySchema>
+
 export const taskStatusSchema = z.enum([
   "draft",
   "queued",
@@ -96,6 +99,38 @@ export const taskRuntimeTraceSchema = z.object({
 })
 export type TaskRuntimeTrace = z.infer<typeof taskRuntimeTraceSchema>
 
+export const taskTimelineLevelSchema = z.enum(["info", "warning", "error"])
+export type TaskTimelineLevel = z.infer<typeof taskTimelineLevelSchema>
+
+export const taskTimelineTypeSchema = z.enum(["stage", "provider", "error"])
+export type TaskTimelineType = z.infer<typeof taskTimelineTypeSchema>
+
+export const taskTimelineProviderAuditSchema = z.object({
+  provider: z.string().nullable().optional(),
+  model: z.string().nullable().optional(),
+  request: z.record(z.string(), z.unknown()).optional(),
+  response: z.record(z.string(), z.unknown()).optional(),
+  error: z.string().nullable().optional(),
+})
+export type TaskTimelineProviderAudit = z.infer<typeof taskTimelineProviderAuditSchema>
+
+export const taskTimelineEventSchema = z.object({
+  id: z.string(),
+  taskId: z.string(),
+  sequence: z.number().int().positive(),
+  type: taskTimelineTypeSchema,
+  stage: z.string(),
+  label: z.string(),
+  level: taskTimelineLevelSchema.default("info"),
+  summary: z.string().nullable().optional(),
+  reason: z.string().nullable().optional(),
+  provider: taskTimelineProviderAuditSchema.nullable().optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
+  createdAt: z.string(),
+})
+export type TaskTimelineEvent = z.infer<typeof taskTimelineEventSchema>
+export type TaskTimelineEventInput = Omit<TaskTimelineEvent, "id" | "taskId" | "sequence" | "createdAt">
+
 export const modelRefSchema = z.object({
   id: z.string(),
   label: z.string(),
@@ -123,6 +158,7 @@ export const taskRunConfigSchema = z.object({
   videoModel: modelRefSchema,
   ttsProvider: z.string(),
   audioStrategy: audioStrategySchema.default("tts_only"),
+  subtitleStrategy: subtitleStrategySchema.default("tts_aligned"),
   contentLocale: z.literal("en"),
   operatorLocale: z.literal("zh-CN"),
   requireStoryboardReview: z.boolean(),
@@ -251,6 +287,7 @@ export const createTaskInputSchema = z.object({
   targetDurationSec: videoDurationSecSchema.default(30),
   generationMode: generationModeSchema.default("user_locked"),
   audioStrategy: audioStrategySchema.default("tts_only"),
+  subtitleStrategy: subtitleStrategySchema.default("tts_aligned"),
   modelOverrides: taskModelOverrideSchema.optional(),
 })
 export type CreateTaskInput = z.infer<typeof createTaskInputSchema>

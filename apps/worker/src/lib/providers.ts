@@ -20,6 +20,7 @@ import {
   type ExecutionBlueprint,
   type PlannedExecutionBlueprint,
   type StoryboardScene,
+  type SubtitleStrategy,
   type TaskBlueprintRecord,
   type TaskDetail,
   type TextPlanningOutput,
@@ -27,6 +28,7 @@ import {
 import { GENERATION_PREFERENCES, resolveVideoModelCapability } from "@genergi/config"
 import { EdgeTTS } from "./edge-tts.js"
 import { concatVideos, extractKeyframeFromVideo, getMediaDurationSeconds, mixNarrationWithVideoAudio, muxNarrationIntoVideo, trimVideoDuration, writeStyledAssSubtitleFile } from "./ffmpeg.js"
+import { createSubtitleProvider } from "./subtitle-provider.js"
 
 const gatewayBaseUrl = process.env.GENERGI_MEDIA_GATEWAY_BASE_URL ?? "https://open.xiaojingai.com"
 const gatewayApiKey = process.env.GENERGI_MEDIA_GATEWAY_API_KEY ?? ""
@@ -331,6 +333,7 @@ export type RuntimeGenerationConfig = {
   videoModelLabel: string
   ttsProvider: string
   ttsLabel: string
+  subtitleStrategy: SubtitleStrategy
 }
 
 export function resolveRuntimeGenerationConfig(detail: Pick<TaskDetail, "taskRunConfig">) {
@@ -354,6 +357,7 @@ export function resolveRuntimeGenerationConfig(detail: Pick<TaskDetail, "taskRun
     videoProviderLabel: getProviderLabel(detail.taskRunConfig.videoModel.provider),
     videoModelLabel: detail.taskRunConfig.videoModel.label,
     videoModelId: detail.taskRunConfig.videoModel.id,
+    subtitleStrategy: detail.taskRunConfig.subtitleStrategy ?? "tts_aligned",
   } satisfies RuntimeGenerationConfig
 }
 
@@ -2641,12 +2645,19 @@ export async function synthesizeNarration(detail: TaskDetail) {
   }
 
   const audioPath = path.join(dir, "narration.mp3")
-  const srtPath = path.join(dir, "subtitles.srt")
+  const alignedSrtPath = path.join(dir, "subtitles.srt")
   await bestResult.toFile(audioPath)
-  writeFileSync(srtPath, bestResult.getCaptionSrtString(), "utf8")
+  writeFileSync(alignedSrtPath, bestResult.getCaptionSrtString(), "utf8")
+  const subtitles = await createSubtitleProvider(runtime.subtitleStrategy).generate({
+    taskId: detail.taskId,
+    audioPath,
+    alignedSrtPath,
+    outputDir: dir,
+    language: detail.taskRunConfig.contentLocale,
+  })
   return {
     audioPath,
-    srtPath,
+    srtPath: subtitles.srtPath,
     durationSec: bestDuration,
   }
 }

@@ -187,6 +187,7 @@ export function buildDefaultTaskRunConfig(
     projectId?: string
     terminalPresetId?: TerminalPresetId
     audioStrategy?: "tts_only" | "native_plus_tts_ducked"
+    subtitleStrategy?: "tts_aligned" | "whisper_cpp"
   } = {},
 ): TaskRunConfig {
   const mode = MODE_MODELS[modeId]
@@ -217,6 +218,7 @@ export function buildDefaultTaskRunConfig(
     videoModel: mode.videoModel,
     ttsProvider: mode.ttsProvider,
     audioStrategy: options.audioStrategy ?? "tts_only",
+    subtitleStrategy: options.subtitleStrategy ?? "tts_aligned",
     contentLocale: "en",
     operatorLocale: "zh-CN",
     requireStoryboardReview: mode.requireStoryboardReview,

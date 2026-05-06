@@ -28,6 +28,7 @@ import {
   upsertTaskBlueprintSnapshot,
   writeTaskSourceFiles,
 } from "./lib/providers.js"
+import { buildLifecycleTimelineEvent, recordTaskTimeline } from "./lib/task-timeline.js"
 
 const redisUrl = process.env.REDIS_URL
 
@@ -99,6 +100,11 @@ async function updateTaskLifecycleState(taskId: string, patch: {
     ...runtimePatch,
     updatedAt,
   })
+
+  const timelineEvent = buildLifecycleTimelineEvent(patch)
+  if (timelineEvent) {
+    await recordTaskTimeline(taskId, timelineEvent)
+  }
 }
 
 function startTaskCancellationWatcher(taskId: string, controller: AbortController) {
@@ -414,6 +420,19 @@ async function writeTaskArtifacts(
       activeJobId: null,
       updatedAt: new Date().toISOString(),
     })
+    await recordTaskTimeline(taskId, {
+      type: "stage",
+      stage: "waiting_review",
+      label: "等待审核",
+      level: "info",
+      summary: "蓝图和关键画面已准备好，等待人工审核。",
+      metadata: {
+        status: "waiting_review",
+        progressPct: 45,
+        blueprintVersion: blueprintRecord.version,
+        blueprintStatus: blueprintRecord.status,
+      },
+    })
     await writeWorkerHeartbeat(`Blueprint and keyframes ready for review for ${taskId}`)
     return { phase: "review_ready" as const }
   }
@@ -700,6 +719,17 @@ const worker = new Worker(
           updatedAt: new Date().toISOString(),
         })
       }
+      await recordTaskTimeline(taskId, {
+        type: "error",
+        stage: latestDetail?.currentStage ?? "failed",
+        label: latestDetail?.currentStageLabel ?? "任务失败",
+        level: "error",
+        summary: "任务失败",
+        reason: message,
+        metadata: {
+          status: "failed",
+        },
+      })
       await writeWorkerHeartbeat(`Last failed ${taskId}: ${message}`, "degraded")
       console.error(`[worker] ${taskId} => failed`, error)
       activeTaskIds.delete(taskId)

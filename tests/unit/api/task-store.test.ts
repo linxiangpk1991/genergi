@@ -98,6 +98,43 @@ describe("API task store", () => {
     expect(created.taskRunConfig.slotSnapshots.find((item) => item.slotType === "ttsProvider")?.providerType).toBe("edge-tts")
   })
 
+  it("freezes subtitle strategy into the task run config with a stable tts-aligned default", async () => {
+    dataDir = await mkdtemp(path.join(os.tmpdir(), "genergi-task-store-"))
+    process.env.GENERGI_DATA_DIR = dataDir
+
+    const store = await import("../../../apps/api/src/lib/task-store")
+
+    const defaultTask = await store.createTask({
+      projectId: "project_default",
+      title: "Default subtitle strategy",
+      script: "Show the product. Explain the benefit. End with a CTA.",
+      modeId: "high_quality",
+      channelId: "reels",
+      terminalPresetId: "phone_portrait",
+      aspectRatio: "9:16",
+      targetDurationSec: 30,
+      generationMode: "system_enhanced",
+    })
+
+    const whisperTask = await store.createTask({
+      projectId: "project_default",
+      title: "Whisper subtitle strategy",
+      script: "Show the product. Explain the benefit. End with a CTA.",
+      modeId: "high_quality",
+      channelId: "reels",
+      terminalPresetId: "phone_portrait",
+      aspectRatio: "9:16",
+      targetDurationSec: 30,
+      generationMode: "system_enhanced",
+      subtitleStrategy: "whisper_cpp",
+    })
+
+    expect(defaultTask.taskRunConfig.subtitleStrategy).toBe("tts_aligned")
+    expect((await store.getTaskDetail(defaultTask.task.id))?.taskRunConfig.subtitleStrategy).toBe("tts_aligned")
+    expect(whisperTask.taskRunConfig.subtitleStrategy).toBe("whisper_cpp")
+    expect((await store.getTaskDetail(whisperTask.task.id))?.taskRunConfig.subtitleStrategy).toBe("whisper_cpp")
+  })
+
   it("freezes the resolved model snapshot at task creation even after defaults change later", async () => {
     dataDir = await mkdtemp(path.join(os.tmpdir(), "genergi-task-store-"))
     process.env.GENERGI_DATA_DIR = dataDir

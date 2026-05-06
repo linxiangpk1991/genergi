@@ -1,7 +1,10 @@
 void (async () => {
   const { createTask, getTaskDetail } = await import("../../apps/api/src/lib/task-store.ts")
+  const { listProjects } = await import("../../apps/api/src/lib/project-store.ts")
 
+  await listProjects()
   const created = await createTask({
+    projectId: "project_default",
     title: "Unified media slot rollout smoke",
     script: "Show the product. Explain the benefit. End with a CTA.",
     modeId: "high_quality",

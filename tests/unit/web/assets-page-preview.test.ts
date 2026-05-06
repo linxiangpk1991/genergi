@@ -14,6 +14,8 @@ vi.mock("../../../apps/web/src/api", async () => {
       listTasks: vi.fn(),
       runtimeStatus: vi.fn(),
       getTaskAssets: vi.fn(),
+      getTaskTimeline: vi.fn(),
+      deleteTaskAsset: vi.fn(),
     },
   }
 })
@@ -121,11 +123,28 @@ describe("AssetsPage inline preview", () => {
         },
       ],
     } as any)
+    vi.mocked(api.getTaskTimeline).mockResolvedValue({
+      timeline: [
+        {
+          id: "timeline_1",
+          taskId: "task_assets",
+          sequence: 1,
+          type: "stage",
+          stage: "keyframe_generation",
+          label: "关键画面生成中 3/4",
+          level: "info",
+          summary: "关键画面生成中 3/4",
+          createdAt: "2026-04-20T00:00:00.000Z",
+        },
+      ],
+    } as any)
+    vi.mocked(api.deleteTaskAsset).mockResolvedValue({ deleted: true, taskId: "task_assets", assetId: "task_assets_source" } as any)
 
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: true,
       text: async () => "Original source script.",
     } as any)
+    vi.spyOn(window, "confirm").mockReturnValue(true)
   })
 
   afterEach(async () => {
@@ -153,6 +172,8 @@ describe("AssetsPage inline preview", () => {
 
     await waitFor(() => {
       expect(vi.mocked(api.getTaskAssets)).toHaveBeenCalledWith("task_assets")
+      expect(container.textContent ?? "").toContain("任务时间线")
+      expect(container.textContent ?? "").toContain("关键画面生成中 3/4")
     })
 
     const previewButton = Array.from(container.querySelectorAll("button")).find((button) =>
@@ -166,6 +187,71 @@ describe("AssetsPage inline preview", () => {
 
     await waitFor(() => {
       expect(container.textContent ?? "").toContain("Original source script.")
+    })
+  })
+
+  it("confirms asset deletion, refreshes the asset list, and shows success feedback", async () => {
+    vi.mocked(api.getTaskAssets)
+      .mockResolvedValueOnce({
+        assets: [
+          {
+            id: "task_assets_source",
+            taskId: "task_assets",
+            assetType: "source_script",
+            label: "任务母本",
+            status: "ready",
+            path: "/tmp/source-script.txt",
+            createdAt: "2026-04-20T00:00:00.000Z",
+            fileName: "source-script.txt",
+            directoryName: "/tmp",
+            displayPath: "/tmp/source-script.txt",
+            extension: ".txt",
+            mimeType: "text/plain; charset=utf-8",
+            sizeBytes: 30,
+            sizeLabel: "30 B",
+            exists: true,
+            isDirectory: false,
+            previewable: true,
+            previewKind: "text",
+            modifiedAt: "2026-04-20T00:00:00.000Z",
+            downloadFileName: "source-script.txt",
+          },
+        ],
+      } as any)
+      .mockResolvedValueOnce({ assets: [] } as any)
+
+    await act(async () => {
+      root.render(
+        createElement(
+          MemoryRouter,
+          { initialEntries: ["/asset-center?taskId=task_assets"] },
+          createElement(
+            Routes,
+            null,
+            createElement(Route, { path: "/asset-center", element: createElement(AssetsPage) }),
+          ),
+        ),
+      )
+    })
+
+    await waitFor(() => {
+      expect(container.textContent ?? "").toContain("任务母本")
+    })
+
+    const deleteButton = Array.from(container.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("删除资产"),
+    )
+    expect(deleteButton).toBeTruthy()
+
+    await act(async () => {
+      deleteButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }))
+    })
+
+    await waitFor(() => {
+      expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining("任务母本"))
+      expect(vi.mocked(api.deleteTaskAsset)).toHaveBeenCalledWith("task_assets", "task_assets_source")
+      expect(container.textContent ?? "").toContain("已删除资产：任务母本")
+      expect(container.textContent ?? "").toContain("当前暂无记录")
     })
   })
 

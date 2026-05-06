@@ -1011,6 +1011,16 @@ Here's the thing. In Chinese destiny analysis, there's a pattern called "late bl
     expect(runtime.imageModelId).toBe("image.premium")
     expect(runtime.videoModelId).toBe("video.hd")
     expect(runtime.ttsProvider).toBe("edge-tts")
+    expect(runtime.subtitleStrategy).toBe("tts_aligned")
+
+    const whisperRuntime = providers.resolveRuntimeGenerationConfig(createTaskDetail({
+      taskRunConfig: {
+        ...createTaskDetail().taskRunConfig,
+        subtitleStrategy: "whisper_cpp",
+      },
+    }))
+
+    expect(whisperRuntime.subtitleStrategy).toBe("whisper_cpp")
   })
 
   it("uses the Responses API for GPT-5 text planning snapshots", async () => {
