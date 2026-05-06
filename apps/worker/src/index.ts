@@ -124,21 +124,25 @@ function startTaskCancellationWatcher(taskId: string, controller: AbortControlle
 }
 
 async function writeWorkerHeartbeat(message: string, status: "healthy" | "degraded" = "healthy") {
-  await updateRuntimeStatus((current) => ({
-    ...current,
-    worker: {
-      name: "worker",
-      status,
-      updatedAt: new Date().toISOString(),
-      message,
-    },
-    redis: {
-      name: "redis",
-      status: "healthy",
-      updatedAt: new Date().toISOString(),
-      message: "Redis queue connected",
-    },
-  }))
+  try {
+    await updateRuntimeStatus((current) => ({
+      ...current,
+      worker: {
+        name: "worker",
+        status,
+        updatedAt: new Date().toISOString(),
+        message,
+      },
+      redis: {
+        name: "redis",
+        status: "healthy",
+        updatedAt: new Date().toISOString(),
+        message: "Redis queue connected",
+      },
+    }))
+  } catch (error) {
+    console.warn("[worker] runtime heartbeat write failed:", error instanceof Error ? error.message : String(error))
+  }
 }
 
 async function writeTaskArtifacts(

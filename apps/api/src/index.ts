@@ -47,6 +47,7 @@ import {
   getTaskDetail,
   listTasks,
   resumeFailedTask,
+  restoreTaskState,
   updateTaskAudioStrategy,
 } from "./lib/task-store.js"
 import {
@@ -1767,7 +1768,19 @@ app.get("/api/tasks/:taskId/assets", async (c) => {
 
 app.delete("/api/tasks/:taskId/assets", async (c) => {
   const taskId = c.req.param("taskId")
-  await deleteTaskAssetCollection(taskId)
+  const result = await deleteTaskAssetCollection(taskId)
+  if (!result.deleted) {
+    if (result.reason === "TASK_NOT_FOUND") {
+      return c.json({ message: result.reason }, 404)
+    }
+    if (result.reason === "TASK_ASSET_TASK_ID_FORBIDDEN" || result.reason === "ASSET_DELETE_PATH_FORBIDDEN") {
+      return c.json({ message: result.reason }, 403)
+    }
+    if (result.reason === "TASK_ASSETS_LOCKED") {
+      return c.json({ message: result.reason, status: result.status }, 409)
+    }
+    return c.json({ message: result.reason }, 400)
+  }
   return c.json({ deleted: true, taskId })
 })
 
@@ -1853,6 +1866,15 @@ app.delete("/api/tasks/:taskId/assets/:assetId", async (c) => {
   if (result.reason === "ASSET_DELETE_PATH_FORBIDDEN") {
     return c.json({ message: result.reason }, 403)
   }
+  if (result.reason === "TASK_ASSET_TASK_ID_FORBIDDEN") {
+    return c.json({ message: result.reason }, 403)
+  }
+  if (result.reason === "TASK_NOT_FOUND") {
+    return c.json({ message: result.reason }, 404)
+  }
+  if (result.reason === "TASK_ASSETS_LOCKED") {
+    return c.json({ message: result.reason, status: result.status }, 409)
+  }
 
   return c.json({ message: result.reason }, 404)
 })
@@ -1927,7 +1949,6 @@ app.post("/api/tasks/:taskId/resume", async (c) => {
     detail.taskRunConfig.blueprintStatus === "video_generating" ||
     detail.taskRunConfig.blueprintStatus === "completed"
 
-  let queue
   try {
     if (isStaleRunningTask) {
       const recovered = await recoverTaskJobs(taskId, { minActiveAgeMs: staleRunningThresholdMs })
@@ -1939,7 +1960,19 @@ app.post("/api/tasks/:taskId/resume", async (c) => {
           diagnostics: await buildTaskDiagnostics(task, detail),
         }, 409)
       }
+    }
+  } catch (error) {
+    return toQueueUnavailableResponse(c, error)
+  }
 
+  const resumed = await resumeFailedTask(taskId)
+  if (!resumed) {
+    return c.json({ message: "TASK_NOT_FOUND" }, 404)
+  }
+
+  let queue
+  try {
+    if (isStaleRunningTask) {
       queue = await enqueueTask(taskId, {
         reason: "resume_stale_running_task",
         continueExecution,
@@ -1957,12 +1990,8 @@ app.post("/api/tasks/:taskId/resume", async (c) => {
       })
     }
   } catch (error) {
+    await restoreTaskState(task, detail)
     return toQueueUnavailableResponse(c, error)
-  }
-
-  const resumed = await resumeFailedTask(taskId)
-  if (!resumed) {
-    return c.json({ message: "TASK_NOT_FOUND" }, 404)
   }
 
   return c.json({

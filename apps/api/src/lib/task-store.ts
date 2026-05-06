@@ -6,6 +6,7 @@ import {
   createDefaultReviewSummary,
   deleteTaskAssets as deletePersistedTaskAssets,
   deleteTaskDetail,
+  deleteTaskTimeline,
   normalizeTaskSummaryRecord,
   normalizeStoryboardScene,
   normalizeTaskDetailRecord,
@@ -85,6 +86,7 @@ export type ResolvedAssetRecord = {
 }
 
 const terminalTaskStatuses = new Set<TaskStatus>(["failed", "completed", "canceled"])
+const safeTaskAssetIdPattern = /^[A-Za-z0-9_-]+$/
 
 function formatBytes(sizeBytes: number | null) {
   if (sizeBytes == null) {
@@ -440,6 +442,32 @@ function isSafeTaskAssetPath(taskId: string, candidatePath: string) {
   )
 }
 
+function isSafeTaskAssetId(taskId: string) {
+  return safeTaskAssetIdPattern.test(taskId)
+}
+
+async function getTaskAssetDeletionLock(taskId: string) {
+  if (!isSafeTaskAssetId(taskId)) {
+    return { locked: true as const, reason: "TASK_ASSET_TASK_ID_FORBIDDEN" as const }
+  }
+
+  const tasks = await listTasks()
+  const task = tasks.find((entry) => entry.id === taskId) ?? null
+  if (!task) {
+    return { locked: true as const, reason: "TASK_NOT_FOUND" as const }
+  }
+
+  if (!terminalTaskStatuses.has(task.status)) {
+    return {
+      locked: true as const,
+      reason: "TASK_ASSETS_LOCKED" as const,
+      status: task.status,
+    }
+  }
+
+  return { locked: false as const, task }
+}
+
 export function normalizeSceneReviewMetadata(scene: StoryboardScene) {
   return normalizeStoryboardScene(scene)
 }
@@ -719,6 +747,7 @@ function synthesizeTaskSummaryFromDetail(detail: TaskDetail): TaskSummary {
       targetDurationSec: detail.taskRunConfig.targetDurationSec,
       generationMode: detail.taskRunConfig.generationMode,
       audioStrategy: detail.taskRunConfig.audioStrategy,
+      subtitleStrategy: detail.taskRunConfig.subtitleStrategy,
       generationRoute: detail.taskRunConfig.generationRoute,
       routeReason: detail.taskRunConfig.routeReason,
       planningVersion: detail.taskRunConfig.planningVersion,
@@ -764,6 +793,7 @@ function synthesizeTaskSummaryFromDetail(detail: TaskDetail): TaskSummary {
     targetDurationSec: detail.taskRunConfig.targetDurationSec,
     generationMode: detail.taskRunConfig.generationMode,
     audioStrategy: detail.taskRunConfig.audioStrategy,
+    subtitleStrategy: detail.taskRunConfig.subtitleStrategy,
     generationRoute: detail.taskRunConfig.generationRoute,
     routeReason: detail.taskRunConfig.routeReason,
     planningVersion: detail.taskRunConfig.planningVersion,
@@ -1082,6 +1112,11 @@ export async function getTaskAsset(taskId: string, assetId: string) {
 }
 
 export async function deleteTaskAsset(taskId: string, assetId: string) {
+  const lock = await getTaskAssetDeletionLock(taskId)
+  if (lock.locked) {
+    return { deleted: false as const, reason: lock.reason, status: lock.status }
+  }
+
   const asset = await getTaskAsset(taskId, assetId)
   if (!asset) {
     return { deleted: false as const, reason: "ASSET_NOT_FOUND" }
@@ -1103,11 +1138,26 @@ export async function deleteTaskAsset(taskId: string, assetId: string) {
 }
 
 export async function deleteTaskAssetCollection(taskId: string) {
+  const lock = await getTaskAssetDeletionLock(taskId)
+  if (lock.locked) {
+    return { deleted: false as const, reason: lock.reason, status: lock.status }
+  }
+
+  const exportDir = resolveTaskExportDir(taskId)
+  const sharedAssetDir = resolveTaskSharedAssetDir(taskId)
+  if (
+    !isPathInsideOrEqual(exportDir, path.join(resolveTaskDataDir(), "exports")) ||
+    !isPathInsideOrEqual(sharedAssetDir, path.join(resolveTaskDataDir(), "assets"))
+  ) {
+    return { deleted: false as const, reason: "ASSET_DELETE_PATH_FORBIDDEN" }
+  }
+
   await Promise.all([
-    fs.rm(resolveTaskExportDir(taskId), { recursive: true, force: true }),
-    fs.rm(resolveTaskSharedAssetDir(taskId), { recursive: true, force: true }),
+    fs.rm(exportDir, { recursive: true, force: true }),
+    fs.rm(sharedAssetDir, { recursive: true, force: true }),
   ])
   await deletePersistedTaskAssets(taskId)
+  return { deleted: true as const }
 }
 
 export async function createTask(input: CreateTaskInput): Promise<{ task: TaskSummary; taskRunConfig: unknown }> {
@@ -1181,6 +1231,7 @@ export async function createTask(input: CreateTaskInput): Promise<{ task: TaskSu
     targetDurationSec: input.targetDurationSec,
     generationMode,
     audioStrategy: taskRunConfig.audioStrategy,
+    subtitleStrategy: taskRunConfig.subtitleStrategy,
     generationRoute: taskRunConfig.generationRoute,
     routeReason: taskRunConfig.routeReason,
     planningVersion: taskRunConfig.planningVersion,
@@ -1382,6 +1433,14 @@ export async function resumeFailedTask(taskId: string) {
   }
 }
 
+export async function restoreTaskState(taskSnapshot: TaskSummary, detailSnapshot: TaskDetail) {
+  const tasks = await listTasks()
+  await writeTaskSummaries(tasks.map((entry) =>
+    entry.id === taskSnapshot.id ? normalizeTaskSummaryRecord(taskSnapshot) : entry,
+  ))
+  await upsertTaskDetail(normalizeTaskDetailRecord(detailSnapshot))
+}
+
 export async function deleteTask(taskId: string) {
   const tasks = await listTasks()
   const nextTasks = tasks.filter((task) => task.id !== taskId)
@@ -1391,6 +1450,7 @@ export async function deleteTask(taskId: string) {
 
   await deleteTaskDetail(taskId)
   await deletePersistedTaskAssets(taskId)
+  await deleteTaskTimeline(taskId)
 }
 
 export async function applySceneReviewDecision(

@@ -273,9 +273,15 @@ find ${remoteRoot}/releases -maxdepth 1 -mindepth 1 -type d | sort
 }
 
 async function main() {
-  await buildArchive();
-  await uploadArchive();
-  await runDeploymentRemoteScript();
+  try {
+    await buildArchive();
+    await uploadArchive();
+    await runDeploymentRemoteScript();
+  } finally {
+    if (existsSync(archivePath)) {
+      rmSync(archivePath, { force: true });
+    }
+  }
 }
 
 await main();

@@ -3,9 +3,11 @@ import {
   api,
   buildAssetCenterUrl,
   buildBatchDashboardUrl,
+  getSubtitleStrategyLabel,
   type BootstrapResponse,
   type ProjectRecord,
   type RenderSpec,
+  type SubtitleStrategy,
   type TerminalPresetId,
   type TaskSummary,
 } from "../api";
@@ -102,6 +104,23 @@ const AUDIO_STRATEGY_OPTIONS = [
   },
 ]
 
+const SUBTITLE_STRATEGY_OPTIONS: Array<{
+  id: SubtitleStrategy
+  label: string
+  description: string
+}> = [
+  {
+    id: "tts_aligned",
+    label: "TTS 对齐字幕",
+    description: "沿用当前稳定链路，字幕直接跟随 TTS 旁白时间轴。",
+  },
+  {
+    id: "whisper_cpp",
+    label: "Whisper 字幕",
+    description: "用本地 ASR 从最终音频识别字幕，适合后续替换非 TTS 音轨。",
+  },
+]
+
 export function HomePage() {
   const [bootstrap, setBootstrap] = useState<BootstrapResponse | null>(null);
   const [projects, setProjects] = useState<ProjectRecord[]>([]);
@@ -113,6 +132,7 @@ export function HomePage() {
     useState<TerminalPresetId>("phone_portrait");
   const [targetDurationSec, setTargetDurationSec] = useState(30);
   const [audioStrategy, setAudioStrategy] = useState<"tts_only" | "native_plus_tts_ducked">("tts_only");
+  const [subtitleStrategy, setSubtitleStrategy] = useState<SubtitleStrategy>("tts_aligned");
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
@@ -182,6 +202,8 @@ export function HomePage() {
   const renderSpec = getRenderSpec(terminalPresetId);
   const selectedAudioStrategy =
     AUDIO_STRATEGY_OPTIONS.find((item) => item.id === audioStrategy) ?? AUDIO_STRATEGY_OPTIONS[0];
+  const selectedSubtitleStrategy =
+    SUBTITLE_STRATEGY_OPTIONS.find((item) => item.id === subtitleStrategy) ?? SUBTITLE_STRATEGY_OPTIONS[0];
   const selectedExecutionMode = "review_required";
   const selectedExecutionModeLabel = "审核优先";
 
@@ -236,6 +258,7 @@ export function HomePage() {
         terminalPresetId,
         targetDurationSec,
         audioStrategy,
+        subtitleStrategy,
       });
       setTasks((current) => [result.task, ...current]);
       const successMessage = getCreateTaskNotice(result.task);
@@ -390,6 +413,27 @@ export function HomePage() {
             ))}
           </div>
 
+          <label className="field-label">字幕策略</label>
+          <div className="mode-grid" role="radiogroup" aria-label="字幕策略">
+            {SUBTITLE_STRATEGY_OPTIONS.map((option) => (
+              <button
+                key={option.id}
+                className={
+                  option.id === subtitleStrategy
+                    ? "mode-card mode-card--active"
+                    : "mode-card"
+                }
+                onClick={() => setSubtitleStrategy(option.id)}
+                type="button"
+                role="radio"
+                aria-checked={option.id === subtitleStrategy}
+              >
+                <div className="mode-title">{option.label}</div>
+                <div className="mode-description">{option.description}</div>
+              </button>
+            ))}
+          </div>
+
           <div className="planning-strip">
             <div className="planning-chip">
               <span className="planning-chip__label">成片组织方式</span>
@@ -414,6 +458,11 @@ export function HomePage() {
               <span className="planning-chip__label">音频策略</span>
               <strong>{selectedAudioStrategy.label}</strong>
               <span>{selectedAudioStrategy.description}</span>
+            </div>
+            <div className="planning-chip">
+              <span className="planning-chip__label">字幕策略</span>
+              <strong>{selectedSubtitleStrategy.label}</strong>
+              <span>{selectedSubtitleStrategy.description}</span>
             </div>
             <div className="planning-chip">
               <span className="planning-chip__label">终端规格</span>
@@ -453,6 +502,10 @@ export function HomePage() {
             <div className="metric-row">
               <span>音频策略</span>
               <strong>{selectedAudioStrategy.label}</strong>
+            </div>
+            <div className="metric-row">
+              <span>字幕策略</span>
+              <strong>{getSubtitleStrategyLabel(subtitleStrategy)}</strong>
             </div>
             <div className="metric-row">
               <span>终端预设</span>

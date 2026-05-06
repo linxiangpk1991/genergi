@@ -16,6 +16,7 @@ vi.mock("../../../apps/web/src/api", async () => {
       getTaskAssets: vi.fn(),
       getTaskTimeline: vi.fn(),
       deleteTaskAsset: vi.fn(),
+      deleteTaskAssets: vi.fn(),
     },
   }
 })
@@ -314,6 +315,32 @@ describe("AssetsPage inline preview", () => {
       expect(text).toContain("Scene 2 video generation timeout")
       expect(text).toContain("分镜路由依据")
       expect(text).toContain("target duration 30s exceeds the current model single-shot limit of 8s")
+    })
+  })
+
+  it("shows asset loading failures as errors instead of normal empty output", async () => {
+    vi.mocked(api.getTaskAssets).mockRejectedValueOnce(new Error("asset index unavailable"))
+
+    await act(async () => {
+      root.render(
+        createElement(
+          MemoryRouter,
+          { initialEntries: ["/asset-center?taskId=task_assets"] },
+          createElement(
+            Routes,
+            null,
+            createElement(Route, { path: "/asset-center", element: createElement(AssetsPage) }),
+          ),
+        ),
+      )
+    })
+
+    await waitFor(() => {
+      const text = container.textContent ?? ""
+      expect(text).toContain("资产列表加载失败")
+      expect(text).toContain("资产加载失败")
+      expect(text).toContain("请先处理上方错误")
+      expect(text).not.toContain("当前暂无记录 · 等待任务继续产出")
     })
   })
 })

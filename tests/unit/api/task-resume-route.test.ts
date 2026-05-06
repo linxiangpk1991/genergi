@@ -205,6 +205,45 @@ describe("API task resume route", () => {
     expect(task?.failureReason).toBeNull()
   })
 
+  it("marks the task resume-pending before enqueue so worker start cannot be downgraded afterward", async () => {
+    const { app, store, taskId, cookie } = await createFailedTask()
+    enqueueTaskMock.mockImplementationOnce(async () => {
+      const taskDuringEnqueue = (await store.listTasks()).find((item: { id: string }) => item.id === taskId)
+      expect(taskDuringEnqueue?.status).toBe("queued")
+      expect(taskDuringEnqueue?.currentStage).toBe("resume_pending")
+      return {
+        queued: true,
+        jobId: "job_resume_after_mark_1",
+        reason: "resume_failed_task",
+        continueExecution: true,
+        resumeFrom: "failed_task",
+      }
+    })
+
+    const response = await app.request(`http://localhost/api/tasks/${taskId}/resume`, {
+      method: "POST",
+      headers: { Cookie: cookie },
+    })
+
+    expect(response.status).toBe(202)
+    expect(enqueueTaskMock).toHaveBeenCalledTimes(1)
+  })
+
+  it("restores the original failed state if queue enqueue fails during recovery", async () => {
+    enqueueTaskMock.mockRejectedValueOnce(new Error("queue unavailable"))
+    const { app, store, taskId, cookie } = await createFailedTask()
+
+    const response = await app.request(`http://localhost/api/tasks/${taskId}/resume`, {
+      method: "POST",
+      headers: { Cookie: cookie },
+    })
+
+    expect(response.status).toBe(503)
+    const task = (await store.listTasks()).find((item: { id: string }) => item.id === taskId)
+    expect(task?.status).toBe("failed")
+    expect(task?.failureReason).toBe("Scene 2 video generation timeout")
+  })
+
   it("requeues a stale running task only when no active queue job is still held", async () => {
     enqueueTaskMock.mockResolvedValueOnce({
       queued: true,

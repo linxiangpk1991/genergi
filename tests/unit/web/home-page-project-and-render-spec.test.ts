@@ -187,9 +187,14 @@ describe("HomePage project and terminal preset flow", () => {
       button.textContent?.includes("原生音频 + TTS 混音"),
     )
     expect(mixedAudioButton).toBeTruthy()
+    const whisperSubtitleButton = Array.from(container.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("Whisper 字幕"),
+    )
+    expect(whisperSubtitleButton).toBeTruthy()
 
     await act(async () => {
       mixedAudioButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }))
+      whisperSubtitleButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }))
     })
 
     await waitFor(() => {
@@ -199,6 +204,7 @@ describe("HomePage project and terminal preset flow", () => {
       expect(text).toContain("4:3")
       expect(text).toContain("保真优先")
       expect(text).toContain("单一路径")
+      expect(text).toContain("Whisper 字幕")
     })
 
     const submitButton = Array.from(container.querySelectorAll("button")).find((button) =>
@@ -234,6 +240,7 @@ describe("HomePage project and terminal preset flow", () => {
       terminalPresetId: "tablet_landscape",
       targetDurationSec: 30,
       audioStrategy: "native_plus_tts_ducked",
+      subtitleStrategy: "whisper_cpp",
     })
     expect(payload).not.toHaveProperty("aspectRatio")
     expect(payload).not.toHaveProperty("modeId")

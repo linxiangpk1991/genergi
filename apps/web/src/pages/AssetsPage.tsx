@@ -107,6 +107,17 @@ function canResumeTask(task: TaskSummary | null, diagnostics: TaskDiagnostics | 
   return canResumeFailedTask(task) || isStaleRunningTask(task)
 }
 
+function canDeleteTaskAssets(task: TaskSummary | null) {
+  return task?.status === "failed" || task?.status === "completed" || task?.status === "canceled"
+}
+
+function getAssetDeleteLockLabel(task: TaskSummary | null) {
+  if (canDeleteTaskAssets(task)) {
+    return ""
+  }
+  return "任务仍在生成链路中，资产已锁定"
+}
+
 function sortAssetsForDelivery(assets: AssetRecord[]) {
   const priority: Record<AssetRecord["assetType"], number> = {
     video_bundle: 0,
@@ -308,6 +319,11 @@ export function AssetsPage() {
   }
 
   async function handleDeleteAsset(asset: AssetRecord) {
+    if (!canDeleteTaskAssets(selectedTask)) {
+      setActionError(getAssetDeleteLockLabel(selectedTask))
+      return
+    }
+
     if (!window.confirm(`确认删除资产「${asset.label}」吗？该操作会删除任务自己的资产文件，无法从资产中心恢复。`)) {
       return
     }
@@ -329,6 +345,11 @@ export function AssetsPage() {
 
   async function handleDeleteTaskAssets() {
     if (!selectedTask) {
+      return
+    }
+
+    if (!canDeleteTaskAssets(selectedTask)) {
+      setActionError(getAssetDeleteLockLabel(selectedTask))
       return
     }
 
@@ -378,6 +399,8 @@ export function AssetsPage() {
   const sortedAssets = useMemo(() => sortAssetsForDelivery(assets), [assets])
   const deliverableAssets = sortedAssets.filter((asset) => ["video_bundle", "subtitles", "script", "audio"].includes(asset.assetType))
   const supportingAssets = sortedAssets.filter((asset) => !["video_bundle", "subtitles", "script", "audio"].includes(asset.assetType))
+  const assetDeleteLocked = !canDeleteTaskAssets(selectedTask)
+  const assetDeleteLockLabel = getAssetDeleteLockLabel(selectedTask)
   const recentTimeline = useMemo(() => [...timeline].slice(-6).reverse(), [timeline])
   const heartbeatAgeLabel = useMemo(() => {
     const ageMs = diagnostics?.stale.ageMs
@@ -509,11 +532,12 @@ export function AssetsPage() {
                   </a>
                   <button
                     className="ghost-button"
-                    disabled={deletingAssetId === asset.id}
+                    disabled={assetDeleteLocked || deletingAssetId === asset.id}
+                    title={assetDeleteLocked ? assetDeleteLockLabel : undefined}
                     onClick={() => void handleDeleteAsset(asset)}
                     type="button"
                   >
-                    {deletingAssetId === asset.id ? "删除中..." : "删除资产"}
+                    {assetDeleteLocked ? "资产锁定" : deletingAssetId === asset.id ? "删除中..." : "删除资产"}
                   </button>
                 </div>
               </div>
@@ -521,8 +545,17 @@ export function AssetsPage() {
           ))}
           {!items.length ? (
             <div className="task-item">
-              <div><strong>当前暂无记录</strong><span> · 等待任务继续产出</span></div>
-              <div className="muted">任务一旦进入下一阶段，这里会自动刷新。</div>
+              {loadError ? (
+                <>
+                  <div><strong>资产加载失败</strong><span> · 请先处理上方错误</span></div>
+                  <div className="muted">接口恢复后，这里会自动刷新为真实资产列表。</div>
+                </>
+              ) : (
+                <>
+                  <div><strong>当前暂无记录</strong><span> · 等待任务继续产出</span></div>
+                  <div className="muted">任务一旦进入下一阶段，这里会自动刷新。</div>
+                </>
+              )}
             </div>
           ) : null}
         </div>
@@ -633,6 +666,24 @@ export function AssetsPage() {
           {assetStats.missingCount ? (
             <div className="asset-missing-notice">
               {assetStats.missingCount} 个记录指向的文件当前不可访问，列表仍保留元数据以兼容历史资产。
+            </div>
+          ) : null}
+          {assetDeleteLocked ? (
+            <div className="asset-missing-notice">
+              {assetDeleteLockLabel}。只有任务失败、完成或终止后，才能清理该任务的资产文件。
+            </div>
+          ) : null}
+          {selectedTask && assets.length ? (
+            <div className="topbar-actions" style={{ justifyContent: "flex-start", marginBottom: 16 }}>
+              <button
+                className="ghost-button"
+                disabled={assetDeleteLocked || deletingTaskAssets}
+                onClick={() => void handleDeleteTaskAssets()}
+                title={assetDeleteLocked ? assetDeleteLockLabel : undefined}
+                type="button"
+              >
+                {assetDeleteLocked ? "资产清理已锁定" : deletingTaskAssets ? "清理中..." : "清空当前任务资产"}
+              </button>
             </div>
           ) : null}
 

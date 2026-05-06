@@ -63,6 +63,7 @@ export type HealthResponse = {
 
 export type GenerationPreferenceId = "user_locked" | "system_enhanced"
 export type AudioStrategy = "tts_only" | "native_plus_tts_ducked"
+export type SubtitleStrategy = "tts_aligned" | "whisper_cpp"
 
 export type GenerationRouteId = "single_shot" | "multi_scene"
 
@@ -214,6 +215,7 @@ export type TaskSummary = {
   targetDurationSec: number
   generationMode: GenerationPreferenceId
   audioStrategy: "tts_only" | "native_plus_tts_ducked"
+  subtitleStrategy: SubtitleStrategy
   generationRoute: GenerationRouteId
   routeReason: string
   planningVersion: string
@@ -679,10 +681,15 @@ export type CreateTaskPayload = {
   terminalPresetId: TerminalPresetId
   targetDurationSec: number
   audioStrategy: AudioStrategy
+  subtitleStrategy: SubtitleStrategy
 }
 
 export function getAudioStrategyLabel(strategy: AudioStrategy | null | undefined) {
   return strategy === "native_plus_tts_ducked" ? "原生音频 + TTS 混音" : "TTS 主导"
+}
+
+export function getSubtitleStrategyLabel(strategy: SubtitleStrategy | null | undefined) {
+  return strategy === "whisper_cpp" ? "Whisper 字幕" : "TTS 对齐字幕"
 }
 
 export const api = {

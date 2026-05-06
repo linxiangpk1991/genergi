@@ -29,6 +29,7 @@ import {
 import { renderSpecSchema } from "./video-blueprint.js"
 
 const subtitleStrategyValues = new Set(["tts_aligned", "whisper_cpp"])
+const MAX_TASK_TIMELINE_EVENTS = 200
 
 function resolveDataDir() {
   return process.env.GENERGI_DATA_DIR
@@ -133,6 +134,7 @@ function normalizeNullableString(value: unknown) {
 }
 
 const sensitiveKeyPattern = /(^|[-_])(authorization|api[-_]?key|access[-_]?token|refresh[-_]?token|secret|password|bearer|token|key)($|[-_])/i
+const sensitiveValuePattern = /(bearer\s+[A-Za-z0-9._~+/=-]+|sk-[A-Za-z0-9_-]{8,}|(?:api[_-]?key|access[_-]?token|refresh[_-]?token|secret|password|token)=\S+)/gi
 
 function redactEndpoint(value: string) {
   try {
@@ -151,9 +153,10 @@ function redactTimelineValue(value: unknown, parentKey = ""): unknown {
   }
 
   if (typeof value === "string") {
+    const redactedValue = value.replace(sensitiveValuePattern, "[REDACTED]")
     return parentKey.toLowerCase().includes("endpoint") || parentKey.toLowerCase().includes("url")
-      ? redactEndpoint(value)
-      : value
+      ? redactEndpoint(redactedValue)
+      : redactedValue
   }
 
   if (Array.isArray(value)) {
@@ -604,6 +607,9 @@ export function normalizeTaskSummaryRecord(
     targetDurationSec: task.targetDurationSec ?? 30,
     generationMode: task.generationMode ?? "user_locked",
     audioStrategy: task.audioStrategy ?? "tts_only",
+    subtitleStrategy: subtitleStrategyValues.has((task as TaskSummary & { subtitleStrategy?: string }).subtitleStrategy)
+      ? (task as TaskSummary & { subtitleStrategy?: "tts_aligned" | "whisper_cpp" }).subtitleStrategy
+      : "tts_aligned",
     generationRoute: task.generationRoute ?? "multi_scene",
     routeReason: task.routeReason ?? "legacy task normalized to multi-scene",
     planningVersion: task.planningVersion ?? "v1",
@@ -724,6 +730,7 @@ export function seedTaskSummaries(): TaskSummary[] {
       targetDurationSec: 30,
       generationMode: "user_locked",
       audioStrategy: "tts_only",
+      subtitleStrategy: "tts_aligned",
       generationRoute: "multi_scene",
       routeReason: "legacy seed task normalized to multi-scene",
       planningVersion: "v1",
@@ -753,6 +760,7 @@ export function seedTaskSummaries(): TaskSummary[] {
       targetDurationSec: 45,
       generationMode: "user_locked",
       audioStrategy: "tts_only",
+      subtitleStrategy: "tts_aligned",
       generationRoute: "multi_scene",
       routeReason: "legacy seed task normalized to multi-scene",
       planningVersion: "v1",
@@ -983,10 +991,20 @@ export async function readTaskTimeline(taskId: string) {
   return records[taskId] ?? []
 }
 
+export async function deleteTaskTimeline(taskId: string) {
+  const records = await readTaskTimelineRecords()
+  if (!(taskId in records)) {
+    return
+  }
+
+  delete records[taskId]
+  await writeTaskTimelineRecords(records)
+}
+
 export async function appendTaskTimelineEvent(taskId: string, input: TaskTimelineEventInput) {
   const records = await readTaskTimelineRecords()
   const events = records[taskId] ?? []
-  const sequence = events.length + 1
+  const sequence = (events.at(-1)?.sequence ?? 0) + 1
   const event = sanitizeTaskTimelineEvent({
     ...input,
     id: `${taskId}_timeline_${sequence}`,
@@ -994,7 +1012,7 @@ export async function appendTaskTimelineEvent(taskId: string, input: TaskTimelin
     sequence,
     createdAt: now(),
   })
-  records[taskId] = [...events, event]
+  records[taskId] = [...events, event].slice(-MAX_TASK_TIMELINE_EVENTS)
   await writeTaskTimelineRecords(records)
   return event
 }

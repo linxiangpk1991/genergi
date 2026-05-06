@@ -196,6 +196,7 @@ export const taskSummarySchema = z.object({
   blueprintVersion: z.number().int().nonnegative().default(0),
   blueprintStatus: blueprintStatusSchema.default("pending_generation"),
   audioStrategy: audioStrategySchema.default("tts_only"),
+  subtitleStrategy: subtitleStrategySchema.default("tts_aligned"),
   actualDurationSec: z.number().positive().nullable(),
   failureReason: z.string().nullable().optional(),
   statusDetail: z.string().nullable().optional(),

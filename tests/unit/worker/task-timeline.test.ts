@@ -25,6 +25,8 @@ describe("task timeline persistence", () => {
       stage: "text_planning",
       label: "文本规划 provider 请求",
       level: "info",
+      summary: "upstream returned bearer sampleSummaryToken123",
+      reason: "request failed with token=secret-reason-token",
       provider: {
         provider: "anthropic-native",
         model: "claude-opus-4-6",
@@ -32,13 +34,13 @@ describe("task timeline persistence", () => {
           method: "POST",
           endpoint: "https://api.example.test/v1/messages?token=secret-token-123",
           headers: {
-            Authorization: "Bearer sk-live-secret",
+            Authorization: "Bearer sampleHeaderToken123",
             "x-api-key": "secret-key",
             "content-type": "application/json",
           },
           body: {
             model: "claude-opus-4-6",
-            apiKey: "sk-body-secret",
+            apiKey: "sampleBodySecret123",
             promptLength: 300,
           },
         },
@@ -47,6 +49,7 @@ describe("task timeline persistence", () => {
           ok: false,
           body: {
             error: "upstream failed",
+            message: "Authorization Bearer sampleMessageToken123",
             access_token: "secret-response-token",
           },
         },
@@ -59,16 +62,44 @@ describe("task timeline persistence", () => {
     expect(timeline).toHaveLength(1)
     expect(timeline[0]?.sequence).toBe(1)
     expect(timeline[0]?.provider?.request?.endpoint).toBe("https://api.example.test/v1/messages")
+    expect(timeline[0]?.summary).toBe("upstream returned [REDACTED]")
+    expect(timeline[0]?.reason).toBe("request failed with [REDACTED]")
     expect(timeline[0]?.provider?.request?.headers).toEqual({
       Authorization: "[REDACTED]",
       "x-api-key": "[REDACTED]",
       "content-type": "application/json",
     })
-    expect(rawTimeline).not.toContain("sk-live-secret")
+    expect(rawTimeline).not.toContain("sampleHeaderToken123")
     expect(rawTimeline).not.toContain("secret-key")
-    expect(rawTimeline).not.toContain("sk-body-secret")
+    expect(rawTimeline).not.toContain("sampleBodySecret123")
     expect(rawTimeline).not.toContain("secret-token-123")
     expect(rawTimeline).not.toContain("secret-response-token")
+    expect(rawTimeline).not.toContain("sampleSummaryToken123")
+    expect(rawTimeline).not.toContain("secret-reason-token")
+    expect(rawTimeline).not.toContain("sampleMessageToken123")
+  })
+
+  it("keeps only the latest timeline events so long-running tasks cannot grow forever", async () => {
+    dataDir = await mkdtemp(path.join(os.tmpdir(), "genergi-task-timeline-cap-"))
+    process.env.GENERGI_DATA_DIR = dataDir
+    const shared = await import("../../../packages/shared/src/index")
+
+    for (let index = 1; index <= 205; index += 1) {
+      await shared.appendTaskTimelineEvent("task_timeline_cap", {
+        type: "stage",
+        stage: `stage_${index}`,
+        label: `阶段 ${index}`,
+        level: "info",
+      })
+    }
+
+    const timeline = await shared.readTaskTimeline("task_timeline_cap")
+
+    expect(timeline).toHaveLength(200)
+    expect(timeline[0]?.sequence).toBe(6)
+    expect(timeline.at(-1)?.sequence).toBe(205)
+    expect(timeline[0]?.stage).toBe("stage_6")
+    expect(timeline.at(-1)?.stage).toBe("stage_205")
   })
 })
 

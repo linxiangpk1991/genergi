@@ -101,6 +101,7 @@ describe("API task asset deletion", () => {
     return {
       app,
       shared,
+      store,
       taskId: created.task.id,
       scriptPath,
       generatedImagePath,
@@ -112,6 +113,7 @@ describe("API task asset deletion", () => {
 
   it("deletes one task asset only when its file is under the task exports or assets directory", async () => {
     const { app, shared, taskId, generatedImagePath, unsafePath } = await createTaskWithAssets()
+    await shared.updateTaskSummary(taskId, (task) => ({ ...task, status: "completed" }))
 
     const response = await app.request(`/api/tasks/${taskId}/assets/generated_image`, {
       method: "DELETE",
@@ -124,7 +126,8 @@ describe("API task asset deletion", () => {
   })
 
   it("rejects single-asset deletion when the stored file path is outside the task asset roots", async () => {
-    const { app, taskId, unsafePath } = await createTaskWithAssets()
+    const { app, shared, taskId, unsafePath } = await createTaskWithAssets()
+    await shared.updateTaskSummary(taskId, (task) => ({ ...task, status: "completed" }))
 
     const response = await app.request(`/api/tasks/${taskId}/assets/unsafe_asset`, {
       method: "DELETE",
@@ -137,6 +140,7 @@ describe("API task asset deletion", () => {
   it("deletes the task export/assets directories and clears persisted asset records", async () => {
     const { app, shared, taskId, scriptPath, generatedImagePath, unsafePath, exportDir, sharedAssetsDir } =
       await createTaskWithAssets()
+    await shared.updateTaskSummary(taskId, (task) => ({ ...task, status: "failed" }))
 
     const response = await app.request(`/api/tasks/${taskId}/assets`, {
       method: "DELETE",
@@ -149,5 +153,59 @@ describe("API task asset deletion", () => {
     await expect(stat(sharedAssetsDir)).rejects.toThrow()
     expect(await readFile(unsafePath, "utf8")).toBe("keep me")
     expect(await shared.readTaskAssets(taskId)).toEqual([])
+  })
+
+  it("blocks asset deletion while a task is still queued or running through the generation chain", async () => {
+    const { app, shared, taskId, generatedImagePath } = await createTaskWithAssets()
+
+    const queuedResponse = await app.request(`/api/tasks/${taskId}/assets/generated_image`, {
+      method: "DELETE",
+    })
+    expect(queuedResponse.status).toBe(409)
+    expect(await queuedResponse.json()).toEqual({ message: "TASK_ASSETS_LOCKED", status: "queued" })
+    expect(await readFile(generatedImagePath, "utf8")).toBe("image-bytes")
+
+    await shared.updateTaskSummary(taskId, (task) => ({ ...task, status: "running" }))
+
+    const runningResponse = await app.request(`/api/tasks/${taskId}/assets`, {
+      method: "DELETE",
+    })
+    expect(runningResponse.status).toBe(409)
+    expect(await runningResponse.json()).toEqual({ message: "TASK_ASSETS_LOCKED", status: "running" })
+    expect(await readFile(generatedImagePath, "utf8")).toBe("image-bytes")
+  })
+
+  it("rejects encoded traversal task ids and does not delete sibling directories", async () => {
+    const { app } = await createTaskWithAssets()
+    const victimExportDir = path.join(dataDir, "exports", "victim")
+    const victimAssetDir = path.join(dataDir, "assets", "victim")
+    const victimExportFile = path.join(victimExportDir, "keep.txt")
+    const victimAssetFile = path.join(victimAssetDir, "keep.txt")
+    await mkdir(victimExportDir, { recursive: true })
+    await mkdir(victimAssetDir, { recursive: true })
+    await writeFile(victimExportFile, "keep export", "utf8")
+    await writeFile(victimAssetFile, "keep asset", "utf8")
+
+    for (const encodedTaskId of ["..%5Cvictim", "..%2Fvictim", "%2e%2e%5cvictim"]) {
+      const response = await app.request(`/api/tasks/${encodedTaskId}/assets`, {
+        method: "DELETE",
+      })
+
+      expect(response.status).toBe(403)
+      expect(await response.json()).toEqual({ message: "TASK_ASSET_TASK_ID_FORBIDDEN" })
+      expect(await readFile(victimExportFile, "utf8")).toBe("keep export")
+      expect(await readFile(victimAssetFile, "utf8")).toBe("keep asset")
+    }
+  })
+
+  it("returns not found instead of deleting directories for nonexistent task ids", async () => {
+    const { app } = await createTaskWithAssets()
+
+    const response = await app.request("/api/tasks/task_missing/assets", {
+      method: "DELETE",
+    })
+
+    expect(response.status).toBe(404)
+    expect(await response.json()).toEqual({ message: "TASK_NOT_FOUND" })
   })
 })
