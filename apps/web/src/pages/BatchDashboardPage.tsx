@@ -55,6 +55,19 @@ function canResumeFailedTask(task: TaskSummary) {
   return task.status === "failed"
 }
 
+function isStaleRunningTask(task: TaskSummary) {
+  if (task.status !== "running") {
+    return false
+  }
+
+  const updatedAtMs = Date.parse(task.lastHeartbeatAt ?? task.updatedAt)
+  return Number.isFinite(updatedAtMs) && Date.now() - updatedAtMs >= 10 * 60 * 1000
+}
+
+function canResumeTask(task: TaskSummary) {
+  return canResumeFailedTask(task) || isStaleRunningTask(task)
+}
+
 function getTaskActions(task: TaskSummary) {
   const actions: Array<{ label: string; to: string; tone: "primary" | "ghost" }> = []
 
@@ -320,14 +333,18 @@ export function BatchDashboardPage() {
                         {cancelingTaskId === task.id ? "终止中..." : "终止任务"}
                       </button>
                     ) : null}
-                    {canResumeFailedTask(task) ? (
+                    {canResumeTask(task) ? (
                       <button
                         className="ghost-button"
                         disabled={resumingTaskId === task.id}
                         onClick={() => void handleResumeFailedTask(task.id)}
                         type="button"
                       >
-                        {resumingTaskId === task.id ? "恢复中..." : "恢复运行"}
+                        {resumingTaskId === task.id
+                          ? "恢复中..."
+                          : isStaleRunningTask(task)
+                            ? "恢复卡住任务"
+                            : "恢复运行"}
                       </button>
                     ) : null}
                   </div>

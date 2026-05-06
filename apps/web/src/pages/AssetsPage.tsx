@@ -9,6 +9,7 @@ import {
   getAudioStrategyLabel,
   type AssetRecord,
   type RuntimeStatusResponse,
+  type TaskDiagnostics,
   type TaskSummary,
 } from "../api"
 
@@ -76,6 +77,27 @@ function canResumeFailedTask(task: TaskSummary | null) {
   return task?.status === "failed"
 }
 
+function isStaleRunningTask(task: TaskSummary | null) {
+  if (task?.status !== "running") {
+    return false
+  }
+
+  const updatedAtMs = Date.parse(task.lastHeartbeatAt ?? task.updatedAt)
+  return Number.isFinite(updatedAtMs) && Date.now() - updatedAtMs >= 10 * 60 * 1000
+}
+
+function canResumeTask(task: TaskSummary | null, diagnostics: TaskDiagnostics | null, diagnosticsError: string) {
+  if (diagnostics) {
+    return diagnostics.recoverable
+  }
+
+  if (diagnosticsError) {
+    return canResumeFailedTask(task)
+  }
+
+  return canResumeFailedTask(task) || isStaleRunningTask(task)
+}
+
 function sortAssetsForDelivery(assets: AssetRecord[]) {
   const priority: Record<AssetRecord["assetType"], number> = {
     video_bundle: 0,
@@ -108,6 +130,8 @@ export function AssetsPage() {
   const [runtime, setRuntime] = useState<RuntimeStatusResponse["runtime"] | null>(null)
   const [selectedTaskId, setSelectedTaskId] = useState("")
   const [assets, setAssets] = useState<AssetRecord[]>([])
+  const [diagnostics, setDiagnostics] = useState<TaskDiagnostics | null>(null)
+  const [diagnosticsError, setDiagnosticsError] = useState("")
   const [previewAsset, setPreviewAsset] = useState<AssetRecord | null>(null)
   const [previewText, setPreviewText] = useState("")
   const [previewLoading, setPreviewLoading] = useState(false)
@@ -187,11 +211,22 @@ export function AssetsPage() {
     async function loadAssets() {
       if (!selectedTaskId) {
         setAssets([])
+        setDiagnostics(null)
+        setDiagnosticsError("")
         return
       }
 
-      const result = await api.getTaskAssets(selectedTaskId)
-      setAssets(result.assets)
+      const assetResult = await api.getTaskAssets(selectedTaskId)
+      setAssets(assetResult.assets)
+      void api.getTaskDiagnostics(selectedTaskId)
+        .then((diagnosticsResult) => {
+          setDiagnostics(diagnosticsResult.diagnostics)
+          setDiagnosticsError("")
+        })
+        .catch(() => {
+          setDiagnostics(null)
+          setDiagnosticsError("诊断暂不可用，资产列表仍可查看。")
+        })
       setLastRefreshAt(new Date().toLocaleTimeString("zh-CN"))
       setIsStale(false)
       setLoadError("")
@@ -241,6 +276,9 @@ export function AssetsPage() {
     try {
       const response = await api.resumeFailedTask(taskId)
       setTasks((current) => current.map((task) => (task.id === taskId ? response.task : task)))
+      if (response.diagnostics) {
+        setDiagnostics(response.diagnostics)
+      }
     } catch (error) {
       setActionError(error instanceof Error ? error.message : "恢复运行失败")
     } finally {
@@ -275,6 +313,18 @@ export function AssetsPage() {
   const sortedAssets = useMemo(() => sortAssetsForDelivery(assets), [assets])
   const deliverableAssets = sortedAssets.filter((asset) => ["video_bundle", "subtitles", "script", "audio"].includes(asset.assetType))
   const supportingAssets = sortedAssets.filter((asset) => !["video_bundle", "subtitles", "script", "audio"].includes(asset.assetType))
+  const heartbeatAgeLabel = useMemo(() => {
+    const ageMs = diagnostics?.stale.ageMs
+    if (ageMs == null) {
+      return "暂无心跳"
+    }
+
+    const minutes = Math.floor(ageMs / 60000)
+    if (minutes < 1) {
+      return "1 分钟内"
+    }
+    return `${minutes} 分钟前`
+  }, [diagnostics])
 
   useEffect(() => {
     if (previewAsset && !assets.some((asset) => asset.id === previewAsset.id)) {
@@ -596,14 +646,18 @@ export function AssetsPage() {
                       {cancelingTaskId === selectedTaskId ? "终止中..." : "终止任务"}
                     </button>
                   ) : null}
-                  {selectedTaskId && canResumeFailedTask(selectedTask) ? (
+                  {selectedTaskId && canResumeTask(selectedTask, diagnostics, diagnosticsError) ? (
                     <button
                       className="ghost-button"
                       disabled={resumingTaskId === selectedTaskId}
                       onClick={() => void handleResumeFailedTask(selectedTaskId)}
                       type="button"
                     >
-                      {resumingTaskId === selectedTaskId ? "恢复中..." : "恢复运行"}
+                      {resumingTaskId === selectedTaskId
+                        ? "恢复中..."
+                        : diagnostics?.recoveryReason === "stale_running_task" || isStaleRunningTask(selectedTask)
+                          ? "恢复卡住任务"
+                          : "恢复运行"}
                     </button>
                   ) : null}
                   {selectedTask?.executionMode === "review_required" &&
@@ -622,6 +676,46 @@ export function AssetsPage() {
                     打开任务在看板中的位置
                   </Link>
                 </div>
+              </div>
+            </div>
+          </section>
+
+          <section className="card card--compact">
+            <h3>任务诊断</h3>
+            <div className="task-list compact-list">
+              <div className="task-item">
+                <strong>{diagnostics?.operatorMessage ?? (diagnosticsError || "等待诊断同步")}</strong>
+                <span>系统会结合任务心跳、队列和资产产出判断是否真的卡住。</span>
+              </div>
+              <div className="task-item">
+                <strong>当前阶段</strong>
+                <span>{diagnostics?.runtimeTrace.currentStageLabel ?? selectedTask?.currentStageLabel ?? getTaskFlowLabel(selectedTask)}</span>
+              </div>
+              <div className="task-item">
+                <strong>场景进度</strong>
+                <span>
+                  {diagnostics?.runtimeTrace.currentSceneTotal
+                    ? `${(diagnostics.runtimeTrace.currentSceneIndex ?? 0) + 1}/${diagnostics.runtimeTrace.currentSceneTotal}`
+                    : "暂无分段进度"}
+                </span>
+              </div>
+              <div className="task-item">
+                <strong>任务心跳</strong>
+                <span>{heartbeatAgeLabel}</span>
+              </div>
+              <div className="task-item">
+                <strong>队列状态</strong>
+                <span>
+                  {!diagnostics
+                    ? diagnosticsError || "诊断加载中"
+                    : diagnostics.queue.available
+                      ? `active ${diagnostics.queue.activeJobIds.length} · waiting ${diagnostics.queue.waitingJobIds.length} · delayed ${diagnostics.queue.delayedJobIds.length} · failed ${diagnostics.queue.failedJobIds.length}`
+                      : `不可用 · ${diagnostics.queue.unavailableReason ?? "无法连接 Redis"}`}
+                </span>
+              </div>
+              <div className="task-item">
+                <strong>下一资产</strong>
+                <span>{diagnostics ? diagnostics.assets.expectedNextAssetType ?? "暂无缺口" : "等待诊断同步"}</span>
               </div>
             </div>
           </section>

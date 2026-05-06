@@ -16,6 +16,7 @@ import type {
   StoryboardScene,
   StoredUser,
   TaskDetail,
+  TaskRuntimeTrace,
   TaskSummary,
   TerminalPresetId,
 } from "./index.js"
@@ -88,6 +89,28 @@ export function createDefaultReviewSummary(): ReviewSummary {
     reviewStage: null,
     pendingReviewCount: 0,
     reviewUpdatedAt: null,
+  }
+}
+
+function normalizeTaskRuntimeTraceRecord<T extends Partial<TaskRuntimeTrace>>(record: T): TaskRuntimeTrace {
+  const currentSceneIndex =
+    typeof record.currentSceneIndex === "number" && Number.isInteger(record.currentSceneIndex) && record.currentSceneIndex >= 0
+      ? record.currentSceneIndex
+      : null
+  const currentSceneTotal =
+    typeof record.currentSceneTotal === "number" && Number.isInteger(record.currentSceneTotal) && record.currentSceneTotal >= 0
+      ? record.currentSceneTotal
+      : null
+
+  return {
+    currentStage: normalizeNullableString(record.currentStage),
+    currentStageLabel: normalizeNullableString(record.currentStageLabel),
+    currentSceneIndex,
+    currentSceneTotal,
+    stageStartedAt: normalizeNullableString(record.stageStartedAt),
+    lastHeartbeatAt: normalizeNullableString(record.lastHeartbeatAt),
+    workerId: normalizeNullableString(record.workerId),
+    activeJobId: normalizeNullableString(record.activeJobId),
   }
 }
 
@@ -454,6 +477,14 @@ export function normalizeTaskSummaryRecord(
     reviewStage?: ReviewStageId | null
     pendingReviewCount?: number
     reviewUpdatedAt?: string | null
+    currentStage?: string | null
+    currentStageLabel?: string | null
+    currentSceneIndex?: number | null
+    currentSceneTotal?: number | null
+    stageStartedAt?: string | null
+    lastHeartbeatAt?: string | null
+    workerId?: string | null
+    activeJobId?: string | null
   },
 ): TaskSummary {
   return {
@@ -475,6 +506,7 @@ export function normalizeTaskSummaryRecord(
     statusDetail: normalizeNullableString(task.statusDetail),
     cancelRequestedAt: normalizeNullableString(task.cancelRequestedAt),
     ...normalizeReviewSummaryRecord(task),
+    ...normalizeTaskRuntimeTraceRecord(task),
   }
 }
 
@@ -490,6 +522,14 @@ export function normalizeTaskDetailRecord(
     reviewStage?: ReviewStageId | null
     pendingReviewCount?: number
     reviewUpdatedAt?: string | null
+    currentStage?: string | null
+    currentStageLabel?: string | null
+    currentSceneIndex?: number | null
+    currentSceneTotal?: number | null
+    stageStartedAt?: string | null
+    lastHeartbeatAt?: string | null
+    workerId?: string | null
+    activeJobId?: string | null
   },
 ): TaskDetail {
   const taskRunConfig = detail.taskRunConfig
@@ -555,6 +595,7 @@ export function normalizeTaskDetailRecord(
       ? detail.updatedAt
       : now(),
     ...normalizeReviewSummaryRecord(detail),
+    ...normalizeTaskRuntimeTraceRecord(detail),
   }
 }
 

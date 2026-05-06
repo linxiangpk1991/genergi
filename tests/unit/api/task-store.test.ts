@@ -839,4 +839,142 @@ describe("API task store", () => {
     const persistedAfterRepair = await readJsonFile<Array<Record<string, unknown>>>(tasksFile)
     expect(persistedAfterRepair.some((task) => task.id === created.task.id)).toBe(true)
   })
+
+  it("reconciles stale task summary and detail blueprint status from the current blueprint record", async () => {
+    dataDir = await mkdtemp(path.join(os.tmpdir(), "genergi-task-store-"))
+    process.env.GENERGI_DATA_DIR = dataDir
+
+    const store = await import("../../../apps/api/src/lib/task-store")
+
+    const created = await store.createTask({
+      projectId: "project_default",
+      title: "Blueprint status drift task",
+      script: "Show the product. Explain the value. End with a CTA.",
+      modeId: "high_quality",
+      channelId: "reels",
+      terminalPresetId: "phone_portrait",
+      aspectRatio: "9:16",
+      targetDurationSec: 30,
+      generationMode: "system_enhanced",
+    })
+
+    const tasksFile = path.join(dataDir, "tasks.json")
+    const detailsFile = path.join(dataDir, "task-details.json")
+    const blueprintsFile = path.join(dataDir, "task-blueprints.json")
+
+    const taskRecords = await readJsonFile<Array<Record<string, unknown>>>(tasksFile)
+    const detailRecords = await readJsonFile<Record<string, Record<string, unknown>>>(detailsFile)
+    const blueprintRecords = await readJsonFile<Record<string, Array<Record<string, unknown>>>>(blueprintsFile)
+
+    taskRecords[0] = {
+      ...taskRecords[0],
+      blueprintStatus: "pending_generation",
+      blueprintVersion: 1,
+    }
+    detailRecords[created.task.id] = {
+      ...detailRecords[created.task.id],
+      blueprintStatus: "pending_generation",
+      taskRunConfig: {
+        ...detailRecords[created.task.id]?.taskRunConfig,
+        blueprintStatus: "pending_generation",
+      },
+    }
+    blueprintRecords[created.task.id][0] = {
+      ...blueprintRecords[created.task.id][0],
+      status: "ready_for_review",
+    }
+
+    await writeJsonFile(tasksFile, taskRecords)
+    await writeJsonFile(detailsFile, detailRecords)
+    await writeJsonFile(blueprintsFile, blueprintRecords)
+
+    const repairedTasks = await store.listTasks()
+    const repairedTask = repairedTasks.find((task) => task.id === created.task.id)
+    expect(repairedTask?.blueprintStatus).toBe("ready_for_review")
+
+    const repairedDetail = await store.getTaskDetail(created.task.id)
+    expect(repairedDetail?.blueprintStatus).toBe("ready_for_review")
+    expect(repairedDetail?.taskRunConfig.blueprintStatus).toBe("ready_for_review")
+
+    const persistedTasks = await readJsonFile<Array<Record<string, unknown>>>(tasksFile)
+    const persistedDetailRecords = await readJsonFile<Record<string, Record<string, unknown>>>(detailsFile)
+    expect(persistedTasks.find((task) => task.id === created.task.id)?.blueprintStatus).toBe("ready_for_review")
+    expect(persistedDetailRecords[created.task.id]?.blueprintStatus).toBe("ready_for_review")
+    expect((persistedDetailRecords[created.task.id]?.taskRunConfig as Record<string, unknown>)?.blueprintStatus).toBe("ready_for_review")
+  })
+
+  it("clears stale worker runtime trace when canceling and resuming tasks", async () => {
+    dataDir = await mkdtemp(path.join(os.tmpdir(), "genergi-task-store-"))
+    process.env.GENERGI_DATA_DIR = dataDir
+
+    const store = await import("../../../apps/api/src/lib/task-store")
+    const shared = await import("../../../packages/shared/src/index")
+
+    const created = await store.createTask({
+      projectId: "project_default",
+      title: "Runtime trace cleanup",
+      script: "Show the product. Explain the value. End with a CTA.",
+      modeId: "high_quality",
+      channelId: "reels",
+      terminalPresetId: "phone_portrait",
+      aspectRatio: "9:16",
+      targetDurationSec: 30,
+      generationMode: "system_enhanced",
+    })
+
+    const runningAt = "2026-04-20T02:20:00.000Z"
+    await shared.updateTaskSummary(created.task.id, (task) => ({
+      ...task,
+      status: "running",
+      statusDetail: "关键画面生成中 3/4",
+      currentStage: "keyframes_generating",
+      currentStageLabel: "关键画面生成中 3/4",
+      currentSceneIndex: 3,
+      currentSceneTotal: 4,
+      stageStartedAt: runningAt,
+      lastHeartbeatAt: runningAt,
+      workerId: "worker_old",
+      activeJobId: "job_old",
+      updatedAt: runningAt,
+    }))
+    const detail = await store.getTaskDetail(created.task.id)
+    await shared.upsertTaskDetail({
+      ...detail!,
+      statusDetail: "关键画面生成中 3/4",
+      currentStage: "keyframes_generating",
+      currentStageLabel: "关键画面生成中 3/4",
+      currentSceneIndex: 3,
+      currentSceneTotal: 4,
+      stageStartedAt: runningAt,
+      lastHeartbeatAt: runningAt,
+      workerId: "worker_old",
+      activeJobId: "job_old",
+      updatedAt: runningAt,
+    })
+
+    const listedRunningTask = (await store.listTasks()).find((task) => task.id === created.task.id)
+    expect(listedRunningTask?.status).toBe("running")
+    expect(listedRunningTask?.currentStage).toBe("keyframes_generating")
+
+    const canceled = await store.cancelTask(created.task.id, { removedJobIds: ["job_old"], hadActiveJob: true })
+    expect(canceled?.summary.status).toBe("canceled")
+    expect(canceled?.summary.currentStage).toBe("canceled")
+    expect(canceled?.summary.currentSceneIndex).toBeNull()
+    expect(canceled?.summary.workerId).toBeNull()
+    expect(canceled?.summary.activeJobId).toBeNull()
+    expect(canceled?.detail.currentStage).toBe("canceled")
+    expect(canceled?.detail.workerId).toBeNull()
+    expect(canceled?.detail.activeJobId).toBeNull()
+
+    const resumed = await store.resumeFailedTask(created.task.id)
+    expect(resumed?.summary.status).toBe("queued")
+    expect(resumed?.summary.statusDetail).toBe("等待 worker 恢复处理")
+    expect(resumed?.summary.currentStage).toBe("resume_pending")
+    expect(resumed?.summary.currentSceneIndex).toBeNull()
+    expect(resumed?.summary.workerId).toBeNull()
+    expect(resumed?.summary.activeJobId).toBeNull()
+    expect(resumed?.detail.currentStage).toBe("resume_pending")
+    expect(resumed?.detail.workerId).toBeNull()
+    expect(resumed?.detail.activeJobId).toBeNull()
+  })
 })

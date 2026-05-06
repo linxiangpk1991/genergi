@@ -40,8 +40,8 @@ function escapeAssText(text: string) {
 }
 
 function resolveAssStyle(renderSpec: RenderSpec) {
-  const fontSize = Math.max(42, Math.round(renderSpec.height * 0.046))
-  const outline = Math.max(3, Math.round(fontSize * 0.08))
+  const fontSize = Math.max(34, Math.round(renderSpec.height * 0.033))
+  const outline = Math.max(2, Math.round(fontSize * 0.07))
   const marginL = Math.max(48, Math.round(renderSpec.width * (renderSpec.safeArea.leftPct / 100)))
   const marginR = Math.max(48, Math.round(renderSpec.width * (renderSpec.safeArea.rightPct / 100)))
   const marginV = Math.max(96, Math.round(renderSpec.height * (renderSpec.safeArea.bottomPct / 100)))
@@ -53,6 +53,62 @@ function resolveAssStyle(renderSpec: RenderSpec) {
     marginR,
     marginV,
   }
+}
+
+function estimateMaxSubtitleCharsPerLine(renderSpec: RenderSpec, fontSize: number, marginL: number, marginR: number) {
+  const safeWidth = Math.max(320, renderSpec.width - marginL - marginR - 40)
+  const averageCharWidth = fontSize * 0.56
+  return Math.max(16, Math.floor(safeWidth / averageCharWidth))
+}
+
+function balanceSubtitleLines(text: string, maxCharsPerLine: number) {
+  const explicitLines = text
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+
+  if (explicitLines.length > 1 && explicitLines.every((line) => line.length <= maxCharsPerLine)) {
+    return explicitLines.join("\n")
+  }
+
+  const source = explicitLines
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim()
+
+  if (!source || source.length <= maxCharsPerLine) {
+    return source
+  }
+
+  const words = source.split(" ").filter(Boolean)
+  if (words.length < 2) {
+    return source
+  }
+
+  let bestSplitIndex = 1
+  let bestScore = Number.POSITIVE_INFINITY
+
+  for (let index = 1; index < words.length; index += 1) {
+    const left = words.slice(0, index).join(" ")
+    const right = words.slice(index).join(" ")
+    const overflow =
+      Math.max(0, left.length - maxCharsPerLine) +
+      Math.max(0, right.length - maxCharsPerLine)
+    const balancePenalty = Math.abs(left.length - right.length)
+    const score = overflow * 1000 + balancePenalty
+
+    if (score < bestScore) {
+      bestScore = score
+      bestSplitIndex = index
+    }
+  }
+
+  const firstLine = words.slice(0, bestSplitIndex).join(" ")
+  const secondLine = words.slice(bestSplitIndex).join(" ")
+
+  return `${firstLine}\n${secondLine}`
 }
 
 function escapeFfmpegFilterPath(filePath: string) {
@@ -71,9 +127,13 @@ export function buildAssSubtitleContent(input: {
   renderSpec: RenderSpec
 }) {
   const { fontSize, outline, marginL, marginR, marginV } = resolveAssStyle(input.renderSpec)
+  const maxCharsPerLine = estimateMaxSubtitleCharsPerLine(input.renderSpec, fontSize, marginL, marginR)
   const cues = parseSync(input.srtContent)
     .filter((node) => node.type === "cue")
-    .map((node) => node.data)
+    .map((node) => ({
+      ...node.data,
+      text: balanceSubtitleLines(node.data.text, maxCharsPerLine),
+    }))
 
   const dialogueLines = cues.map((cue) => (
     `Dialogue: 0,${toAssTimestamp(cue.start)},${toAssTimestamp(cue.end)},Default,,0,0,0,,${escapeAssText(cue.text)}`
@@ -82,7 +142,7 @@ export function buildAssSubtitleContent(input: {
   return [
     "[Script Info]",
     "ScriptType: v4.00+",
-    "WrapStyle: 2",
+    "WrapStyle: 0",
     "ScaledBorderAndShadow: yes",
     `PlayResX: ${input.renderSpec.width}`,
     `PlayResY: ${input.renderSpec.height}`,

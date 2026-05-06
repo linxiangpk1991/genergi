@@ -129,3 +129,58 @@ export async function cancelTaskJobs(taskId: string) {
     }
   })
 }
+
+export async function recoverTaskJobs(taskId: string, options: { minActiveAgeMs: number }) {
+  return withQueue(async (queue) => {
+    const jobs = await queue.getJobs(["active"], 0, 200, true)
+    const now = Date.now()
+    const matchedJobs = jobs.filter((job) => job.data?.taskId === taskId)
+    const activeJobIds: string[] = []
+    const staleActiveJobIds: string[] = []
+
+    for (const job of matchedJobs) {
+      activeJobIds.push(String(job.id))
+      const startedAt = Number(job.processedOn ?? job.timestamp ?? now)
+      if (now - startedAt < options.minActiveAgeMs) {
+        continue
+      }
+
+      staleActiveJobIds.push(String(job.id))
+    }
+
+    return {
+      activeJobIds,
+      staleActiveJobIds,
+      hasActiveJob: activeJobIds.length > 0,
+    }
+  })
+}
+
+export async function inspectTaskJobs(taskId: string) {
+  return withQueue(async (queue) => {
+    const states = ["waiting", "delayed", "prioritized", "paused", "active", "completed", "failed"] as const
+    const jobs = await queue.getJobs([...states], 0, 200, true)
+    const result: Record<typeof states[number], string[]> = {
+      waiting: [],
+      delayed: [],
+      prioritized: [],
+      paused: [],
+      active: [],
+      completed: [],
+      failed: [],
+    }
+
+    for (const job of jobs) {
+      if (job.data?.taskId !== taskId) {
+        continue
+      }
+
+      const state = await job.getState()
+      if (state in result) {
+        result[state as keyof typeof result].push(String(job.id))
+      }
+    }
+
+    return result
+  })
+}

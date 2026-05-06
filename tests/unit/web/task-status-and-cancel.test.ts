@@ -14,6 +14,7 @@ vi.mock("../../../apps/web/src/api", async () => {
       listTasks: vi.fn(),
       runtimeStatus: vi.fn(),
       getTaskAssets: vi.fn(),
+      getTaskDiagnostics: vi.fn(),
       cancelTask: vi.fn(),
       resumeFailedTask: vi.fn(),
     },
@@ -120,6 +121,31 @@ describe("task status details and cancel actions", () => {
       },
     } as any)
     vi.mocked(api.getTaskAssets).mockResolvedValue({ assets: [] } as any)
+    vi.mocked(api.getTaskDiagnostics).mockResolvedValue({
+      taskId: "task_running",
+      recoverable: false,
+      recoveryReason: null,
+      stale: {
+        isStale: false,
+        thresholdMs: 10 * 60 * 1000,
+        ageMs: null,
+        sourceUpdatedAt: "2026-04-20T00:00:00.000Z",
+      },
+      queue: {
+        available: true,
+        activeJobIds: [],
+        waitingJobIds: [],
+        delayedJobIds: [],
+        prioritizedJobIds: [],
+        pausedJobIds: [],
+        failedJobIds: [],
+      },
+      assets: {
+        readyCount: 0,
+        deliverableReadyCount: 0,
+        expectedNextAssetType: "keyframe_bundle",
+      },
+    } as any)
     vi.mocked(api.cancelTask).mockResolvedValue({
       task: createRunningTask({
         status: "canceled",
@@ -325,6 +351,61 @@ describe("task status details and cancel actions", () => {
     })
   })
 
+  it("shows a resume button for stale running tasks on the batch dashboard", async () => {
+    vi.mocked(api.listTasks).mockResolvedValue({
+      tasks: [
+        createRunningTask({
+          id: "task_stale_running",
+          title: "Stale running task",
+          statusDetail: "关键画面生成中 3/4",
+          updatedAt: new Date(Date.now() - 20 * 60 * 1000).toISOString(),
+          lastHeartbeatAt: new Date(Date.now() - 20 * 60 * 1000).toISOString(),
+        }),
+      ],
+    } as any)
+    vi.mocked(api.resumeFailedTask).mockResolvedValueOnce({
+      task: createRunningTask({
+        id: "task_stale_running",
+        title: "Stale running task",
+        status: "queued",
+        statusDetail: "等待 worker 恢复处理",
+        updatedAt: "2026-04-20T00:20:00.000Z",
+      }),
+    } as any)
+
+    await act(async () => {
+      root.render(
+        createElement(
+          MemoryRouter,
+          { initialEntries: ["/batch-dashboard"] },
+          createElement(
+            Routes,
+            null,
+            createElement(Route, { path: "/batch-dashboard", element: createElement(BatchDashboardPage) }),
+          ),
+        ),
+      )
+    })
+
+    await waitFor(() => {
+      expect(container.textContent ?? "").toContain("关键画面生成中 3/4")
+    })
+
+    const resumeButton = Array.from(container.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("恢复卡住任务"),
+    )
+    expect(resumeButton).toBeTruthy()
+
+    await act(async () => {
+      resumeButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }))
+    })
+
+    await waitFor(() => {
+      expect(vi.mocked(api.resumeFailedTask)).toHaveBeenCalledWith("task_stale_running")
+      expect(container.textContent ?? "").toContain("等待 worker 恢复处理")
+    })
+  })
+
   it("shows a resume button for failed tasks in asset center and updates the task after resume", async () => {
     vi.mocked(api.listTasks).mockResolvedValue({
       tasks: [createFailedTask()],
@@ -359,6 +440,131 @@ describe("task status details and cancel actions", () => {
 
     await waitFor(() => {
       expect(vi.mocked(api.resumeFailedTask)).toHaveBeenCalledWith("task_failed")
+      expect(container.textContent ?? "").toContain("等待 worker 恢复处理")
+    })
+  })
+
+  it("shows a resume button for stale running tasks in asset center", async () => {
+    vi.mocked(api.getTaskDiagnostics).mockResolvedValueOnce({
+      taskId: "task_stale_running",
+      recoverable: true,
+      recoveryReason: "stale_running_task",
+      stale: {
+        isStale: true,
+        thresholdMs: 10 * 60 * 1000,
+        ageMs: 20 * 60 * 1000,
+        sourceUpdatedAt: new Date(Date.now() - 20 * 60 * 1000).toISOString(),
+      },
+      queue: {
+        available: true,
+        activeJobIds: [],
+        waitingJobIds: [],
+        delayedJobIds: [],
+        prioritizedJobIds: [],
+        pausedJobIds: [],
+        failedJobIds: [],
+      },
+      assets: {
+        readyCount: 0,
+        deliverableReadyCount: 0,
+        expectedNextAssetType: "keyframe_bundle",
+      },
+    } as any)
+    vi.mocked(api.listTasks).mockResolvedValue({
+      tasks: [
+        createRunningTask({
+          id: "task_stale_running",
+          title: "Stale running task",
+          statusDetail: "关键画面生成中 3/4",
+          updatedAt: new Date(Date.now() - 20 * 60 * 1000).toISOString(),
+        }),
+      ],
+    } as any)
+    vi.mocked(api.resumeFailedTask).mockResolvedValueOnce({
+      task: createRunningTask({
+        id: "task_stale_running",
+        title: "Stale running task",
+        status: "queued",
+        statusDetail: "等待 worker 恢复处理",
+        updatedAt: "2026-04-20T00:20:00.000Z",
+      }),
+      detail: {
+        taskId: "task_stale_running",
+        projectId: "project_default",
+        title: "Stale running task",
+        script: "script",
+        blueprintVersion: 1,
+        blueprintStatus: "pending_generation",
+        failureReason: null,
+        statusDetail: "等待 worker 恢复处理",
+        cancelRequestedAt: null,
+        taskRunConfig: {
+          projectId: "project_default",
+          modeId: "high_quality",
+          executionMode: "review_required",
+          channelId: "tiktok",
+          terminalPresetId: "phone_portrait",
+          renderSpecJson: createRunningTask().renderSpecJson,
+          targetDurationSec: 30,
+          generationMode: "user_locked",
+          audioStrategy: "tts_only",
+          generationRoute: "multi_scene",
+          routeReason: "target duration 30s exceeds the current model single-shot limit of 8s",
+          planningVersion: "v1",
+          blueprintVersion: 1,
+          blueprintStatus: "pending_generation",
+          textModel: { id: "text.default", label: "Claude Opus 4.6", provider: "anthropic-compatible" },
+          imageModel: { id: "gpt-image2-private", label: "GPT-image2", provider: "openai-compatible" },
+          videoModel: { id: "veo3.1", label: "Veo 3.1 Portrait", provider: "openai-compatible" },
+          ttsProvider: "edge-tts",
+          contentLocale: "en",
+          operatorLocale: "zh-CN",
+          requireStoryboardReview: true,
+          requireKeyframeReview: true,
+          budgetLimitCny: 5,
+          aspectRatio: "9:16",
+          slotSnapshots: [],
+        },
+        scenes: [],
+        updatedAt: "2026-04-20T00:20:00.000Z",
+      },
+      queue: {
+        queued: true,
+        reason: "resume_stale_running_task",
+        continueExecution: false,
+        resumeFrom: "stale_running_task",
+      },
+    } as any)
+
+    await act(async () => {
+      root.render(
+        createElement(
+          MemoryRouter,
+          { initialEntries: ["/asset-center?taskId=task_stale_running"] },
+          createElement(
+            Routes,
+            null,
+            createElement(Route, { path: "/asset-center", element: createElement(AssetsPage) }),
+          ),
+        ),
+      )
+    })
+
+    await waitFor(() => {
+      expect(container.textContent ?? "").toContain("关键画面生成中 3/4")
+    })
+
+    const resumeButton = Array.from(container.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("恢复卡住任务"),
+    )
+    expect(resumeButton).toBeTruthy()
+
+    await act(async () => {
+      resumeButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }))
+    })
+
+    await waitFor(() => {
+      expect(vi.mocked(api.resumeFailedTask)).toHaveBeenCalledWith("task_stale_running")
       expect(container.textContent ?? "").toContain("等待 worker 恢复处理")
     })
   })

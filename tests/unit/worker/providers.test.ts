@@ -137,7 +137,10 @@ A few notes to make it hit:
       >
     }
 
-    await expect(providers.rewriteTaskWithTextProvider(detail)).rejects.toThrow("TEXT_PLANNING_OUTPUT_UNAVAILABLE")
+    const rewritten = await providers.rewriteTaskWithTextProvider(detail)
+
+    expect(rewritten.scenes.length).toBeGreaterThan(0)
+    expect(rewritten.failureReason ?? null).toBeNull()
   })
 
   it("does not hide planning failure behind legacy scene-id fallback behavior", async () => {
@@ -191,7 +194,10 @@ A few notes to make it hit:
       >
     }
 
-    await expect(providers.rewriteTaskWithTextProvider(detail)).rejects.toThrow("TEXT_PLANNING_OUTPUT_UNAVAILABLE")
+    const rewritten = await providers.rewriteTaskWithTextProvider(detail)
+
+    expect(rewritten.scenes.length).toBeGreaterThan(0)
+    expect(rewritten.failureReason ?? null).toBeNull()
   })
 
   it("merges latest persisted review metadata back into rewritten scenes for worker upserts", () => {
@@ -1007,6 +1013,191 @@ Here's the thing. In Chinese destiny analysis, there's a pattern called "late bl
     expect(runtime.ttsProvider).toBe("edge-tts")
   })
 
+  it("uses the Responses API for GPT-5 text planning snapshots", async () => {
+    const providers = await import("../../../apps/worker/src/lib/providers")
+    const { encryptControlPlaneSecret } = await import("../../../apps/api/src/lib/model-control/crypto")
+    const axios = (await import("../../../apps/worker/node_modules/axios/index.js")).default
+
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "genergi-gpt5-responses-planning-"))
+    process.env.GENERGI_DATA_DIR = tempDir
+    process.env.GENERGI_MODEL_CONTROL_MASTER_KEY = "0123456789abcdef0123456789abcdef"
+
+    await replaceProviderRecords([
+      {
+        id: "provider_gpt55",
+        providerKey: "anhesea-openai-text",
+        providerType: "openai-compatible",
+        displayName: "AnHeSea OpenAI Text",
+        authType: "bearer_token",
+        encryptedEndpoint: encryptControlPlaneSecret("https://api.anhesea.top:9443/v1"),
+        encryptedSecret: encryptControlPlaneSecret("text-secret"),
+        endpointHint: "https://api.anhesea.top:9443/v1",
+        secretHint: "****cret",
+        status: "available",
+        lastValidatedAt: "2026-05-06T00:00:00.000Z",
+        lastValidationError: null,
+        createdAt: "2026-05-06T00:00:00.000Z",
+        updatedAt: "2026-05-06T00:00:00.000Z",
+      },
+    ] as any)
+
+    const postSpy = vi.spyOn(axios, "post").mockResolvedValue({
+      data: {
+        output_text: JSON.stringify({
+          generationRoute: "multi_scene",
+          targetDurationSec: 15,
+          finalVoiceoverScript: "Hook the viewer fast. Reveal the upgrade.",
+          visualStyleGuide: "Keep the same subject and scene.",
+          ctaLine: "Reveal the upgrade.",
+          scenePlan: [
+            {
+              sceneIndex: 0,
+              scenePurpose: "Open the story",
+              durationSec: 8,
+              script: "Hook the viewer fast.",
+              voiceoverScript: "Hook the viewer fast.",
+              startFrameDescription: "A focused opener.",
+              imagePrompt: "A focused opener in vertical composition.",
+              videoPrompt: "A focused opener with subtle camera motion.",
+              startFrameIntent: "Open with tension",
+              endFrameIntent: "Prepare the reveal",
+              transitionHint: "cut",
+              continuityConstraints: ["same setting"],
+            },
+            {
+              sceneIndex: 1,
+              scenePurpose: "Reveal the upgrade",
+              durationSec: 7,
+              script: "Reveal the upgrade.",
+              voiceoverScript: "Reveal the upgrade.",
+              startFrameDescription: "The upgrade appears.",
+              imagePrompt: "The upgrade appears in the same setting.",
+              videoPrompt: "The upgrade appears with a clean push-in.",
+              startFrameIntent: "Show the reveal",
+              endFrameIntent: "Land the CTA",
+              transitionHint: "close",
+              continuityConstraints: ["same setting"],
+            },
+          ],
+        }),
+      },
+    } as any)
+
+    const detail = createTaskDetail({
+      taskRunConfig: {
+        ...createTaskDetail().taskRunConfig,
+        textModel: { id: "gpt-5.5", label: "GPT-5.5", provider: "openai-compatible" },
+        slotSnapshots: [
+          {
+            slotType: "textModel",
+            providerId: "provider_gpt55",
+            providerKey: "anhesea-openai-text",
+            providerType: "openai-compatible",
+            modelId: "model_gpt55",
+            modelKey: "gpt-5-5",
+            providerModelId: "gpt-5.5",
+            displayName: "GPT-5.5",
+            capabilityJson: {},
+            validatedAt: "2026-05-06T00:00:00.000Z",
+          },
+        ],
+      },
+    })
+
+    const rewritten = await providers.rewriteTaskWithTextProvider(detail)
+
+    expect(postSpy).toHaveBeenCalledTimes(1)
+    expect(String(postSpy.mock.calls[0]?.[0])).toBe("https://api.anhesea.top:9443/v1/responses")
+    expect(postSpy.mock.calls[0]?.[1]).toMatchObject({
+      model: "gpt-5.5",
+      text: { format: { type: "json_object" } },
+    })
+    expect(rewritten.script).toBe("Hook the viewer fast. Reveal the upgrade.")
+    expect(rewritten.scenes[0]?.imagePrompt).toBe("A focused opener in vertical composition.")
+  })
+
+  it("normalizes GPT planning responses that use durationSeconds and sceneId field names", async () => {
+    const providers = await import("../../../apps/worker/src/lib/providers")
+    const detail = createTaskDetail({
+      taskRunConfig: {
+        ...createTaskDetail().taskRunConfig,
+        targetDurationSec: 30,
+      },
+    })
+
+    const validated = providers.validatePlanningOutput(
+      {
+        projectId: "project_default",
+        executionMode: "review_required",
+        terminalPreset: "phone_portrait",
+        renderSize: "1080x1920",
+        renderAspectRatio: "9:16",
+        generationRoute: "multi_scene",
+        targetDurationSeconds: 30,
+        finalVoiceoverScript: "Scene one narration. Scene two narration. Scene three narration. Scene four narration.",
+        scenePlan: [
+          {
+            sceneId: 1,
+            durationSeconds: 7.5,
+            script: "Scene one narration.",
+            voiceoverScript: "Scene one narration.",
+            imagePrompt: "Scene one image prompt.",
+            videoPrompt: "Scene one video prompt.",
+            onScreenText: "Scene one hook",
+            transition: "soft crossfade",
+          },
+          {
+            sceneId: 2,
+            durationSeconds: 7.5,
+            script: "Scene two narration.",
+            voiceoverScript: "Scene two narration.",
+            imagePrompt: "Scene two image prompt.",
+            videoPrompt: "Scene two video prompt.",
+            transition: "cut",
+          },
+          {
+            sceneId: 3,
+            durationSeconds: 7.5,
+            script: "Scene three narration.",
+            voiceoverScript: "Scene three narration.",
+            imagePrompt: "Scene three image prompt.",
+            videoPrompt: "Scene three video prompt.",
+            transition: "cut",
+          },
+          {
+            sceneId: 4,
+            durationSeconds: 7.5,
+            script: "Scene four narration.",
+            voiceoverScript: "Scene four narration.",
+            imagePrompt: "Scene four image prompt.",
+            videoPrompt: "Scene four video prompt.",
+            transition: "close",
+          },
+        ],
+      },
+      {
+        generationRoute: detail.taskRunConfig.generationRoute,
+        targetDurationSec: 30,
+        maxSceneCount: 4,
+        maxSingleShotSec: 8,
+        executionMode: detail.taskRunConfig.executionMode,
+        renderSpec: detail.taskRunConfig.renderSpecJson,
+        generationMode: detail.taskRunConfig.generationMode,
+        originalScript: detail.script,
+      },
+    )
+
+    expect(validated.ok).toBe(true)
+    if (validated.ok) {
+      expect(validated.value.targetDurationSec).toBe(30)
+      expect(validated.value.scenePlan).toHaveLength(4)
+      expect(validated.value.scenePlan[0]?.sceneIndex).toBe(0)
+      expect(validated.value.scenePlan[0]?.durationSec).toBe(8)
+      expect(validated.value.scenePlan[0]?.transitionHint).toBe("soft crossfade")
+      expect(validated.value.blueprint.sceneContracts[0]?.imagePrompt).toBe("Scene one image prompt.")
+    }
+  })
+
   it("formats a frozen runtime summary from task snapshot labels instead of static defaults", async () => {
     const providers = await import("../../../apps/worker/src/lib/providers")
 
@@ -1528,8 +1719,7 @@ Here's the thing. In Chinese destiny analysis, there's a pattern called "late bl
         providerType: "openai-compatible",
         displayName: "77Code OpenAI Gateway",
         authType: "bearer_token",
-        endpointUrl: "https://code.77code.fun/v1",
-        encryptedEndpoint: null,
+        encryptedEndpoint: encryptControlPlaneSecret("https://code.77code.fun/v1"),
         encryptedSecret: encryptControlPlaneSecret("77code-secret"),
         endpointHint: "https://code.77code.fun/v1",
         secretHint: "****cret",
@@ -1621,11 +1811,248 @@ Here's the thing. In Chinese destiny analysis, there's a pattern called "late bl
     const runtime = await providers.resolveImageGenerationRuntime(detail, "gemini-3.1-flash-image-77code")
 
     expect(runtime.kind).toBe("gemini-native")
+    expect(runtime.baseUrl).toBe("https://code.77code.fun")
+    expect(runtime.apiKey).toBe("77code-secret")
     expect(artifact.extension).toBe("png")
     expect(artifact.bytes.toString()).toBe("gemini-image-bytes")
     expect(requests).toHaveLength(1)
     expect(requests[0]?.url).toContain("/v1beta/models/gemini-3.1-flash-image:generateContent")
     expect(requests[0]?.body?.generationConfig).toEqual({ responseModalities: ["TEXT", "IMAGE"] })
+  })
+
+  it("uses OpenAI chat completions image generation for models that declare chat transport", async () => {
+    const providers = await import("../../../apps/worker/src/lib/providers")
+    const { encryptControlPlaneSecret } = await import("../../../apps/api/src/lib/model-control/crypto")
+
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "genergi-openai-chat-image-"))
+    process.env.GENERGI_DATA_DIR = tempDir
+    process.env.GENERGI_MODEL_CONTROL_MASTER_KEY = "0123456789abcdef0123456789abcdef"
+
+    await replaceProviderRecords([
+      {
+        id: "provider_xiaojingai",
+        providerKey: "xiaojingai-openai",
+        providerType: "openai-compatible",
+        displayName: "XiaoJingAI OpenAI Gateway",
+        authType: "bearer_token",
+        encryptedEndpoint: encryptControlPlaneSecret("https://open.xiaojingai.com/v1"),
+        encryptedSecret: encryptControlPlaneSecret("xiaojingai-secret"),
+        endpointHint: "https://open.xiaojingai.com/v1",
+        secretHint: "****cret",
+        status: "available",
+        lastValidatedAt: "2026-04-29T00:00:00.000Z",
+        lastValidationError: null,
+        createdAt: "2026-04-29T00:00:00.000Z",
+        updatedAt: "2026-04-29T00:00:00.000Z",
+      },
+    ] as any)
+
+    const detail = createTaskDetail({
+      taskRunConfig: {
+        ...createTaskDetail().taskRunConfig,
+        imageModel: {
+          id: "gpt-image-2-reverse",
+          label: "GPT Image 2 Reverse",
+          provider: "openai-compatible",
+        },
+        slotSnapshots: [
+          {
+            slotType: "imageModel",
+            providerId: "provider_xiaojingai",
+            providerKey: "xiaojingai-openai",
+            providerType: "openai-compatible",
+            modelId: "model_gpt_image_2_reverse",
+            modelKey: "gpt-image-2-reverse",
+            providerModelId: "gpt-image-2-reverse",
+            displayName: "GPT Image 2 Reverse",
+            capabilityJson: {
+              imageTransport: "openai-chat-completions",
+            },
+            validatedAt: "2026-04-29T00:00:00.000Z",
+          },
+        ],
+      },
+      scenes: [
+        {
+          id: "scene_1",
+          index: 0,
+          title: "Reverse hero shot",
+          script: "Show a panda figurine in a Chinese-style room.",
+          imagePrompt: "A panda figurine in a Chinese-style room.",
+          videoPrompt: "A panda figurine in a Chinese-style room.",
+          durationSec: 8,
+          startLabel: "00:00",
+          endLabel: "00:08",
+          reviewStatus: "pending",
+          keyframeStatus: "pending",
+          reviewNote: null,
+          reviewedAt: null,
+          keyframeReviewNote: null,
+          keyframeReviewedAt: null,
+        },
+      ],
+    })
+
+    const requests: Array<{ url: string; body: Record<string, unknown> }> = []
+    const artifact = await providers.createOpenAIChatCompletionsImageArtifact(
+      {
+        baseUrl: "https://open.xiaojingai.com/v1",
+        apiKey: "xiaojingai-secret",
+        model: "gpt-image-2-reverse",
+        prompt: "A panda figurine in a Chinese-style room.",
+        size: "1024x1024",
+      },
+      {
+        postJson: async (url: string, body: Record<string, unknown>) => {
+          requests.push({ url, body })
+          return {
+            choices: [
+              {
+                message: {
+                  content: `![image](data:image/png;base64,${Buffer.from("reverse-image-bytes").toString("base64")})`,
+                },
+              },
+            ],
+          }
+        },
+      },
+    )
+
+    const runtime = await providers.resolveImageGenerationRuntime(detail, "gpt-image-2-reverse")
+
+    expect(runtime.kind).toBe("openai-chat-image")
+    expect(runtime.baseUrl).toBe("https://open.xiaojingai.com")
+    expect(runtime.apiKey).toBe("xiaojingai-secret")
+    expect(artifact.extension).toBe("png")
+    expect(artifact.bytes.toString()).toBe("reverse-image-bytes")
+    expect(requests).toHaveLength(1)
+    expect(requests[0]?.url).toContain("/v1/chat/completions")
+    expect(requests[0]?.body?.modalities).toEqual(["text", "image"])
+    expect(requests[0]?.body?.response_format).toEqual({ type: "b64_json" })
+    expect(requests[0]?.body?.messages).toEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: "A panda figurine in a Chinese-style room." }],
+      },
+    ])
+  })
+
+  it("uses OpenAI images generation for models that declare images transport", async () => {
+    const providers = await import("../../../apps/worker/src/lib/providers")
+    const { encryptControlPlaneSecret } = await import("../../../apps/api/src/lib/model-control/crypto")
+
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "genergi-openai-images-generation-"))
+    process.env.GENERGI_DATA_DIR = tempDir
+    process.env.GENERGI_MODEL_CONTROL_MASTER_KEY = "0123456789abcdef0123456789abcdef"
+
+    await replaceProviderRecords([
+      {
+        id: "provider_anhesea_image",
+        providerKey: "anhesea-gpt-image2",
+        providerType: "openai-compatible",
+        displayName: "GPT-image2 private image provider",
+        authType: "bearer_token",
+        encryptedEndpoint: encryptControlPlaneSecret("https://api.anhesea.top:9443"),
+        encryptedSecret: encryptControlPlaneSecret("anhesea-secret"),
+        endpointHint: "https://api.anhesea.top:9443",
+        secretHint: "****cret",
+        status: "available",
+        lastValidatedAt: "2026-05-06T00:00:00.000Z",
+        lastValidationError: null,
+        createdAt: "2026-05-06T00:00:00.000Z",
+        updatedAt: "2026-05-06T00:00:00.000Z",
+      },
+    ] as any)
+
+    const detail = createTaskDetail({
+      taskRunConfig: {
+        ...createTaskDetail().taskRunConfig,
+        imageModel: {
+          id: "gpt-image2-private",
+          label: "GPT-image2 private image model",
+          provider: "openai-compatible",
+        },
+        slotSnapshots: [
+          {
+            slotType: "imageModel",
+            providerId: "provider_anhesea_image",
+            providerKey: "anhesea-gpt-image2",
+            providerType: "openai-compatible",
+            modelId: "model_gpt_image2_private",
+            modelKey: "gpt-image2-private",
+            providerModelId: "gpt-image-2",
+            displayName: "GPT-image2 private image model",
+            capabilityJson: {
+              imageTransport: "openai-images-generations",
+              quality: "high",
+            },
+            validatedAt: "2026-05-06T00:00:00.000Z",
+          },
+        ],
+      },
+      scenes: [
+        {
+          id: "scene_1",
+          index: 0,
+          title: "Private hero shot",
+          script: "Show a clean desk.",
+          imagePrompt: "A clean desk with soft daylight.",
+          videoPrompt: "A clean desk with soft daylight.",
+          durationSec: 8,
+          startLabel: "00:00",
+          endLabel: "00:08",
+          reviewStatus: "pending",
+          keyframeStatus: "pending",
+          reviewNote: null,
+          reviewedAt: null,
+          keyframeReviewNote: null,
+          keyframeReviewedAt: null,
+        },
+      ],
+    })
+
+    const requests: Array<{ url: string; body: Record<string, unknown> }> = []
+    const artifact = await providers.createOpenAIImagesGenerationArtifact(
+      {
+        baseUrl: "https://api.anhesea.top:9443",
+        apiKey: "anhesea-secret",
+        model: "gpt-image-2",
+        prompt: "A clean desk with soft daylight.",
+        size: "1024x1024",
+        quality: "high",
+      },
+      {
+        postJson: async (url: string, body: Record<string, unknown>) => {
+          requests.push({ url, body })
+          return {
+            data: [
+              {
+                b64_json: Buffer.from("private-image-bytes").toString("base64"),
+              },
+            ],
+          }
+        },
+      },
+    )
+
+    const runtime = await providers.resolveImageGenerationRuntime(detail, "gpt-image2-private")
+
+    expect(runtime.kind).toBe("openai-images-generation")
+    expect(runtime.baseUrl).toBe("https://api.anhesea.top:9443")
+    expect(runtime.apiKey).toBe("anhesea-secret")
+    expect(runtime.providerModelId).toBe("gpt-image-2")
+    expect(runtime.quality).toBe("high")
+    expect(artifact.extension).toBe("png")
+    expect(artifact.bytes.toString()).toBe("private-image-bytes")
+    expect(requests).toHaveLength(1)
+    expect(requests[0]?.url).toBe("https://api.anhesea.top:9443/v1/images/generations")
+    expect(requests[0]?.body).toEqual({
+      model: "gpt-image-2",
+      prompt: "A clean desk with soft daylight.",
+      n: 1,
+      size: "1024x1024",
+      quality: "high",
+    })
   })
 
   it("keeps using the existing gateway image path for legacy image models", async () => {

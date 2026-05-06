@@ -9,7 +9,7 @@ import {
   upsertTaskAssets,
   upsertTaskDetail,
 } from "@genergi/shared"
-import type { AssetRecord, TaskSummary } from "@genergi/shared"
+import type { AssetRecord, TaskRuntimeTrace, TaskSummary } from "@genergi/shared"
 import {
   buildProgressAssetRecords,
   buildKeyframeAssetRecords,
@@ -38,6 +38,9 @@ if (!redisUrl) {
 
 const connection = new Redis(redisUrl, { maxRetriesPerRequest: null })
 const queue = new Queue(TASK_QUEUE_NAME, { connection })
+const workerInstanceId = `${process.pid}@${process.env.COMPUTERNAME ?? process.env.HOSTNAME ?? "worker"}`
+const activeTaskIds = new Set<string>()
+let shutdownRequested = false
 
 function isTaskCanceledError(error: unknown) {
   if (error instanceof Error) {
@@ -46,19 +49,41 @@ function isTaskCanceledError(error: unknown) {
   return false
 }
 
+async function throwIfTaskCanceled(taskId: string, signal?: AbortSignal) {
+  if (signal?.aborted) {
+    throw new Error(TASK_CANCELED_BY_OPERATOR)
+  }
+
+  const latest = await readTaskDetail(taskId)
+  if (latest?.cancelRequestedAt) {
+    throw new Error(TASK_CANCELED_BY_OPERATOR)
+  }
+}
+
 async function updateTaskLifecycleState(taskId: string, patch: {
   status?: TaskSummary["status"]
   progressPct?: number
   failureReason?: string | null
   statusDetail?: string | null
-}) {
+} & Partial<TaskRuntimeTrace>) {
   const updatedAt = new Date().toISOString()
+  const runtimePatch = {
+    ...(patch.currentStage !== undefined ? { currentStage: patch.currentStage } : {}),
+    ...(patch.currentStageLabel !== undefined ? { currentStageLabel: patch.currentStageLabel } : {}),
+    ...(patch.currentSceneIndex !== undefined ? { currentSceneIndex: patch.currentSceneIndex } : {}),
+    ...(patch.currentSceneTotal !== undefined ? { currentSceneTotal: patch.currentSceneTotal } : {}),
+    ...(patch.stageStartedAt !== undefined ? { stageStartedAt: patch.stageStartedAt } : {}),
+    ...(patch.lastHeartbeatAt !== undefined ? { lastHeartbeatAt: patch.lastHeartbeatAt } : { lastHeartbeatAt: updatedAt }),
+    ...(patch.workerId !== undefined ? { workerId: patch.workerId } : {}),
+    ...(patch.activeJobId !== undefined ? { activeJobId: patch.activeJobId } : {}),
+  }
   await updateTaskSummary(taskId, (task: TaskSummary) => ({
     ...task,
     ...(patch.status ? { status: patch.status } : {}),
     ...(typeof patch.progressPct === "number" ? { progressPct: patch.progressPct } : {}),
     ...(patch.failureReason !== undefined ? { failureReason: patch.failureReason } : {}),
     ...(patch.statusDetail !== undefined ? { statusDetail: patch.statusDetail } : {}),
+    ...runtimePatch,
     updatedAt,
   }))
 
@@ -71,6 +96,7 @@ async function updateTaskLifecycleState(taskId: string, patch: {
     ...detail,
     ...(patch.failureReason !== undefined ? { failureReason: patch.failureReason } : {}),
     ...(patch.statusDetail !== undefined ? { statusDetail: patch.statusDetail } : {}),
+    ...runtimePatch,
     updatedAt,
   })
 }
@@ -131,6 +157,14 @@ async function writeTaskArtifacts(
 
     return {
       ...detailToPersist,
+      currentStage: latestDetail.currentStage ?? detailToPersist.currentStage ?? null,
+      currentStageLabel: latestDetail.currentStageLabel ?? detailToPersist.currentStageLabel ?? null,
+      currentSceneIndex: latestDetail.currentSceneIndex ?? detailToPersist.currentSceneIndex ?? null,
+      currentSceneTotal: latestDetail.currentSceneTotal ?? detailToPersist.currentSceneTotal ?? null,
+      stageStartedAt: latestDetail.stageStartedAt ?? detailToPersist.stageStartedAt ?? null,
+      lastHeartbeatAt: latestDetail.lastHeartbeatAt ?? detailToPersist.lastHeartbeatAt ?? null,
+      workerId: latestDetail.workerId ?? detailToPersist.workerId ?? null,
+      activeJobId: latestDetail.activeJobId ?? detailToPersist.activeJobId ?? null,
       scenes: mergeSceneReviewMetadata(
         detailToPersist.scenes.map((scene) => ({
           ...scene,
@@ -146,9 +180,22 @@ async function writeTaskArtifacts(
     }
   }
 
+  await updateTaskLifecycleState(taskId, {
+    status: "running",
+    progressPct: 15,
+    failureReason: null,
+    statusDetail: options.continueExecution ? "读取已审核蓝图" : "文本规划与蓝图生成中",
+    currentStage: options.continueExecution ? "blueprint_reuse" : "text_planning",
+    currentStageLabel: options.continueExecution ? "读取已审核蓝图" : "文本规划与蓝图生成中",
+    currentSceneIndex: null,
+    currentSceneTotal: null,
+    stageStartedAt: new Date().toISOString(),
+  })
+
   const prepared = await prepareExecutionSource(detail, {
     continueExecution: options.continueExecution,
   })
+  await throwIfTaskCanceled(taskId, options.signal)
   const preparedDetail = await mergeLatestReviewMetadata(prepared.detail)
   const planningTrace = prepared.planningTrace
   let blueprintRecord = prepared.blueprintRecord
@@ -162,14 +209,21 @@ async function writeTaskArtifacts(
 
   console.log(`[worker] ${taskId} runtime snapshot => ${runtimeSummary}`)
   await upsertTaskDetail(preparedDetail)
+  await throwIfTaskCanceled(taskId, options.signal)
   await writeWorkerHeartbeat(`Preparing source files for ${taskId}`)
   await updateTaskLifecycleState(taskId, {
     status: "running",
     progressPct: 20,
     failureReason: null,
     statusDetail: "准备任务源文件",
+    currentStage: "source_files",
+    currentStageLabel: "准备任务源文件",
+    currentSceneIndex: null,
+    currentSceneTotal: preparedDetail.scenes.length,
+    stageStartedAt: new Date().toISOString(),
   })
   const taskDir = await writeTaskSourceFiles(preparedDetail, planningTrace ?? undefined)
+  await throwIfTaskCanceled(taskId, options.signal)
   await upsertTaskAssets(
     taskId,
     await buildProgressAssetRecords({
@@ -205,6 +259,11 @@ async function writeTaskArtifacts(
               progressPct: 40,
               failureReason: null,
               statusDetail: `关键画面生成中 ${scene.index + 1}/${totalScenes}`,
+              currentStage: "keyframe_generation",
+              currentStageLabel: `关键画面生成中 ${scene.index + 1}/${totalScenes}`,
+              currentSceneIndex: scene.index,
+              currentSceneTotal: totalScenes,
+              stageStartedAt: new Date().toISOString(),
             })
           },
         }),
@@ -223,6 +282,11 @@ async function writeTaskArtifacts(
         progressPct: 55,
         failureReason: null,
         statusDetail: "关键画面超时，正在转视频导出关键帧",
+        currentStage: "keyframe_fallback",
+        currentStageLabel: "关键画面超时，正在转视频导出关键帧",
+        currentSceneIndex: null,
+        currentSceneTotal: preparedDetail.scenes.length,
+        stageStartedAt: new Date().toISOString(),
       })
       keyframes = null
     }
@@ -233,6 +297,11 @@ async function writeTaskArtifacts(
       progressPct: 40,
       failureReason: null,
       statusDetail: "复用已审核关键画面",
+      currentStage: "keyframe_reuse",
+      currentStageLabel: "复用已审核关键画面",
+      currentSceneIndex: null,
+      currentSceneTotal: preparedDetail.scenes.length,
+      stageStartedAt: new Date().toISOString(),
     })
   }
 
@@ -268,6 +337,7 @@ async function writeTaskArtifacts(
     },
   })
   await upsertTaskDetail(blueprintAwareDetail)
+  await throwIfTaskCanceled(taskId, options.signal)
   await upsertTaskAssets(
     taskId,
     await buildProgressAssetRecords({
@@ -323,6 +393,12 @@ async function writeTaskArtifacts(
       status: "waiting_review",
       progressPct: 45,
       statusDetail: "等待审核",
+      currentStage: "waiting_review",
+      currentStageLabel: "等待审核",
+      currentSceneIndex: null,
+      currentSceneTotal: preparedDetail.scenes.length,
+      lastHeartbeatAt: new Date().toISOString(),
+      activeJobId: null,
       blueprintVersion: blueprintRecord.version,
       blueprintStatus: blueprintRecord.status,
       updatedAt: new Date().toISOString(),
@@ -330,6 +406,12 @@ async function writeTaskArtifacts(
     await upsertTaskDetail({
       ...blueprintAwareDetail,
       statusDetail: "等待审核",
+      currentStage: "waiting_review",
+      currentStageLabel: "等待审核",
+      currentSceneIndex: null,
+      currentSceneTotal: preparedDetail.scenes.length,
+      lastHeartbeatAt: new Date().toISOString(),
+      activeJobId: null,
       updatedAt: new Date().toISOString(),
     })
     await writeWorkerHeartbeat(`Blueprint and keyframes ready for review for ${taskId}`)
@@ -349,10 +431,16 @@ async function writeTaskArtifacts(
         progressPct: 72,
         failureReason: null,
         statusDetail: `正在生成 scene ${scene.index + 1}/${totalScenes}`,
+        currentStage: "video_generation",
+        currentStageLabel: `正在生成 scene ${scene.index + 1}/${totalScenes}`,
+        currentSceneIndex: scene.index,
+        currentSceneTotal: totalScenes,
+        stageStartedAt: new Date().toISOString(),
       })
     },
     signal: options.signal,
   })
+  await throwIfTaskCanceled(taskId, options.signal)
 
   if (!keyframes) {
     await writeWorkerHeartbeat(`Creating fallback keyframes from video outputs for ${taskId}`, "degraded")
@@ -361,6 +449,11 @@ async function writeTaskArtifacts(
       progressPct: 82,
       failureReason: null,
       statusDetail: "关键画面超时，正在转视频导出关键帧",
+      currentStage: "video_keyframe_fallback",
+      currentStageLabel: "关键画面超时，正在转视频导出关键帧",
+      currentSceneIndex: null,
+      currentSceneTotal: blueprintAwareDetail.scenes.length,
+      stageStartedAt: new Date().toISOString(),
     })
     keyframes = await createFallbackKeyframeBundleFromVideos({
       taskId,
@@ -392,14 +485,25 @@ async function writeTaskArtifacts(
     progressPct: 88,
     failureReason: null,
     statusDetail: "正在合成英文配音",
+    currentStage: "tts_generation",
+    currentStageLabel: "正在合成英文配音",
+    currentSceneIndex: null,
+    currentSceneTotal: blueprintAwareDetail.scenes.length,
+    stageStartedAt: new Date().toISOString(),
   })
   const narration = await synthesizeNarration(blueprintAwareDetail)
+  await throwIfTaskCanceled(taskId, options.signal)
   await writeWorkerHeartbeat(`Muxing final video for ${taskId}`)
   await updateTaskLifecycleState(taskId, {
     status: "running",
     progressPct: 94,
     failureReason: null,
     statusDetail: "正在合成最终视频",
+    currentStage: "final_mux",
+    currentStageLabel: "正在合成最终视频",
+    currentSceneIndex: null,
+    currentSceneTotal: blueprintAwareDetail.scenes.length,
+    stageStartedAt: new Date().toISOString(),
   })
   const finalVideo = await buildFinalVideoWithNarration({
     taskId,
@@ -410,6 +514,7 @@ async function writeTaskArtifacts(
     targetDurationSec: preparedDetail.taskRunConfig.targetDurationSec,
     audioStrategy: preparedDetail.taskRunConfig.audioStrategy,
   })
+  await throwIfTaskCanceled(taskId, options.signal)
   await upsertTaskDetail(
     await mergeLatestReviewMetadata({
       ...blueprintAwareDetail,
@@ -496,6 +601,7 @@ const worker = new Worker(
     const taskId = job.data.taskId
     const taskAbortController = new AbortController()
     const stopCancelWatcher = startTaskCancellationWatcher(taskId, taskAbortController)
+    activeTaskIds.add(taskId)
 
     try {
       await writeWorkerHeartbeat(`Processing ${taskId}`)
@@ -504,6 +610,13 @@ const worker = new Worker(
         progressPct: 20,
         failureReason: null,
         statusDetail: "准备任务源文件",
+        currentStage: "job_started",
+        currentStageLabel: "准备任务源文件",
+        currentSceneIndex: null,
+        currentSceneTotal: null,
+        stageStartedAt: new Date().toISOString(),
+        workerId: workerInstanceId,
+        activeJobId: job.id ? String(job.id) : null,
       })
 
       console.log(`[worker] ${taskId} => prepare source files + TTS`)
@@ -521,19 +634,27 @@ const worker = new Worker(
       if (result.phase === "review_ready") {
         console.log(`[worker] ${taskId} => waiting for blueprint review`)
         stopCancelWatcher()
+        activeTaskIds.delete(taskId)
         return { ok: true, taskId: job.data.taskId, phase: "review_ready" }
       }
 
+      await throwIfTaskCanceled(taskId, taskAbortController.signal)
       await updateTaskLifecycleState(taskId, {
         status: "completed",
         progressPct: 100,
         failureReason: null,
         statusDetail: "已完成",
+        currentStage: "completed",
+        currentStageLabel: "已完成",
+        currentSceneIndex: null,
+        currentSceneTotal: null,
+        activeJobId: null,
       })
 
       await writeWorkerHeartbeat(`Last completed ${taskId}`)
       console.log(`[worker] ${taskId} => completed`)
       stopCancelWatcher()
+      activeTaskIds.delete(taskId)
       return { ok: true, taskId: job.data.taskId }
     } catch (error) {
       stopCancelWatcher()
@@ -542,8 +663,14 @@ const worker = new Worker(
           status: "canceled",
           failureReason: null,
           statusDetail: "任务已终止",
+          currentStage: "canceled",
+          currentStageLabel: "任务已终止",
+          currentSceneIndex: null,
+          currentSceneTotal: null,
+          activeJobId: null,
         })
         await writeWorkerHeartbeat(`Last canceled ${taskId}`, "degraded")
+        activeTaskIds.delete(taskId)
         return { ok: true, taskId: job.data.taskId, phase: "canceled" as const }
       }
       const message = error instanceof Error ? error.message : String(error)
@@ -552,7 +679,11 @@ const worker = new Worker(
         status: "failed",
         failureReason: message,
         statusDetail: "任务失败",
-        progressPct: Math.min(task.progressPct, 65),
+        currentStage: task.currentStage ?? "failed",
+        currentStageLabel: task.currentStageLabel ?? "任务失败",
+        lastHeartbeatAt: new Date().toISOString(),
+        activeJobId: null,
+        progressPct: task.progressPct,
         retryCount: task.retryCount + 1,
         updatedAt: new Date().toISOString(),
       }))
@@ -562,11 +693,16 @@ const worker = new Worker(
           ...latestDetail,
           failureReason: message,
           statusDetail: "任务失败",
+          currentStage: latestDetail.currentStage ?? "failed",
+          currentStageLabel: latestDetail.currentStageLabel ?? "任务失败",
+          lastHeartbeatAt: new Date().toISOString(),
+          activeJobId: null,
           updatedAt: new Date().toISOString(),
         })
       }
       await writeWorkerHeartbeat(`Last failed ${taskId}: ${message}`, "degraded")
       console.error(`[worker] ${taskId} => failed`, error)
+      activeTaskIds.delete(taskId)
       throw error
     }
   },
@@ -593,3 +729,33 @@ const heartbeat = setInterval(() => {
 }, 15000)
 heartbeat.unref()
 void queue.waitUntilReady()
+
+async function shutdownWorker(signalName: string) {
+  if (shutdownRequested) {
+    return
+  }
+  shutdownRequested = true
+  clearInterval(heartbeat)
+  await writeWorkerHeartbeat(`Worker draining after ${signalName}`, "degraded")
+  await Promise.allSettled(
+    [...activeTaskIds].map((taskId) =>
+      updateTaskLifecycleState(taskId, {
+        status: "running",
+        statusDetail: "worker 正在安全停止，可恢复",
+        currentStageLabel: "worker 正在安全停止，可恢复",
+        lastHeartbeatAt: new Date().toISOString(),
+        workerId: workerInstanceId,
+      }),
+    ),
+  )
+  await Promise.allSettled([worker.close(), queue.close(), connection.quit()])
+  process.exit(0)
+}
+
+process.once("SIGTERM", () => {
+  void shutdownWorker("SIGTERM")
+})
+
+process.once("SIGINT", () => {
+  void shutdownWorker("SIGINT")
+})

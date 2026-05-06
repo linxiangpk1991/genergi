@@ -17,6 +17,7 @@ import {
 import {
   blueprintReviewDecisionSchema,
   plannedExecutionBlueprintSchema,
+  audioStrategySchema,
   createTaskInputSchema,
   createUserInputSchema,
   normalizeImageProviderModelId,
@@ -33,8 +34,8 @@ import {
   updateUserInputSchema,
 } from "@genergi/shared"
 import { clearSession, getAuthStatus, getSessionUser, loginWithPassword, requireAuth } from "./lib/auth.js"
-import { assertQueueAvailable, cancelTaskJobs, enqueueTask, QueueUnavailableError } from "./lib/queue/enqueue.js"
-import { cancelTask, createTask, deleteTask, getTaskAsset, getTaskAssets, getTaskDetail, listTasks, resumeFailedTask } from "./lib/task-store.js"
+import { assertQueueAvailable, cancelTaskJobs, enqueueTask, inspectTaskJobs, QueueUnavailableError, recoverTaskJobs } from "./lib/queue/enqueue.js"
+import { cancelTask, createTask, deleteTask, getTaskAsset, getTaskAssets, getTaskDetail, listTasks, resumeFailedTask, updateTaskAudioStrategy } from "./lib/task-store.js"
 import {
   approveTaskBlueprint,
   createTaskBlueprintVersion,
@@ -76,6 +77,10 @@ const createBlueprintInputSchema = z.object({
     renderSpec: true,
   }),
   keyframeManifestPath: z.string().trim().min(1).optional(),
+})
+const STALE_RUNNING_THRESHOLD_MS = 10 * 60 * 1000
+const taskAudioStrategyBodySchema = z.object({
+  audioStrategy: audioStrategySchema,
 })
 const blueprintReviewBodySchema = z.object({
   decision: blueprintReviewDecisionSchema,
@@ -187,6 +192,166 @@ function enrichDetail(detail: NonNullable<Awaited<ReturnType<typeof getTaskDetai
       detail.taskRunConfig.routeReason,
     )
   return { ...detail, planning }
+}
+
+function getLivenessTimestamp(
+  task: Awaited<ReturnType<typeof listTasks>>[number],
+  detail: NonNullable<Awaited<ReturnType<typeof getTaskDetail>>>,
+) {
+  const heartbeat = detail.lastHeartbeatAt ?? task.lastHeartbeatAt ?? null
+  if (heartbeat) {
+    return heartbeat
+  }
+
+  const timestamps = [task.updatedAt, detail.updatedAt]
+    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    .sort((left, right) => Date.parse(right) - Date.parse(left))
+  return timestamps[0] ?? null
+}
+
+function looksLikeRunningGeneration(
+  task: Awaited<ReturnType<typeof listTasks>>[number],
+  detail: NonNullable<Awaited<ReturnType<typeof getTaskDetail>>>,
+) {
+  if (task.status === "completed" || task.status === "failed" || task.status === "canceled") {
+    return false
+  }
+
+  const statusDetail = `${task.statusDetail ?? detail.statusDetail ?? ""}`
+  const currentStage = `${detail.currentStage ?? task.currentStage ?? ""}`
+  return (
+    task.status === "running" ||
+    Boolean(currentStage && !["completed", "canceled", "failed", "waiting_review"].includes(currentStage)) ||
+    statusDetail.includes("生成") ||
+    statusDetail.includes("合成") ||
+    statusDetail.includes("准备") ||
+    statusDetail.includes("复用")
+  )
+}
+
+function getStaleRunningInfo(
+  task: Awaited<ReturnType<typeof listTasks>>[number],
+  detail: NonNullable<Awaited<ReturnType<typeof getTaskDetail>>>,
+) {
+  const sourceUpdatedAt = getLivenessTimestamp(task, detail)
+  const updatedAtMs = sourceUpdatedAt ? Date.parse(sourceUpdatedAt) : Number.NaN
+  const ageMs = Number.isFinite(updatedAtMs) ? Date.now() - updatedAtMs : null
+  const isStale =
+    looksLikeRunningGeneration(task, detail) &&
+    ageMs !== null &&
+    ageMs >= STALE_RUNNING_THRESHOLD_MS
+
+  return {
+    isStale,
+    thresholdMs: STALE_RUNNING_THRESHOLD_MS,
+    ageMs,
+    sourceUpdatedAt,
+  }
+}
+
+async function buildTaskDiagnostics(
+  task: Awaited<ReturnType<typeof listTasks>>[number],
+  detail: NonNullable<Awaited<ReturnType<typeof getTaskDetail>>>,
+) {
+  const stale = getStaleRunningInfo(task, detail)
+  const assets = await getTaskAssets(task.id)
+  const readyAssets = assets.filter((asset) => asset.exists && asset.status === "ready")
+  const deliverableAssetTypes = new Set(["video_bundle", "subtitles", "script", "audio"])
+  const deliverableReadyCount = readyAssets.filter((asset) => deliverableAssetTypes.has(asset.assetType)).length
+  const expectedNextAssetType =
+    !readyAssets.some((asset) => asset.assetType === "keyframe_bundle")
+      ? "keyframe_bundle"
+      : !readyAssets.some((asset) => asset.assetType === "video_bundle")
+        ? "video_bundle"
+        : !readyAssets.some((asset) => asset.assetType === "subtitles")
+          ? "subtitles"
+          : null
+
+  let queue:
+    | {
+        available: true
+        activeJobIds: string[]
+        waitingJobIds: string[]
+        delayedJobIds: string[]
+        prioritizedJobIds: string[]
+        pausedJobIds: string[]
+        failedJobIds: string[]
+      }
+    | {
+        available: false
+        activeJobIds: string[]
+        waitingJobIds: string[]
+        delayedJobIds: string[]
+        prioritizedJobIds: string[]
+        pausedJobIds: string[]
+        failedJobIds: string[]
+        unavailableReason: string
+      }
+
+  try {
+    const jobs = await inspectTaskJobs(task.id)
+    queue = {
+      available: true,
+      activeJobIds: jobs.active,
+      waitingJobIds: jobs.waiting,
+      delayedJobIds: jobs.delayed,
+      prioritizedJobIds: jobs.prioritized,
+      pausedJobIds: jobs.paused,
+      failedJobIds: jobs.failed,
+    }
+  } catch (error) {
+    queue = {
+      available: false,
+      activeJobIds: [],
+      waitingJobIds: [],
+      delayedJobIds: [],
+      prioritizedJobIds: [],
+      pausedJobIds: [],
+      failedJobIds: [],
+      unavailableReason: error instanceof Error ? error.message : String(error),
+    }
+  }
+
+  const recoveryReason =
+    task.status === "failed"
+      ? "failed_task"
+      : stale.isStale
+        ? "stale_running_task"
+        : "not_recoverable"
+  const recoverable = recoveryReason !== "not_recoverable"
+  const runtimeTrace = {
+    currentStage: detail.currentStage ?? task.currentStage ?? null,
+    currentStageLabel: detail.currentStageLabel ?? task.currentStageLabel ?? null,
+    currentSceneIndex: detail.currentSceneIndex ?? task.currentSceneIndex ?? null,
+    currentSceneTotal: detail.currentSceneTotal ?? task.currentSceneTotal ?? null,
+    stageStartedAt: detail.stageStartedAt ?? task.stageStartedAt ?? null,
+    lastHeartbeatAt: detail.lastHeartbeatAt ?? task.lastHeartbeatAt ?? null,
+    workerId: detail.workerId ?? task.workerId ?? null,
+    activeJobId: detail.activeJobId ?? task.activeJobId ?? null,
+  }
+  const operatorMessage =
+    task.status === "failed"
+      ? `任务失败：${task.failureReason ?? detail.failureReason ?? "请查看失败原因"}`
+      : stale.isStale
+        ? "worker 心跳超过 10 分钟未更新，可尝试恢复卡住任务。"
+        : runtimeTrace.currentStageLabel ?? task.statusDetail ?? "任务状态正常同步中。"
+
+  return {
+    taskId: task.id,
+    recoverable,
+    recoveryReason,
+    stale,
+    queue,
+    runtimeTrace,
+    assets: {
+      readyCount: readyAssets.length,
+      missingCount: Math.max(assets.length - readyAssets.length, 0),
+      deliverableReadyCount,
+      deliverableTotal: deliverableAssetTypes.size,
+      expectedNextAssetType,
+    },
+    operatorMessage,
+  }
 }
 
 const modelControlSlotSchema = z.enum([
@@ -1512,6 +1677,17 @@ app.get("/api/tasks/:taskId", async (c) => {
   return c.json({ detail: enrichDetail(detail) })
 })
 
+app.get("/api/tasks/:taskId/diagnostics", async (c) => {
+  const taskId = c.req.param("taskId")
+  const [tasks, detail] = await Promise.all([listTasks(), getTaskDetail(taskId)])
+  const task = tasks.find((entry) => entry.id === taskId) ?? null
+  if (!task || !detail) {
+    return c.json({ message: "TASK_NOT_FOUND" }, 404)
+  }
+
+  return c.json({ diagnostics: await buildTaskDiagnostics(task, detail) })
+})
+
 app.get("/api/tasks/:taskId/blueprints", async (c) => {
   const blueprints = await listTaskBlueprints(c.req.param("taskId"))
   return c.json({ blueprints })
@@ -1673,30 +1849,67 @@ app.post("/api/tasks/:taskId/resume", async (c) => {
     return c.json({ message: "TASK_NOT_FOUND" }, 404)
   }
 
-  if (task.status !== "failed") {
-    return c.json({ message: "TASK_NOT_FAILED", status: task.status }, 409)
-  }
-
   const detail = await getTaskDetail(taskId)
   if (!detail) {
     return c.json({ message: "TASK_NOT_FOUND" }, 404)
   }
 
+  const staleRunningThresholdMs = STALE_RUNNING_THRESHOLD_MS
+  const stale = getStaleRunningInfo(task, detail)
+  const statusDetail = `${task.statusDetail ?? detail.statusDetail ?? ""}`
+  const isStaleRunningTask = stale.isStale
+
+  if (task.status !== "failed" && !isStaleRunningTask) {
+    return c.json({ message: "TASK_NOT_RECOVERABLE", status: task.status }, 409)
+  }
+
+  const recoverableFailureText = `${task.failureReason ?? detail.failureReason ?? ""} ${statusDetail}`
+  const failedAfterPlanning =
+    /scene|video|keyframe|subtitle|audio|timeout|成片|视频|画面|关键帧|字幕|音频/i.test(recoverableFailureText)
   const continueExecution =
+    failedAfterPlanning ||
+    task.blueprintStatus === "approved" ||
+    task.blueprintStatus === "queued_for_video" ||
+    task.blueprintStatus === "video_generating" ||
+    task.blueprintStatus === "completed" ||
     detail.blueprintStatus === "approved" ||
     detail.blueprintStatus === "queued_for_video" ||
     detail.blueprintStatus === "video_generating" ||
-    detail.blueprintStatus === "completed"
+    detail.blueprintStatus === "completed" ||
+    detail.taskRunConfig.blueprintStatus === "approved" ||
+    detail.taskRunConfig.blueprintStatus === "queued_for_video" ||
+    detail.taskRunConfig.blueprintStatus === "video_generating" ||
+    detail.taskRunConfig.blueprintStatus === "completed"
 
   let queue
   try {
-    queue = await enqueueTask(taskId, {
-      reason: "resume_failed_task",
-      continueExecution,
-      blueprintVersion: detail.blueprintVersion,
-      stage: "resume_after_failure",
-      resumeFrom: "failed_task",
-    })
+    if (isStaleRunningTask) {
+      const recovered = await recoverTaskJobs(taskId, { minActiveAgeMs: staleRunningThresholdMs })
+      if (recovered.hasActiveJob) {
+        return c.json({
+          message: "TASK_STALE_ACTIVE_JOB_STILL_HELD",
+          activeJobIds: recovered.activeJobIds,
+          staleActiveJobIds: recovered.staleActiveJobIds,
+          diagnostics: await buildTaskDiagnostics(task, detail),
+        }, 409)
+      }
+
+      queue = await enqueueTask(taskId, {
+        reason: "resume_stale_running_task",
+        continueExecution,
+        blueprintVersion: detail.blueprintVersion,
+        stage: "resume_after_stale_running",
+        resumeFrom: "stale_running_task",
+      })
+    } else {
+      queue = await enqueueTask(taskId, {
+        reason: "resume_failed_task",
+        continueExecution,
+        blueprintVersion: detail.blueprintVersion,
+        stage: "resume_after_failure",
+        resumeFrom: "failed_task",
+      })
+    }
   } catch (error) {
     return toQueueUnavailableResponse(c, error)
   }
@@ -1710,8 +1923,32 @@ app.post("/api/tasks/:taskId/resume", async (c) => {
     task: resumed.summary,
     detail: resumed.detail,
     queue,
+    diagnostics: await buildTaskDiagnostics(resumed.summary, resumed.detail),
   }, 202)
 })
+
+app.patch(
+  "/api/tasks/:taskId/audio-strategy",
+  zValidator("json", taskAudioStrategyBodySchema),
+  async (c) => {
+    const taskId = c.req.param("taskId")
+    const payload = c.req.valid("json")
+    const updated = await updateTaskAudioStrategy(taskId, payload.audioStrategy)
+
+    if (!updated.ok) {
+      if (updated.code === "TASK_NOT_FOUND") {
+        return c.json({ message: updated.code }, 404)
+      }
+
+      return c.json({ message: updated.code }, 409)
+    }
+
+    return c.json({
+      task: updated.summary,
+      detail: updated.detail,
+    })
+  },
+)
 
 app.post(
   "/api/tasks/:taskId/blueprints/:version/review",

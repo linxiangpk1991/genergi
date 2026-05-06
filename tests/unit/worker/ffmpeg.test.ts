@@ -28,10 +28,35 @@ Line two
     expect(ass).toContain("[Script Info]")
     expect(ass).toContain("PlayResX: 1080")
     expect(ass).toContain("PlayResY: 1920")
+    expect(ass).toContain("WrapStyle: 0")
     expect(ass).toContain("[V4+ Styles]")
-    expect(ass).toContain("Style: Default")
+    expect(ass).toContain("Style: Default,Arial,63,")
     expect(ass).toContain("Dialogue: 0,0:00:00.00,0:00:01.50,Default,,0,0,0,,Hello world")
     expect(ass).toContain("Line one\\NLine two")
+  })
+
+  it("rebalances long english subtitle cues into two lines before ASS burn-in", async () => {
+    const ffmpeg = await import("../../../apps/worker/src/lib/ffmpeg")
+
+    const ass = ffmpeg.buildAssSubtitleContent({
+      srtContent: `1
+00:00:00,000 --> 00:00:03,000
+If you've been working hard for years but still feel stuck, it's not because you're not good enough.
+`,
+      renderSpec: {
+        terminalPresetId: "phone_portrait",
+        width: 1080,
+        height: 1920,
+        aspectRatio: "9:16",
+        safeArea: { topPct: 8, rightPct: 6, bottomPct: 10, leftPct: 6 },
+        compositionGuideline: "主体保持在竖屏中心安全区",
+        motionGuideline: "优先轻推拉",
+      },
+    })
+
+    expect(ass).toContain("\\N")
+    expect(ass).toContain("If you've been working hard for years but still")
+    expect(ass).toContain("\\Nfeel stuck, it's not because you're not good enough.")
   })
 
   it("builds subtitle burn-in ffmpeg args when a subtitle path is provided", async () => {

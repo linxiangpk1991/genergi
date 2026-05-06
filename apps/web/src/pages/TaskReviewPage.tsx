@@ -32,6 +32,26 @@ function isActionableReviewTask(task: TaskSummary) {
   )
 }
 
+function getReviewDefaultTaskId(tasks: TaskSummary[]) {
+  return (
+    tasks.find((task) => task.executionMode === "review_required" && task.blueprintStatus === "ready_for_review")?.id ||
+    tasks.find((task) => task.executionMode === "review_required" && task.blueprintStatus === "approved")?.id ||
+    tasks.find((task) => task.executionMode === "review_required" && task.blueprintStatus === "rejected")?.id ||
+    tasks[0]?.id ||
+    ""
+  )
+}
+
+type ReviewTaskFilter = "ready_for_review" | "approved" | "rejected" | "all"
+
+function matchesReviewTaskFilter(task: TaskSummary, filter: ReviewTaskFilter) {
+  if (filter === "all") {
+    return true
+  }
+
+  return task.executionMode === "review_required" && task.blueprintStatus === filter
+}
+
 function findAsset(assets: AssetRecord[], assetType: AssetRecord["assetType"]) {
   return assets.find((asset) => asset.assetType === assetType) ?? null
 }
@@ -45,16 +65,49 @@ export function TaskReviewPage() {
   const [blueprint, setBlueprint] = useState<TaskBlueprintRecord | null>(null)
   const [review, setReview] = useState<TaskBlueprintReviewRecord | null>(null)
   const [sourceScript, setSourceScript] = useState("")
+  const [taskFilter, setTaskFilter] = useState<ReviewTaskFilter>("ready_for_review")
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
+  const [updatingAudioStrategy, setUpdatingAudioStrategy] = useState(false)
   const [error, setError] = useState("")
 
-  const actionableTasks = useMemo(
-    () => tasks.filter((task) => isActionableReviewTask(task)),
-    [tasks],
+  const selectedTaskId = detail?.taskId ?? routeTaskId
+  const selectedTaskOption = useMemo(
+    () => tasks.find((task) => task.id === selectedTaskId) ?? null,
+    [selectedTaskId, tasks],
   )
+  const filteredTasks = useMemo(
+    () => tasks.filter((task) => matchesReviewTaskFilter(task, taskFilter)),
+    [taskFilter, tasks],
+  )
+  const taskOptions = useMemo(() => {
+    if (!selectedTaskOption) {
+      return filteredTasks
+    }
 
-  const taskOptions = actionableTasks.length ? actionableTasks : tasks
+    if (filteredTasks.some((task) => task.id === selectedTaskOption.id)) {
+      return filteredTasks
+    }
+
+    return [selectedTaskOption, ...filteredTasks]
+  }, [filteredTasks, selectedTaskOption])
+
+  function handleTaskFilterChange(nextFilter: ReviewTaskFilter) {
+    setTaskFilter(nextFilter)
+
+    const nextTasks = tasks.filter((task) => matchesReviewTaskFilter(task, nextFilter))
+    if (!nextTasks.length) {
+      return
+    }
+
+    if (selectedTaskOption && matchesReviewTaskFilter(selectedTaskOption, nextFilter)) {
+      return
+    }
+
+    setLoading(true)
+    setError("")
+    syncTaskRoute(nextTasks[0].id, false)
+  }
 
   function syncTaskRoute(taskId: string, replace = true) {
     const nextSearchParams = new URLSearchParams(searchParams)
@@ -100,8 +153,7 @@ export function TaskReviewPage() {
 
         const selectedTaskId =
           routeTaskId ||
-          taskResult.tasks.find((task) => isActionableReviewTask(task))?.id ||
-          taskResult.tasks[0]?.id
+          getReviewDefaultTaskId(taskResult.tasks)
         if (!selectedTaskId) {
           setDetail(null)
           setBlueprint(null)
@@ -186,12 +238,43 @@ export function TaskReviewPage() {
   }, [])
 
   const selectedTask = useMemo(
-    () => tasks.find((task) => task.id === (detail?.taskId ?? routeTaskId)) ?? null,
-    [detail?.taskId, routeTaskId, tasks],
+    () => selectedTaskOption,
+    [selectedTaskOption],
   )
 
   const isApproved = blueprint?.status === "approved"
   const isRejected = blueprint?.status === "rejected"
+  const canEditAudioStrategy =
+    !!detail &&
+    !updatingAudioStrategy &&
+    detail.taskRunConfig.executionMode === "review_required" &&
+    (detail.blueprintStatus === "ready_for_review" ||
+      detail.blueprintStatus === "approved" ||
+      detail.blueprintStatus === "rejected")
+
+  function applyAudioStrategy(taskId: string, strategy: TaskDetail["taskRunConfig"]["audioStrategy"]) {
+    setDetail((current) =>
+      current && current.taskId === taskId
+        ? {
+            ...current,
+            taskRunConfig: {
+              ...current.taskRunConfig,
+              audioStrategy: strategy,
+            },
+          }
+        : current,
+    )
+    setTasks((current) =>
+      current.map((task) =>
+        task.id === taskId
+          ? {
+              ...task,
+              audioStrategy: strategy,
+            }
+          : task,
+      ),
+    )
+  }
 
   async function submitReview(decision: "approved" | "rejected") {
     if (!detail || !blueprint) {
@@ -236,6 +319,23 @@ export function TaskReviewPage() {
     }
   }
 
+  async function updateAudioStrategy(audioStrategy: TaskDetail["taskRunConfig"]["audioStrategy"]) {
+    if (!detail || detail.taskRunConfig.audioStrategy === audioStrategy || !canEditAudioStrategy) {
+      return
+    }
+
+    setUpdatingAudioStrategy(true)
+    setError("")
+    try {
+      const result = await api.updateTaskAudioStrategy(detail.taskId, { audioStrategy })
+      applyAudioStrategy(detail.taskId, result.detail.taskRunConfig.audioStrategy)
+    } catch (updateError) {
+      setError(updateError instanceof Error ? updateError.message : "更新音频策略失败")
+    } finally {
+      setUpdatingAudioStrategy(false)
+    }
+  }
+
   if (loading) {
     return <div className="empty-state">正在加载审核蓝图...</div>
   }
@@ -261,9 +361,39 @@ export function TaskReviewPage() {
           {taskOptions.length ? (
             <>
               <label className="field-label">任务选择</label>
+              <div className="planning-summary-tags" style={{ marginBottom: 12 }}>
+                <button
+                  className={taskFilter === "ready_for_review" ? "primary-button" : "ghost-button"}
+                  onClick={() => handleTaskFilterChange("ready_for_review")}
+                  type="button"
+                >
+                  待审核
+                </button>
+                <button
+                  className={taskFilter === "approved" ? "primary-button" : "ghost-button"}
+                  onClick={() => handleTaskFilterChange("approved")}
+                  type="button"
+                >
+                  已通过
+                </button>
+                <button
+                  className={taskFilter === "rejected" ? "primary-button" : "ghost-button"}
+                  onClick={() => handleTaskFilterChange("rejected")}
+                  type="button"
+                >
+                  已驳回
+                </button>
+                <button
+                  className={taskFilter === "all" ? "primary-button" : "ghost-button"}
+                  onClick={() => handleTaskFilterChange("all")}
+                  type="button"
+                >
+                  显示全部任务
+                </button>
+              </div>
               <select
                 className="input"
-                value={detail?.taskId ?? routeTaskId ?? taskOptions[0]?.id ?? ""}
+                value={selectedTaskId ?? taskOptions[0]?.id ?? ""}
                 onChange={(event) => {
                   setLoading(true)
                   setError("")
@@ -332,6 +462,29 @@ export function TaskReviewPage() {
                 {detail?.taskRunConfig.audioStrategy === "native_plus_tts_ducked"
                   ? "保留 Veo 原生环境音，并叠加 TTS 旁白。"
                   : "最终主音轨使用 TTS 旁白。"}
+              </span>
+              <div className="planning-summary-tags" style={{ marginTop: 10 }}>
+                <button
+                  className={detail?.taskRunConfig.audioStrategy === "tts_only" ? "primary-button" : "ghost-button"}
+                  disabled={!canEditAudioStrategy}
+                  onClick={() => void updateAudioStrategy("tts_only")}
+                  type="button"
+                >
+                  TTS 主导
+                </button>
+                <button
+                  className={detail?.taskRunConfig.audioStrategy === "native_plus_tts_ducked" ? "primary-button" : "ghost-button"}
+                  disabled={!canEditAudioStrategy}
+                  onClick={() => void updateAudioStrategy("native_plus_tts_ducked")}
+                  type="button"
+                >
+                  原生音频 + TTS 混音
+                </button>
+              </div>
+              <span>
+                {canEditAudioStrategy
+                  ? "修改只影响最终成片音轨策略，不会重新生成图片和提示词。"
+                  : "任务进入继续生成或成片阶段后，音频策略会自动锁定。"}
               </span>
             </div>
           </div>

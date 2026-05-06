@@ -84,6 +84,18 @@ export const reviewSummarySchema = z.object({
 })
 export type ReviewSummary = z.infer<typeof reviewSummarySchema>
 
+export const taskRuntimeTraceSchema = z.object({
+  currentStage: z.string().nullable().optional(),
+  currentStageLabel: z.string().nullable().optional(),
+  currentSceneIndex: z.number().int().nonnegative().nullable().optional(),
+  currentSceneTotal: z.number().int().nonnegative().nullable().optional(),
+  stageStartedAt: z.string().nullable().optional(),
+  lastHeartbeatAt: z.string().nullable().optional(),
+  workerId: z.string().nullable().optional(),
+  activeJobId: z.string().nullable().optional(),
+})
+export type TaskRuntimeTrace = z.infer<typeof taskRuntimeTraceSchema>
+
 export const modelRefSchema = z.object({
   id: z.string(),
   label: z.string(),
@@ -158,7 +170,7 @@ export const taskSummarySchema = z.object({
   estimatedCostCny: z.number().nonnegative(),
   createdAt: z.string(),
   updatedAt: z.string(),
-}).extend(reviewSummarySchema.shape)
+}).extend(reviewSummarySchema.shape).extend(taskRuntimeTraceSchema.shape)
 export type TaskSummary = z.infer<typeof taskSummarySchema>
 
 export const storyboardSceneSchema = z.object({
@@ -202,7 +214,7 @@ export const taskDetailSchema = z.object({
   cancelRequestedAt: z.string().nullable().optional(),
   scenes: z.array(storyboardSceneSchema),
   updatedAt: z.string(),
-}).extend(reviewSummarySchema.shape)
+}).extend(reviewSummarySchema.shape).extend(taskRuntimeTraceSchema.shape)
 export type TaskDetail = z.infer<typeof taskDetailSchema>
 
 export const assetRecordSchema = z.object({

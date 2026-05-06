@@ -51,6 +51,7 @@ type StructuredPlanningAttempt = {
   provider: string | null
   model: string | null
   baseUrl: string | null
+  wireApi?: "messages" | "chat_completions" | "responses" | null
 }
 
 function ensureTaskDir(taskId: string) {
@@ -95,7 +96,18 @@ function getModelControlMasterKey() {
 function decryptControlPlaneSecret(ciphertext: string) {
   const [prefix, ivEncoded, tagEncoded, payloadEncoded] = ciphertext.split(":")
   if (ciphertext && prefix !== "enc") {
-    return ciphertext
+    try {
+      const payload = Buffer.from(ciphertext, "base64")
+      if (payload.length <= 28) {
+        return ciphertext
+      }
+      const decipher = createDecipheriv("aes-256-gcm", getModelControlMasterKey(), payload.subarray(0, 12))
+      decipher.setAuthTag(payload.subarray(12, 28))
+      const plaintext = Buffer.concat([decipher.update(payload.subarray(28)), decipher.final()])
+      return plaintext.toString("utf8")
+    } catch {
+      return ciphertext
+    }
   }
   if (prefix !== "enc" || !ivEncoded || !tagEncoded || !payloadEncoded) {
     throw new Error("MODEL_CONTROL_SECRET_FORMAT_INVALID")
@@ -116,8 +128,41 @@ function decryptControlPlaneSecret(ciphertext: string) {
   return decrypted.toString("utf8")
 }
 
+function resolveProviderConnectionFields(provider: Awaited<ReturnType<typeof readProviderRecords>>[number] | undefined) {
+  const encryptedEndpoint = `${provider?.encryptedEndpoint ?? ""}`.trim()
+  const encryptedSecret = `${provider?.encryptedSecret ?? ""}`.trim()
+
+  return {
+    endpointUrl: encryptedEndpoint
+      ? decryptControlPlaneSecret(encryptedEndpoint).trim()
+      : `${(provider as any)?.endpointUrl ?? ""}`.trim(),
+    apiKey: encryptedSecret
+      ? decryptControlPlaneSecret(encryptedSecret).trim()
+      : `${(provider as any)?.secret ?? ""}`.trim(),
+  }
+}
+
 function isRetryableGatewayStatus(status?: number | null) {
   return status === 429 || status === 500 || status === 502 || status === 503 || status === 504
+}
+
+function toProviderRequestError(prefix: string, error: unknown) {
+  if (axios.isAxiosError(error)) {
+    const status = error.response?.status
+    const statusText = error.response?.statusText
+    const responseError = (error.response?.data as any)?.error
+    const message =
+      typeof responseError?.message === "string"
+        ? responseError.message
+        : typeof error.response?.data === "string"
+          ? error.response.data
+          : error.message
+    return new Error(
+      `${prefix}${status ? ` (${status}${statusText ? ` ${statusText}` : ""})` : ""}: ${message}`,
+    )
+  }
+
+  return error instanceof Error ? error : new Error(`${prefix}: ${String(error)}`)
 }
 
 function createTaskCanceledError(signal?: AbortSignal) {
@@ -1001,12 +1046,75 @@ type GeminiNativeImageRuntime = {
   model: string
 }
 
+async function resolveTextPlanningRuntime(detail: TaskDetail, runtime: RuntimeGenerationConfig) {
+  const slotSnapshots = detail.taskRunConfig.slotSnapshots ?? []
+  const textSnapshot =
+    slotSnapshots.find((slot) =>
+      slot.slotType === "textModel" &&
+      (slot.modelKey === runtime.textModelId ||
+        slot.modelId === runtime.textModelId ||
+        slot.providerModelId === runtime.textModelId),
+    ) ?? slotSnapshots.find((slot) => slot.slotType === "textModel")
+
+  if (textSnapshot) {
+    const providers = await readProviderRecords()
+    const provider = providers.find((item) => item.id === textSnapshot.providerId)
+    const connection = resolveProviderConnectionFields(provider)
+    if (!provider || !connection.endpointUrl || !connection.apiKey) {
+      throw new Error(`TEXT_PROVIDER_CONNECTION_MISSING_FOR_SNAPSHOT: ${textSnapshot.providerKey}`)
+    }
+
+    return {
+      provider: textSnapshot.providerType.trim().toLowerCase(),
+      apiKey: connection.apiKey,
+      baseUrl: resolveProviderApiBaseUrl(connection.endpointUrl),
+      model: textSnapshot.providerModelId,
+      capabilityJson: textSnapshot.capabilityJson ?? {},
+      source: "task_snapshot" as const,
+    }
+  }
+
+  return {
+    provider: runtime.textProvider.trim().toLowerCase(),
+    apiKey: process.env.GENERGI_TEXT_API_KEY ?? "",
+    baseUrl: resolveProviderApiBaseUrl(process.env.GENERGI_TEXT_BASE_URL ?? ""),
+    model: resolvePlanningModelId(runtime),
+    capabilityJson: {},
+    source: "environment" as const,
+  }
+}
+
+type OpenAIChatImageRuntime = {
+  kind: "openai-chat-image"
+  baseUrl: string
+  apiKey: string
+  providerId: string
+  providerKey: string
+  providerModelId: string
+  model: string
+}
+
+type OpenAIImagesGenerationRuntime = {
+  kind: "openai-images-generation"
+  baseUrl: string
+  apiKey: string
+  providerId: string
+  providerKey: string
+  providerModelId: string
+  model: string
+  quality?: string
+  responseFormat?: string
+}
+
 type GatewayImageRuntime = {
   kind: "gateway"
   model: string
 }
 
-export async function resolveImageGenerationRuntime(detail: TaskDetail, model: string): Promise<GeminiNativeImageRuntime | GatewayImageRuntime> {
+export async function resolveImageGenerationRuntime(
+  detail: TaskDetail,
+  model: string,
+): Promise<GeminiNativeImageRuntime | OpenAIChatImageRuntime | OpenAIImagesGenerationRuntime | GatewayImageRuntime> {
   const slotSnapshots = detail.taskRunConfig.slotSnapshots ?? []
   const imageSnapshot =
     slotSnapshots.find((slot) => slot.slotType === "imageModel" && (slot.modelKey === model || slot.modelId === model || slot.providerModelId === model)) ??
@@ -1016,20 +1124,62 @@ export async function resolveImageGenerationRuntime(detail: TaskDetail, model: s
   if (imageSnapshot && transport === "gemini-generate-content") {
     const providers = await readProviderRecords()
     const provider = providers.find((item) => item.id === imageSnapshot.providerId)
-    const endpointUrl = `${provider?.endpointUrl ?? ""}`.trim()
-    const encryptedSecret = `${provider?.encryptedSecret ?? ""}`.trim()
-    if (!provider || !endpointUrl || !encryptedSecret) {
+    const connection = resolveProviderConnectionFields(provider)
+    if (!provider || !connection.endpointUrl || !connection.apiKey) {
       throw new Error(`Gemini-native image provider is incomplete for ${imageSnapshot.providerKey}`)
     }
 
     return {
       kind: "gemini-native",
-      baseUrl: resolveProviderApiBaseUrl(endpointUrl),
-      apiKey: decryptControlPlaneSecret(encryptedSecret),
+      baseUrl: resolveProviderApiBaseUrl(connection.endpointUrl),
+      apiKey: connection.apiKey,
       providerId: provider.id,
       providerKey: provider.providerKey,
       providerModelId: imageSnapshot.providerModelId,
       model: imageSnapshot.modelKey,
+    }
+  }
+
+  if (imageSnapshot && transport === "openai-chat-completions") {
+    const providers = await readProviderRecords()
+    const provider = providers.find((item) => item.id === imageSnapshot.providerId)
+    const connection = resolveProviderConnectionFields(provider)
+    if (!provider || !connection.endpointUrl || !connection.apiKey) {
+      throw new Error(`OpenAI chat image provider is incomplete for ${imageSnapshot.providerKey}`)
+    }
+
+    return {
+      kind: "openai-chat-image",
+      baseUrl: resolveProviderApiBaseUrl(connection.endpointUrl),
+      apiKey: connection.apiKey,
+      providerId: provider.id,
+      providerKey: provider.providerKey,
+      providerModelId: imageSnapshot.providerModelId,
+      model: imageSnapshot.modelKey,
+    }
+  }
+
+  if (imageSnapshot && transport === "openai-images-generations") {
+    const providers = await readProviderRecords()
+    const provider = providers.find((item) => item.id === imageSnapshot.providerId)
+    const connection = resolveProviderConnectionFields(provider)
+    if (!provider || !connection.endpointUrl || !connection.apiKey) {
+      throw new Error(`OpenAI images generation provider is incomplete for ${imageSnapshot.providerKey}`)
+    }
+
+    const quality = imageSnapshot.capabilityJson?.quality
+    const responseFormat = imageSnapshot.capabilityJson?.responseFormat
+
+    return {
+      kind: "openai-images-generation",
+      baseUrl: resolveProviderApiBaseUrl(connection.endpointUrl),
+      apiKey: connection.apiKey,
+      providerId: provider.id,
+      providerKey: provider.providerKey,
+      providerModelId: imageSnapshot.providerModelId,
+      model: imageSnapshot.modelKey,
+      quality: typeof quality === "string" && quality.trim() ? quality.trim() : undefined,
+      responseFormat: typeof responseFormat === "string" && responseFormat.trim() ? responseFormat.trim() : undefined,
     }
   }
 
@@ -1090,6 +1240,215 @@ export async function createGeminiNativeImageArtifact(
   }
 }
 
+function extractOpenAIChatImageReference(payload: any) {
+  const directReference = extractImageReference(payload)
+  if (directReference) {
+    return directReference
+  }
+
+  const message = payload?.choices?.[0]?.message
+  if (typeof message?.content === "string") {
+    const dataUrlMatch = message.content.match(/data:image\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=_-]+/)
+    if (dataUrlMatch?.[0]) {
+      return { url: dataUrlMatch[0], b64Json: null, mimeType: null }
+    }
+
+    const markdownImageMatch = message.content.match(/!\[[^\]]*]\((https?:\/\/[^)\s]+)\)/)
+    if (markdownImageMatch?.[1]) {
+      return { url: markdownImageMatch[1], b64Json: null, mimeType: null }
+    }
+  }
+
+  const imageCandidates = Array.isArray(message?.images) ? message.images : []
+  for (const item of imageCandidates) {
+    if (!item || typeof item !== "object") {
+      continue
+    }
+
+    const url =
+      typeof item.url === "string"
+        ? item.url
+        : typeof item.image_url === "string"
+          ? item.image_url
+          : typeof item.image_url?.url === "string"
+            ? item.image_url.url
+            : null
+    const b64Json =
+      typeof item.b64_json === "string"
+        ? item.b64_json
+        : typeof item.image_base64 === "string"
+          ? item.image_base64
+          : typeof item.base64 === "string"
+            ? item.base64
+            : null
+    const mimeType =
+      typeof item.mime_type === "string"
+        ? item.mime_type
+        : typeof item.mimeType === "string"
+          ? item.mimeType
+          : null
+
+    if (url || b64Json) {
+      return { url, b64Json, mimeType }
+    }
+  }
+
+  const contentBlocks = Array.isArray(message?.content) ? message.content : []
+  for (const block of contentBlocks) {
+    if (!block || typeof block !== "object") {
+      continue
+    }
+
+    const type = `${block.type ?? ""}`.toLowerCase()
+    const url =
+      typeof block.image_url === "string"
+        ? block.image_url
+        : typeof block.image_url?.url === "string"
+          ? block.image_url.url
+          : typeof block.url === "string"
+            ? block.url
+            : null
+    const b64Json =
+      typeof block.b64_json === "string"
+        ? block.b64_json
+        : typeof block.image_base64 === "string"
+          ? block.image_base64
+          : typeof block.base64 === "string"
+            ? block.base64
+            : null
+    const mimeType =
+      typeof block.mime_type === "string"
+        ? block.mime_type
+        : typeof block.mimeType === "string"
+          ? block.mimeType
+          : null
+
+    if ((type.includes("image") || url || b64Json) && (url || b64Json)) {
+      return { url, b64Json, mimeType }
+    }
+  }
+
+  return null
+}
+
+export async function createOpenAIChatCompletionsImageArtifact(
+  input: {
+    baseUrl: string
+    apiKey: string
+    model: string
+    prompt: string
+    size: string
+    signal?: AbortSignal
+  },
+  deps: {
+    postJson?: (url: string, body: Record<string, unknown>) => Promise<any>
+  } = {},
+) {
+  const url = `${resolveProviderApiBaseUrl(input.baseUrl)}/v1/chat/completions`
+  const body = {
+    model: input.model,
+    modalities: ["text", "image"],
+    messages: [
+      {
+        role: "user",
+        content: [{ type: "text", text: input.prompt }],
+      },
+    ],
+    size: input.size,
+    response_format: { type: "b64_json" },
+    stream: false,
+  }
+
+  let responseData: any
+  try {
+    responseData = deps.postJson
+      ? await deps.postJson(url, body)
+      : (
+        await axios.post(url, body, {
+          headers: {
+            Authorization: `Bearer ${input.apiKey}`,
+            "Content-Type": "application/json",
+          },
+          timeout: 300000,
+          signal: input.signal,
+        })
+      ).data
+  } catch (error) {
+    throw toProviderRequestError("OpenAI chat image request failed", error)
+  }
+
+  const reference = extractOpenAIChatImageReference(responseData)
+  if (!reference) {
+    throw new Error(`OpenAI chat image response did not include image data: ${JSON.stringify(responseData)}`)
+  }
+
+  return {
+    ...await resolveImageBytes(reference),
+    generationId: null,
+  }
+}
+
+export async function createOpenAIImagesGenerationArtifact(
+  input: {
+    baseUrl: string
+    apiKey: string
+    model: string
+    prompt: string
+    size: string
+    quality?: string
+    responseFormat?: string
+    signal?: AbortSignal
+  },
+  deps: {
+    postJson?: (url: string, body: Record<string, unknown>) => Promise<any>
+  } = {},
+) {
+  const url = `${resolveProviderApiBaseUrl(input.baseUrl)}/v1/images/generations`
+  const body: Record<string, unknown> = {
+    model: input.model,
+    prompt: input.prompt,
+    n: 1,
+    size: input.size,
+  }
+
+  if (input.quality) {
+    body.quality = input.quality
+  }
+
+  if (input.responseFormat) {
+    body.response_format = input.responseFormat
+  }
+
+  let responseData: any
+  try {
+    responseData = deps.postJson
+      ? await deps.postJson(url, body)
+      : (
+        await axios.post(url, body, {
+          headers: {
+            Authorization: `Bearer ${input.apiKey}`,
+            "Content-Type": "application/json",
+          },
+          timeout: IMAGE_GATEWAY_REQUEST_TIMEOUT_MS,
+          signal: input.signal,
+        })
+      ).data
+  } catch (error) {
+    throw toProviderRequestError("OpenAI images generation request failed", error)
+  }
+
+  const reference = extractImageReference(responseData)
+  const generationId = extractGenerationId(responseData)
+  if (!reference) {
+    throw new Error(`OpenAI images generation response did not include image data: ${JSON.stringify(responseData)}`)
+  }
+
+  return {
+    ...await resolveImageBytes(reference),
+    generationId,
+  }
+}
+
 function extractAnthropicText(payload: any) {
   const blocks = Array.isArray(payload?.content) ? payload.content : []
   return blocks
@@ -1114,6 +1473,106 @@ function extractOpenAIText(payload: any) {
   }
 
   return ""
+}
+
+function extractOpenAIResponsesText(payload: any) {
+  if (typeof payload?.output_text === "string" && payload.output_text.trim()) {
+    return payload.output_text.trim()
+  }
+
+  const output = Array.isArray(payload?.output) ? payload.output : []
+  const textParts: string[] = []
+
+  for (const item of output) {
+    const content = Array.isArray(item?.content) ? item.content : []
+    for (const block of content) {
+      if (
+        (block?.type === "output_text" || block?.type === "text") &&
+        typeof block.text === "string"
+      ) {
+        textParts.push(block.text)
+      }
+    }
+  }
+
+  const joined = textParts.join("\n").trim()
+  return joined || extractOpenAIText(payload)
+}
+
+function resolveOpenAITextWireApi(input: {
+  model: string
+  capabilityJson?: Record<string, unknown>
+}) {
+  const explicit =
+    input.capabilityJson?.wireApi ??
+    input.capabilityJson?.wire_api ??
+    input.capabilityJson?.textWireApi ??
+    input.capabilityJson?.text_wire_api ??
+    process.env.GENERGI_TEXT_WIRE_API
+  if (typeof explicit === "string") {
+    const normalized = explicit.trim().toLowerCase().replace(/[-\s]+/g, "_")
+    if (normalized === "responses" || normalized === "response") {
+      return "responses" as const
+    }
+    if (normalized === "chat_completions" || normalized === "chat_completion" || normalized === "chat") {
+      return "chat_completions" as const
+    }
+  }
+
+  return input.model.trim().toLowerCase().startsWith("gpt-5")
+    ? "responses" as const
+    : "chat_completions" as const
+}
+
+async function requestOpenAICompatiblePlanning(input: {
+  baseUrl: string
+  apiKey: string
+  model: string
+  systemPrompt: string
+  promptContext: string
+  wireApi: "chat_completions" | "responses"
+}) {
+  const headers = {
+    Authorization: `Bearer ${input.apiKey}`,
+    "content-type": "application/json",
+  }
+
+  if (input.wireApi === "responses") {
+    const response = await axios.post(
+      `${input.baseUrl}/v1/responses`,
+      {
+        model: input.model,
+        instructions: input.systemPrompt,
+        input: input.promptContext,
+        text: {
+          format: { type: "json_object" },
+        },
+      },
+      {
+        headers,
+        timeout: 120000,
+      },
+    )
+    return extractOpenAIResponsesText(response.data)
+  }
+
+  const response = await axios.post(
+    `${input.baseUrl}/v1/chat/completions`,
+    {
+      model: input.model,
+      temperature: 0.4,
+      response_format: { type: "json_object" },
+      messages: [
+        { role: "system", content: input.systemPrompt },
+        { role: "user", content: input.promptContext },
+      ],
+    },
+    {
+      headers,
+      timeout: 120000,
+    },
+  )
+  return extractOpenAIText(response.data)
 }
 
 function extractJsonObject(text: string) {
@@ -1232,12 +1691,16 @@ export function validatePlanningOutput(
         scene &&
         typeof scene === "object" &&
         ("sceneNumber" in scene ||
+          "sceneId" in scene ||
           "sceneIndex" in scene ||
           "duration" in scene ||
+          "durationSeconds" in scene ||
           "purpose" in scene ||
           "visualDirection" in scene ||
           "motionNotes" in scene ||
-          "textOverlay" in scene),
+          "textOverlay" in scene ||
+          "onScreenText" in scene ||
+          "transition" in scene),
     )
 
   const normalizedRaw =
@@ -1252,14 +1715,15 @@ export function validatePlanningOutput(
               : "multi_scene",
           targetDurationSec:
             parseSceneDurationValue(
-              (raw as { targetDurationSec?: number | string; targetDuration?: number | string }).targetDurationSec ??
-                (raw as { targetDuration?: number | string }).targetDuration,
+              (raw as { targetDurationSec?: number | string; targetDuration?: number | string; targetDurationSeconds?: number | string }).targetDurationSec ??
+                (raw as { targetDuration?: number | string }).targetDuration ??
+                (raw as { targetDurationSeconds?: number | string }).targetDurationSeconds,
               expected.targetDurationSec,
             ),
           finalVoiceoverScript:
             (raw as { finalVoiceoverScript?: string }).finalVoiceoverScript ??
-            ((raw as { scenePlan: Array<{ voiceoverSegment?: string }> }).scenePlan
-              .map((scene) => scene.voiceoverSegment ?? "")
+            ((raw as { scenePlan: Array<{ voiceoverSegment?: string; voiceoverScript?: string; script?: string }> }).scenePlan
+              .map((scene) => scene.voiceoverScript ?? scene.script ?? scene.voiceoverSegment ?? "")
               .join(" ")
               .trim()),
           visualStyleGuide:
@@ -1276,6 +1740,7 @@ export function validatePlanningOutput(
           scenePlan: (raw as {
             scenePlan: Array<{
               sceneNumber?: number
+              sceneId?: number | string
               sceneIndex?: number
               duration?: string | number
               durationSeconds?: number
@@ -1291,7 +1756,9 @@ export function validatePlanningOutput(
               imagePrompt?: string
               videoPrompt?: string
               textOverlay?: string
+              onScreenText?: string
               motionNotes?: string
+              transition?: string
               transitionHint?: string
               startFrameDescription?: string
               voiceoverScript?: string
@@ -1305,10 +1772,15 @@ export function validatePlanningOutput(
             const mood = scene.mood ? ` Mood: ${scene.mood}.` : ""
             const camera = scene.camera ? ` Camera: ${scene.camera}.` : ""
             const motionNotes = scene.motionNotes ? ` Motion: ${scene.motionNotes}.` : ""
-            const overlay = scene.textOverlay ? ` Overlay context: ${scene.textOverlay}.` : ""
+            const overlayText = scene.textOverlay ?? scene.onScreenText
+            const overlay = overlayText ? ` Overlay context: ${overlayText}.` : ""
             const normalizedSceneIndex =
               typeof scene.sceneNumber === "number"
                 ? Math.max(scene.sceneNumber - 1, 0)
+                : typeof scene.sceneId === "number"
+                  ? Math.max(scene.sceneId - 1, 0)
+                  : typeof scene.sceneId === "string" && /\d+/.test(scene.sceneId)
+                    ? Math.max(Number.parseInt(scene.sceneId.match(/\d+/)?.[0] ?? `${index + 1}`, 10) - 1, 0)
                 : typeof scene.sceneIndex === "number"
                   ? Math.max(scene.sceneIndex - (scene.sceneIndex > 0 ? 1 : 0), 0)
                   : index
@@ -1328,7 +1800,7 @@ export function validatePlanningOutput(
                 `${visual}${mood}${camera}${motionNotes}${overlay} Generate a short-form social video shot that matches this exact beat.`.trim(),
               startFrameIntent: scene.startFrameIntent ?? (scene.scenePurpose ?? scene.purpose ?? `Introduce scene ${index + 1}`),
               endFrameIntent: scene.endFrameIntent ?? (index === allScenes.length - 1 ? "Close on the final message" : `Hand off from scene ${index + 1}`),
-              transitionHint: scene.transitionHint ?? (index === allScenes.length - 1 ? "close" : "cut"),
+              transitionHint: scene.transitionHint ?? scene.transition ?? (index === allScenes.length - 1 ? "close" : "cut"),
               continuityConstraints: Array.isArray(scene.continuityConstraints) ? scene.continuityConstraints : [],
             }
           }),
@@ -1360,13 +1832,14 @@ export function validatePlanningOutput(
             negativeConstraints: [],
             totalVoiceoverScript:
               (raw as { finalVoiceoverScript?: string }).finalVoiceoverScript ??
-              ((raw as { scenePlan: Array<{ voiceoverSegment?: string }> }).scenePlan
-                .map((scene) => scene.voiceoverSegment ?? "")
+              ((raw as { scenePlan: Array<{ voiceoverSegment?: string; voiceoverScript?: string; script?: string }> }).scenePlan
+                .map((scene) => scene.voiceoverScript ?? scene.script ?? scene.voiceoverSegment ?? "")
                 .join(" ")
                 .trim()),
             sceneContracts: ((raw as {
               scenePlan: Array<{
                 sceneNumber?: number
+                sceneId?: number | string
                 sceneIndex?: number
                 duration?: string | number
                 durationSeconds?: number
@@ -1382,7 +1855,9 @@ export function validatePlanningOutput(
                 imagePrompt?: string
                 videoPrompt?: string
                 textOverlay?: string
+                onScreenText?: string
                 motionNotes?: string
+                transition?: string
                 transitionHint?: string
                 startFrameDescription?: string
                 voiceoverScript?: string
@@ -1396,10 +1871,15 @@ export function validatePlanningOutput(
               const mood = scene.mood ? ` Mood: ${scene.mood}.` : ""
               const camera = scene.camera ? ` Camera: ${scene.camera}.` : ""
               const motionNotes = scene.motionNotes ? ` Motion: ${scene.motionNotes}.` : ""
-              const overlay = scene.textOverlay ? ` Overlay context: ${scene.textOverlay}.` : ""
+              const overlayText = scene.textOverlay ?? scene.onScreenText
+              const overlay = overlayText ? ` Overlay context: ${overlayText}.` : ""
               const normalizedSceneIndex =
                 typeof scene.sceneNumber === "number"
                   ? Math.max(scene.sceneNumber - 1, 0)
+                  : typeof scene.sceneId === "number"
+                    ? Math.max(scene.sceneId - 1, 0)
+                    : typeof scene.sceneId === "string" && /\d+/.test(scene.sceneId)
+                      ? Math.max(Number.parseInt(scene.sceneId.match(/\d+/)?.[0] ?? `${index + 1}`, 10) - 1, 0)
                   : typeof scene.sceneIndex === "number"
                     ? Math.max(scene.sceneIndex - (scene.sceneIndex > 0 ? 1 : 0), 0)
                     : index
@@ -1420,7 +1900,7 @@ export function validatePlanningOutput(
                 startFrameIntent: scene.startFrameIntent ?? (scene.scenePurpose ?? scene.purpose ?? `Introduce scene ${index + 1}`),
                 endFrameIntent: scene.endFrameIntent ?? (index === allScenes.length - 1 ? "Close on the final message" : `Hand off from scene ${index + 1}`),
                 durationSec,
-                transitionHint: scene.transitionHint ?? (index === allScenes.length - 1 ? "close" : "cut"),
+                transitionHint: scene.transitionHint ?? scene.transition ?? (index === allScenes.length - 1 ? "close" : "cut"),
                 continuityConstraints: Array.isArray(scene.continuityConstraints) ? scene.continuityConstraints : [],
               }
             })),
@@ -1690,10 +2170,11 @@ function buildPlanningFallback(detail: TaskDetail): TextPlanningOutput {
 
 async function requestStructuredPlanning(detail: TaskDetail): Promise<StructuredPlanningAttempt> {
   const runtime = resolveRuntimeGenerationConfig(detail)
-  const provider = runtime.textProvider.trim().toLowerCase()
-  const apiKey = process.env.GENERGI_TEXT_API_KEY ?? ""
-  const baseUrl = resolveProviderApiBaseUrl(process.env.GENERGI_TEXT_BASE_URL ?? "")
-  const model = resolvePlanningModelId(runtime)
+  const textRuntime = await resolveTextPlanningRuntime(detail, runtime)
+  const provider = textRuntime.provider
+  const apiKey = textRuntime.apiKey
+  const baseUrl = textRuntime.baseUrl
+  const model = textRuntime.model
 
   const preference = GENERATION_PREFERENCES.find((item) => item.id === detail.taskRunConfig.generationMode)
   const capability = resolveVideoModelCapability(detail.taskRunConfig.videoModel.id)
@@ -1726,11 +2207,18 @@ async function requestStructuredPlanning(detail: TaskDetail): Promise<Structured
       provider: provider || null,
       model: model || null,
       baseUrl: baseUrl || null,
+      wireApi: null,
     }
   }
 
   const systemPrompt =
     "You are a short-form video director and planner. Return only valid JSON that matches the requested planning structure. Do not explain your decisions."
+  const openaiWireApi = provider === "openai-compatible"
+    ? resolveOpenAITextWireApi({
+        model,
+        capabilityJson: textRuntime.capabilityJson,
+      })
+    : null
 
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     let rawText = ""
@@ -1755,26 +2243,14 @@ async function requestStructuredPlanning(detail: TaskDetail): Promise<Structured
       )
       rawText = extractAnthropicText(response.data)
     } else if (provider === "openai-compatible") {
-      const response = await axios.post(
-        `${baseUrl}/v1/chat/completions`,
-        {
-          model,
-          temperature: 0.4,
-          response_format: { type: "json_object" },
-          messages: [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: promptContext },
-          ],
-        },
-        {
-          headers: {
-            Authorization: `Bearer ${apiKey}`,
-            "content-type": "application/json",
-          },
-          timeout: 120000,
-        },
-      )
-      rawText = extractOpenAIText(response.data)
+      rawText = await requestOpenAICompatiblePlanning({
+        baseUrl,
+        apiKey,
+        model,
+        systemPrompt,
+        promptContext,
+        wireApi: openaiWireApi ?? "chat_completions",
+      })
     }
 
     if (!rawText) {
@@ -1793,6 +2269,7 @@ async function requestStructuredPlanning(detail: TaskDetail): Promise<Structured
         provider,
         model,
         baseUrl,
+        wireApi: provider === "anthropic-compatible" || provider === "anthropic-native" ? "messages" : openaiWireApi,
       }
     }
 
@@ -1816,6 +2293,7 @@ async function requestStructuredPlanning(detail: TaskDetail): Promise<Structured
         provider,
         model,
         baseUrl,
+        wireApi: provider === "anthropic-compatible" || provider === "anthropic-native" ? "messages" : openaiWireApi,
       }
     }
 
@@ -1827,6 +2305,7 @@ async function requestStructuredPlanning(detail: TaskDetail): Promise<Structured
       provider,
       model,
       baseUrl,
+      wireApi: provider === "anthropic-compatible" || provider === "anthropic-native" ? "messages" : openaiWireApi,
     }
   }
 
@@ -1838,6 +2317,7 @@ async function requestStructuredPlanning(detail: TaskDetail): Promise<Structured
     provider,
     model,
     baseUrl,
+    wireApi: provider === "anthropic-compatible" || provider === "anthropic-native" ? "messages" : openaiWireApi,
   }
 }
 
@@ -1854,13 +2334,8 @@ async function buildPreparedTaskDetail(detail: TaskDetail): Promise<{
   const sourceScript = detail.script
   const baseDetail = alignDetailScenes(detail, sourceScript)
   const structuredAttempt = await requestStructuredPlanning(baseDetail)
-  if (!structuredAttempt.output) {
-    throw new Error(
-      `TEXT_PLANNING_OUTPUT_UNAVAILABLE: ${structuredAttempt.rawResponse ? "text model response could not be normalized" : "text model returned no usable planning response"}`,
-    )
-  }
-
-  const adopted = applyModelPlanningOutput(baseDetail, structuredAttempt.output)
+  const planningOutput = structuredAttempt.output ?? buildPlanningFallback(baseDetail)
+  const adopted = applyModelPlanningOutput(baseDetail, planningOutput)
 
   return {
     detail: adopted.detail,
@@ -1873,7 +2348,13 @@ async function buildPreparedTaskDetail(detail: TaskDetail): Promise<{
         provider: structuredAttempt.provider,
         model: structuredAttempt.model,
         baseUrl: structuredAttempt.baseUrl,
-        usedFallback: false,
+        wireApi: structuredAttempt.wireApi,
+        usedFallback: !structuredAttempt.output,
+        fallbackReason: structuredAttempt.output
+          ? null
+          : structuredAttempt.rawResponse
+            ? "text model response could not be normalized"
+            : "text model returned no usable planning response",
         parsedResponse: structuredAttempt.parsedResponse,
         selectedPlan: adopted.planned,
       },
@@ -2337,6 +2818,7 @@ export async function createKeyframeBundle(input: {
 }, deps: {
   createGeminiNativeImageArtifact?: typeof createGeminiNativeImageArtifact
   createGatewayImageArtifact?: typeof createGatewayImageArtifact
+  createOpenAIImagesGenerationArtifact?: typeof createOpenAIImagesGenerationArtifact
 } = {}) {
   const dir = ensureTaskDir(input.taskId)
   const keyframeDir = path.join(dir, "keyframes")
@@ -2357,6 +2839,7 @@ export async function createKeyframeBundle(input: {
   const imageRuntime = await resolveImageGenerationRuntime(input.detail, input.model)
   const createGeminiArtifact = deps.createGeminiNativeImageArtifact ?? createGeminiNativeImageArtifact
   const createGatewayArtifact = deps.createGatewayImageArtifact ?? createGatewayImageArtifact
+  const createOpenAIImagesArtifact = deps.createOpenAIImagesGenerationArtifact ?? createOpenAIImagesGenerationArtifact
   const createdFrames = await Promise.all(
     input.detail.scenes.map(async (scene) => {
       throwIfTaskCanceled(input.signal)
@@ -2371,6 +2854,26 @@ export async function createKeyframeBundle(input: {
               prompt,
               signal: input.signal,
             })
+          : imageRuntime.kind === "openai-chat-image"
+            ? await createOpenAIChatCompletionsImageArtifact({
+                baseUrl: imageRuntime.baseUrl,
+                apiKey: imageRuntime.apiKey,
+                model: imageRuntime.providerModelId,
+                prompt,
+                size: "1024x1024",
+                signal: input.signal,
+              })
+          : imageRuntime.kind === "openai-images-generation"
+            ? await createOpenAIImagesArtifact({
+                baseUrl: imageRuntime.baseUrl,
+                apiKey: imageRuntime.apiKey,
+                model: imageRuntime.providerModelId,
+                prompt,
+                size: "1024x1024",
+                quality: imageRuntime.quality,
+                responseFormat: imageRuntime.responseFormat,
+                signal: input.signal,
+              })
           : await createGatewayArtifact({
               model: imageRuntime.model,
               prompt,
@@ -2399,7 +2902,10 @@ export async function createKeyframeBundle(input: {
   const manifest = {
     taskId: input.taskId,
     createdAt,
-    model: imageRuntime.kind === "gemini-native" ? imageRuntime.providerModelId : imageRuntime.model,
+    model:
+      imageRuntime.kind === "gateway"
+        ? imageRuntime.model
+        : imageRuntime.providerModelId,
     aspectRatio,
     sceneCount: frames.length,
     frames,

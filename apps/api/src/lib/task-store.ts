@@ -10,6 +10,7 @@ import {
   normalizeStoryboardScene,
   normalizeTaskDetailRecord,
   readTaskAssets,
+  readTaskBlueprintRecords,
   readTaskDetail,
   readTaskDetails,
   readTaskSummaries,
@@ -537,6 +538,23 @@ function resolveTaskStatusForReview(
 }
 
 function applyDerivedReviewState(detail: TaskDetail, currentStatus: TaskStatus) {
+  if (currentStatus === "queued" && detail.statusDetail === "等待 worker 恢复处理") {
+    return {
+      detail: normalizeTaskDetailRecord({
+        ...detail,
+        reviewStage: null,
+        pendingReviewCount: 0,
+        reviewUpdatedAt: null,
+      }),
+      reviewSummary: {
+        reviewStage: null,
+        pendingReviewCount: 0,
+        reviewUpdatedAt: null,
+      } satisfies ReviewSummary,
+      status: "queued" as const,
+    }
+  }
+
   const reviewSummary = deriveReviewSummary(detail)
   const resolvedReviewStage = resolveReviewStageForTaskStatus(currentStatus, reviewSummary)
   return {
@@ -568,6 +586,10 @@ function inferBaseTaskStatusFromDetail(detail: TaskDetail): TaskStatus {
 
   if (detail.actualDurationSec != null || detail.blueprintStatus === "completed") {
     return "completed"
+  }
+
+  if (statusDetail === "等待 worker 恢复处理") {
+    return "queued"
   }
 
   if (
@@ -610,6 +632,44 @@ function inferProgressPctFromTaskStatus(status: TaskStatus, reviewStage: ReviewS
   }
 
   return 0
+}
+
+function getLatestBlueprintRecord(
+  records: Record<string, Array<{ version: number; status: TaskSummary["blueprintStatus"]; updatedAt: string }>>,
+  taskId: string,
+) {
+  const taskRecords = records[taskId] ?? []
+  return taskRecords.slice().sort((left, right) => left.version - right.version).at(-1) ?? null
+}
+
+function synchronizeDetailBlueprintState(
+  detail: TaskDetail,
+  blueprintRecord: { version: number; status: TaskSummary["blueprintStatus"]; updatedAt: string } | null,
+) {
+  if (!blueprintRecord) {
+    return detail
+  }
+
+  if (
+    detail.blueprintVersion === blueprintRecord.version &&
+    detail.blueprintStatus === blueprintRecord.status &&
+    detail.taskRunConfig.blueprintVersion === blueprintRecord.version &&
+    detail.taskRunConfig.blueprintStatus === blueprintRecord.status
+  ) {
+    return detail
+  }
+
+  return normalizeTaskDetailRecord({
+    ...detail,
+    blueprintVersion: blueprintRecord.version,
+    blueprintStatus: blueprintRecord.status,
+    taskRunConfig: {
+      ...detail.taskRunConfig,
+      blueprintVersion: blueprintRecord.version,
+      blueprintStatus: blueprintRecord.status,
+    },
+    updatedAt: blueprintRecord.updatedAt,
+  })
 }
 
 function isQueuedBeforeWorkerStarts(detail: TaskDetail) {
@@ -658,6 +718,14 @@ function synthesizeTaskSummaryFromDetail(detail: TaskDetail): TaskSummary {
       reviewStage: reviewSummary.reviewStage,
       pendingReviewCount: reviewSummary.pendingReviewCount,
       reviewUpdatedAt: reviewSummary.reviewUpdatedAt,
+      currentStage: detail.currentStage ?? null,
+      currentStageLabel: detail.currentStageLabel ?? null,
+      currentSceneIndex: detail.currentSceneIndex ?? null,
+      currentSceneTotal: detail.currentSceneTotal ?? null,
+      stageStartedAt: detail.stageStartedAt ?? null,
+      lastHeartbeatAt: detail.lastHeartbeatAt ?? null,
+      workerId: detail.workerId ?? null,
+      activeJobId: detail.activeJobId ?? null,
     })
   }
 
@@ -695,27 +763,120 @@ function synthesizeTaskSummaryFromDetail(detail: TaskDetail): TaskSummary {
     reviewStage: derived.reviewSummary.reviewStage,
     pendingReviewCount: derived.reviewSummary.pendingReviewCount,
     reviewUpdatedAt: derived.reviewSummary.reviewUpdatedAt,
+    currentStage: detail.currentStage ?? null,
+    currentStageLabel: detail.currentStageLabel ?? null,
+    currentSceneIndex: detail.currentSceneIndex ?? null,
+    currentSceneTotal: detail.currentSceneTotal ?? null,
+    stageStartedAt: detail.stageStartedAt ?? null,
+    lastHeartbeatAt: detail.lastHeartbeatAt ?? null,
+    workerId: detail.workerId ?? null,
+    activeJobId: detail.activeJobId ?? null,
   })
 }
 
+function hasRuntimeTraceDifference(left: TaskSummary, right: TaskSummary) {
+  return (
+    left.currentStage !== right.currentStage ||
+    left.currentStageLabel !== right.currentStageLabel ||
+    left.currentSceneIndex !== right.currentSceneIndex ||
+    left.currentSceneTotal !== right.currentSceneTotal ||
+    left.stageStartedAt !== right.stageStartedAt ||
+    left.lastHeartbeatAt !== right.lastHeartbeatAt ||
+    left.workerId !== right.workerId ||
+    left.activeJobId !== right.activeJobId
+  )
+}
+
 async function readTaskSummariesWithRepair() {
-  const [tasks, details] = await Promise.all([readTaskSummaries(), readTaskDetails()])
+  const [tasks, details, blueprintRecords] = await Promise.all([readTaskSummaries(), readTaskDetails(), readTaskBlueprintRecords()])
   const taskIds = new Set(tasks.map((task) => task.id))
   const synthesized = Object.values(details)
     .filter((detail) => !taskIds.has(detail.taskId))
     .map((detail) => synthesizeTaskSummaryFromDetail(detail))
 
-  if (synthesized.length === 0) {
-    return tasks
-  }
+  let changed = synthesized.length > 0
+  const nextTasks = [...tasks, ...synthesized].map((task) => {
+    const blueprintRecord = getLatestBlueprintRecord(blueprintRecords, task.id)
+    if (!blueprintRecord) {
+      return task
+    }
 
-  const repaired = [...tasks, ...synthesized].sort((left, right) => {
+    const detail = details[task.id]
+    const synchronizedDetail = detail ? synchronizeDetailBlueprintState(detail, blueprintRecord) : null
+    if (synchronizedDetail && synchronizedDetail !== detail) {
+      details[task.id] = synchronizedDetail
+      changed = true
+    }
+
+    const summaryBase = synchronizedDetail
+      ? synthesizeTaskSummaryFromDetail(synchronizedDetail)
+      : normalizeTaskSummaryRecord({
+          ...task,
+          blueprintVersion: blueprintRecord.version,
+          blueprintStatus: blueprintRecord.status,
+          updatedAt: blueprintRecord.updatedAt,
+        })
+    const shouldAdoptReviewStatus =
+      ["ready_for_review", "approved", "rejected"].includes(blueprintRecord.status) &&
+      task.status !== "running" &&
+      task.status !== "completed" &&
+      task.status !== "failed" &&
+      task.status !== "canceled"
+    const resolvedStatus = shouldAdoptReviewStatus ? summaryBase.status : task.status
+
+    const mergedSummary = normalizeTaskSummaryRecord({
+      ...task,
+      ...summaryBase,
+      id: task.id,
+      title: task.title,
+      projectId: task.projectId,
+      modeId: task.modeId,
+      executionMode: task.executionMode,
+      channelId: task.channelId,
+      terminalPresetId: task.terminalPresetId,
+      renderSpecJson: task.renderSpecJson,
+      targetDurationSec: task.targetDurationSec,
+      generationMode: task.generationMode,
+      audioStrategy: task.audioStrategy,
+      generationRoute: task.generationRoute,
+      routeReason: task.routeReason,
+      planningVersion: task.planningVersion,
+      status: resolvedStatus,
+      progressPct: resolvedStatus === task.status ? task.progressPct : summaryBase.progressPct,
+      retryCount: resolvedStatus === task.status ? task.retryCount : summaryBase.retryCount,
+      createdAt: task.createdAt,
+    })
+
+    if (
+      mergedSummary.blueprintVersion !== task.blueprintVersion ||
+      mergedSummary.blueprintStatus !== task.blueprintStatus ||
+      mergedSummary.status !== task.status ||
+      mergedSummary.reviewStage !== task.reviewStage ||
+      mergedSummary.pendingReviewCount !== task.pendingReviewCount ||
+      mergedSummary.reviewUpdatedAt !== task.reviewUpdatedAt ||
+      hasRuntimeTraceDifference(mergedSummary, task)
+    ) {
+      changed = true
+      return mergedSummary
+    }
+
+    return task
+  })
+
+  const repaired = nextTasks.sort((left, right) => {
     const leftTime = Date.parse(left.createdAt || left.updatedAt)
     const rightTime = Date.parse(right.createdAt || right.updatedAt)
     return rightTime - leftTime
   })
 
-  await writeTaskSummaries(repaired)
+  if (changed) {
+    await writeTaskSummaries(repaired)
+    const changedDetails = Object.values(details)
+    for (const detail of changedDetails) {
+      await upsertTaskDetail(detail)
+    }
+  }
+
   return repaired
 }
 
@@ -815,11 +976,23 @@ export async function getTaskDetail(taskId: string) {
   taskRunConfig.blueprintVersion = task.blueprintVersion
   taskRunConfig.blueprintStatus = task.blueprintStatus
   if (existing) {
-    const normalizedExisting = normalizeTaskDetailRecord(existing)
+    const normalizedExisting = synchronizeDetailBlueprintState(normalizeTaskDetailRecord(existing), {
+      version: task.blueprintVersion,
+      status: task.blueprintStatus,
+      updatedAt: task.updatedAt,
+    })
     const totalSceneDuration = normalizedExisting.scenes.reduce((total, scene) => total + scene.durationSec, 0)
     const hasExpectedDuration = existing.taskRunConfig.targetDurationSec === task.targetDurationSec
     const hasExpectedRoute = existing.taskRunConfig.generationRoute === task.generationRoute
     if (hasExpectedDuration && hasExpectedRoute && totalSceneDuration === task.targetDurationSec) {
+      if (
+        normalizedExisting.blueprintVersion !== existing.blueprintVersion ||
+        normalizedExisting.blueprintStatus !== existing.blueprintStatus ||
+        normalizedExisting.taskRunConfig.blueprintVersion !== existing.taskRunConfig.blueprintVersion ||
+        normalizedExisting.taskRunConfig.blueprintStatus !== existing.taskRunConfig.blueprintStatus
+      ) {
+        await upsertTaskDetail(normalizedExisting)
+      }
       return {
         ...normalizedExisting,
         actualDurationSec: normalizedExisting.actualDurationSec ?? task.actualDurationSec,
@@ -913,6 +1086,7 @@ export async function createTask(input: CreateTaskInput): Promise<{ task: TaskSu
   )
   const resolvedSlots = await resolveEffectiveSlots({
     modeId,
+    taskOverrides: input.modelOverrides,
   })
   taskRunConfig = mapResolvedSlotsToTaskConfig(
     {
@@ -1012,6 +1186,14 @@ export async function cancelTask(taskId: string, queue: {
     failureReason: null,
     statusDetail,
     cancelRequestedAt: canceledAt,
+    currentStage: "canceled",
+    currentStageLabel: "任务已终止",
+    currentSceneIndex: null,
+    currentSceneTotal: null,
+    stageStartedAt: canceledAt,
+    lastHeartbeatAt: canceledAt,
+    workerId: null,
+    activeJobId: null,
     updatedAt: canceledAt,
   })
   const nextDetail = normalizeTaskDetailRecord({
@@ -1019,6 +1201,14 @@ export async function cancelTask(taskId: string, queue: {
     failureReason: null,
     statusDetail,
     cancelRequestedAt: canceledAt,
+    currentStage: "canceled",
+    currentStageLabel: "任务已终止",
+    currentSceneIndex: null,
+    currentSceneTotal: null,
+    stageStartedAt: canceledAt,
+    lastHeartbeatAt: canceledAt,
+    workerId: null,
+    activeJobId: null,
     updatedAt: canceledAt,
   })
 
@@ -1026,6 +1216,64 @@ export async function cancelTask(taskId: string, queue: {
   await upsertTaskDetail(nextDetail)
 
   return {
+    summary: nextSummary,
+    detail: nextDetail,
+  }
+}
+
+export async function updateTaskAudioStrategy(
+  taskId: string,
+  audioStrategy: TaskDetail["taskRunConfig"]["audioStrategy"],
+) {
+  const tasks = await listTasks()
+  const task = tasks.find((entry) => entry.id === taskId)
+  if (!task) {
+    return { ok: false as const, code: "TASK_NOT_FOUND" }
+  }
+
+  const detail = await readTaskDetail(taskId)
+  if (!detail) {
+    return { ok: false as const, code: "TASK_NOT_FOUND" }
+  }
+
+  const lockedByStatus =
+    task.status === "running" ||
+    task.status === "completed" ||
+    task.status === "canceled"
+  const lockedByBlueprint =
+    detail.blueprintStatus === "queued_for_video" ||
+    detail.blueprintStatus === "video_generating" ||
+    detail.blueprintStatus === "completed"
+  const editableReviewStage =
+    detail.taskRunConfig.executionMode === "review_required" &&
+    (detail.blueprintStatus === "ready_for_review" ||
+      detail.blueprintStatus === "approved" ||
+      detail.blueprintStatus === "rejected")
+
+  if (lockedByStatus || lockedByBlueprint || !editableReviewStage) {
+    return { ok: false as const, code: "TASK_AUDIO_STRATEGY_LOCKED" }
+  }
+
+  const updatedAt = now()
+  const nextSummary = normalizeTaskSummaryRecord({
+    ...task,
+    audioStrategy,
+    updatedAt,
+  })
+  const nextDetail = normalizeTaskDetailRecord({
+    ...detail,
+    taskRunConfig: {
+      ...detail.taskRunConfig,
+      audioStrategy,
+    },
+    updatedAt,
+  })
+
+  await writeTaskSummaries(tasks.map((entry) => (entry.id === taskId ? nextSummary : entry)))
+  await upsertTaskDetail(nextDetail)
+
+  return {
+    ok: true as const,
     summary: nextSummary,
     detail: nextDetail,
   }
@@ -1050,6 +1298,14 @@ export async function resumeFailedTask(taskId: string) {
     failureReason: null,
     statusDetail: "等待 worker 恢复处理",
     cancelRequestedAt: null,
+    currentStage: "resume_pending",
+    currentStageLabel: "等待 worker 恢复处理",
+    currentSceneIndex: null,
+    currentSceneTotal: null,
+    stageStartedAt: resumedAt,
+    lastHeartbeatAt: resumedAt,
+    workerId: null,
+    activeJobId: null,
     updatedAt: resumedAt,
   })
   const nextDetail = normalizeTaskDetailRecord({
@@ -1057,6 +1313,14 @@ export async function resumeFailedTask(taskId: string) {
     failureReason: null,
     statusDetail: "等待 worker 恢复处理",
     cancelRequestedAt: null,
+    currentStage: "resume_pending",
+    currentStageLabel: "等待 worker 恢复处理",
+    currentSceneIndex: null,
+    currentSceneTotal: null,
+    stageStartedAt: resumedAt,
+    lastHeartbeatAt: resumedAt,
+    workerId: null,
+    activeJobId: null,
     updatedAt: resumedAt,
   })
 

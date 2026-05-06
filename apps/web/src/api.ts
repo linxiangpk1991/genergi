@@ -211,6 +211,14 @@ export type TaskSummary = {
   reviewStage?: ReviewStageId | null
   pendingReviewCount?: number
   reviewUpdatedAt?: string | null
+  currentStage?: string | null
+  currentStageLabel?: string | null
+  currentSceneIndex?: number | null
+  currentSceneTotal?: number | null
+  stageStartedAt?: string | null
+  lastHeartbeatAt?: string | null
+  workerId?: string | null
+  activeJobId?: string | null
   planning?: TaskPlanningSnapshot
 }
 
@@ -295,7 +303,55 @@ export type TaskDetail = {
   reviewStage?: ReviewStageId | null
   pendingReviewCount?: number
   reviewUpdatedAt?: string | null
+  currentStage?: string | null
+  currentStageLabel?: string | null
+  currentSceneIndex?: number | null
+  currentSceneTotal?: number | null
+  stageStartedAt?: string | null
+  lastHeartbeatAt?: string | null
+  workerId?: string | null
+  activeJobId?: string | null
   planning?: TaskPlanningSnapshot
+}
+
+export type TaskDiagnostics = {
+  taskId: string
+  recoverable: boolean
+  recoveryReason: "failed_task" | "stale_running_task" | "not_recoverable"
+  stale: {
+    isStale: boolean
+    thresholdMs: number
+    ageMs: number | null
+    sourceUpdatedAt: string | null
+  }
+  queue: {
+    available: boolean
+    activeJobIds: string[]
+    waitingJobIds: string[]
+    delayedJobIds: string[]
+    prioritizedJobIds: string[]
+    pausedJobIds: string[]
+    failedJobIds: string[]
+    unavailableReason?: string
+  }
+  runtimeTrace: {
+    currentStage: string | null
+    currentStageLabel: string | null
+    currentSceneIndex: number | null
+    currentSceneTotal: number | null
+    stageStartedAt: string | null
+    lastHeartbeatAt: string | null
+    workerId: string | null
+    activeJobId: string | null
+  }
+  assets: {
+    readyCount: number
+    missingCount: number
+    deliverableReadyCount: number
+    deliverableTotal: number
+    expectedNextAssetType: string | null
+  }
+  operatorMessage: string
 }
 
 export type ReviewMutationResponse = {
@@ -322,7 +378,15 @@ export type TaskResumeResponse = {
     blueprintVersion?: number | null
     stage?: string | null
     resumeFrom?: string | null
+    recoveredJobIds?: string[]
+    activeJobIds?: string[]
   }
+  diagnostics?: TaskDiagnostics
+}
+
+export type TaskAudioStrategyResponse = {
+  task: TaskSummary
+  detail: TaskDetail
 }
 
 export type AssetRecord = {
@@ -638,6 +702,8 @@ export const api = {
   getTaskBlueprints: (taskId: string) => request<{ blueprints: TaskBlueprintRecord[] }>(`/api/tasks/${taskId}/blueprints`),
   getTaskCurrentBlueprint: (taskId: string) =>
     request<BlueprintCurrentResponse>(`/api/tasks/${taskId}/blueprints/current`),
+  getTaskDiagnostics: (taskId: string) =>
+    request<{ diagnostics: TaskDiagnostics }>(`/api/tasks/${taskId}/diagnostics`),
   createTaskBlueprint: (taskId: string, payload: {
     blueprint: PlannedExecutionBlueprint
     keyframeManifestPath?: string
@@ -682,6 +748,11 @@ export const api = {
   resumeFailedTask: (taskId: string) =>
     request<TaskResumeResponse>(`/api/tasks/${taskId}/resume`, {
       method: "POST",
+    }),
+  updateTaskAudioStrategy: (taskId: string, payload: { audioStrategy: AudioStrategy }) =>
+    request<TaskAudioStrategyResponse>(`/api/tasks/${taskId}/audio-strategy`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
     }),
   createTask: (payload: CreateTaskPayload) =>
     request<{ task: TaskSummary }>("/api/tasks", {
