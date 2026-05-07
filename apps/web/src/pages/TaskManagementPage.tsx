@@ -123,6 +123,14 @@ function getConfirmationText(operation: TaskBulkOperation, count: number) {
   return ""
 }
 
+function normalizeConfirmationText(value: string) {
+  return value.replace(/\s+/g, "")
+}
+
+function isConfirmationTextMatch(input: string, required: string) {
+  return normalizeConfirmationText(input) === normalizeConfirmationText(required)
+}
+
 function getTaskStatusPillClass(task: TaskSummary) {
   if (task.archivedAt) {
     return "status-pill status-pill--disabled"
@@ -333,7 +341,10 @@ export function TaskManagementPage() {
   const requiredConfirmation = preview
     ? getConfirmationText(preview.operation, preview.items.filter((item) => item.allowed).length)
     : ""
-  const canSubmitPreview = preview && preview.summary.allowed > 0 && (!requiredConfirmation || confirmationText === requiredConfirmation)
+  const canSubmitPreview =
+    preview &&
+    preview.summary.allowed > 0 &&
+    (!requiredConfirmation || isConfirmationTextMatch(confirmationText, requiredConfirmation))
 
   return (
     <>
@@ -492,6 +503,7 @@ export function TaskManagementPage() {
                   onChange={(event) => setConfirmationText(event.target.value)}
                   onInput={(event) => setConfirmationText(event.currentTarget.value)}
                 />
+                <span className="field-help">可以直接输入“{normalizeConfirmationText(requiredConfirmation)}”，空格不用完全一致。</span>
               </label>
             ) : null}
             <div className="bulk-preview-list">

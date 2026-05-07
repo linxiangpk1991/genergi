@@ -384,6 +384,14 @@ select {
   color: var(--genergi-primary-deep);
 }
 
+.field-help {
+  display: block;
+  margin-top: 6px;
+  color: var(--genergi-muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
 .section-note {
   margin: -4px 0 14px;
   color: var(--genergi-muted);

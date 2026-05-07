@@ -193,7 +193,7 @@ describe("TaskManagementPage", () => {
     const textInputs = Array.from(container.querySelectorAll("input")).filter((input) => input.type !== "checkbox") as HTMLInputElement[]
     const confirmationInput = textInputs.at(-1) as HTMLInputElement
     await act(async () => {
-      confirmationInput.value = "删除 1 个任务"
+      confirmationInput.value = "删除1个任务"
       confirmationInput.dispatchEvent(new Event("input", { bubbles: true }))
     })
     const confirmButton = Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "确认执行")
