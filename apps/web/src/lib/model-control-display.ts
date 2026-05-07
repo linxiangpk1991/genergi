@@ -104,7 +104,7 @@ export function getModelCallProfile(model: Pick<ModelRegistryRecord, "slotType" 
 
   if (model.slotType === "imageModel") {
     const transport = normalizeCapabilityValue(model.capabilityJson.imageTransport)
-    if (transport === "gemini_generate_content") {
+    if (transport === "gemini_generate_content" || model.providerModelId.toLowerCase().includes("gemini")) {
       return IMAGE_TRANSPORT_OPTIONS[1]
     }
     if (transport === "openai_chat_completions") {

@@ -117,6 +117,9 @@ export function normalizeModelCapability(
     } else if (providerModelId.trim().toLowerCase().startsWith("gpt-image")) {
       capability.imageTransport = capability.imageTransport ?? "openai-images-generations"
       capability.endpointStyle = capability.endpointStyle ?? "images-generations"
+    } else if (providerModelId.trim().toLowerCase().includes("gemini")) {
+      capability.imageTransport = capability.imageTransport ?? "gemini-generate-content"
+      capability.endpointStyle = capability.endpointStyle ?? "gemini-generate-content"
     }
   }
 

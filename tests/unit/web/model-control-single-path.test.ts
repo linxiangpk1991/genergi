@@ -267,4 +267,46 @@ describe("model control single-path surfaces", () => {
       expect(text).not.toContain("endpointStyle: chat-completions")
     })
   })
+
+  it("labels older Gemini image records by model id when image transport is missing", async () => {
+    vi.mocked(api.listModelRegistry).mockResolvedValue({
+      models: [
+        {
+          id: "model_gemini_image",
+          modelKey: "gemini-image",
+          providerId: "provider_gemini",
+          providerDisplayName: "Gemini Image",
+          slotType: "imageModel",
+          providerModelId: "gemini-3.1-flash-image-preview",
+          displayName: "Gemini 3.1 Flash Image Preview",
+          lifecycleStatus: "available",
+          capabilityJson: {
+            provider: "openai-compatible",
+          },
+        },
+      ],
+    } as any)
+
+    await act(async () => {
+      root.render(
+        createElement(
+          MemoryRouter,
+          { initialEntries: ["/model-control-center/registry"] },
+          createElement(
+            Routes,
+            null,
+            createElement(Route, { path: "/model-control-center/registry", element: createElement(ModelRegistryPage) }),
+          ),
+        ),
+      )
+    })
+
+    await waitFor(() => {
+      const text = container.textContent ?? ""
+      expect(text).toContain("Gemini 3.1 Flash Image Preview")
+      expect(text).toContain("Gemini Generate Content")
+      expect(text).toContain(":generateContent")
+      expect(text).not.toContain("图片调用方式未标注")
+    })
+  })
 })

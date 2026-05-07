@@ -518,4 +518,53 @@ describe("API model control registry routes", () => {
     expect(listedModel?.capabilityJson.wireApi).toBe("responses")
     expect(listedModel?.capabilityJson.endpointStyle).toBe("responses")
   })
+
+  it("infers Gemini image records as Generate Content when older capability JSON is missing transport", async () => {
+    const { app, cookie } = await createAuthedApp()
+
+    const providerResponse = await app.request("/api/model-control/providers", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: cookie,
+      },
+      body: JSON.stringify({
+        providerKey: "gemini-image",
+        providerType: "openai-compatible",
+        displayName: "Gemini Image",
+        endpointUrl: "https://example.com/v1",
+        authType: "bearer_token",
+        secret: "test-secret",
+      }),
+    })
+    const providerPayload = (await providerResponse.json()) as { provider: { id: string } }
+
+    const modelResponse = await app.request("/api/model-control/models", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: cookie,
+      },
+      body: JSON.stringify({
+        modelKey: "gemini-image-old",
+        providerId: providerPayload.provider.id,
+        slotType: "imageModel",
+        providerModelId: "gemini-3.1-flash-image-preview",
+        displayName: "Gemini 3.1 Flash Image Preview",
+        capabilityJson: {
+          provider: "openai-compatible",
+        },
+      }),
+    })
+
+    expect(modelResponse.status).toBe(201)
+    const modelPayload = (await modelResponse.json()) as {
+      model: {
+        capabilityJson: Record<string, unknown>
+      }
+    }
+
+    expect(modelPayload.model.capabilityJson.imageTransport).toBe("gemini-generate-content")
+    expect(modelPayload.model.capabilityJson.endpointStyle).toBe("gemini-generate-content")
+  })
 })
