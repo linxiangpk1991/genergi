@@ -1178,6 +1178,16 @@ export async function deleteTaskAssetCollection(taskId: string) {
   return { deleted: true as const }
 }
 
+export async function deleteTaskWithAssets(taskId: string) {
+  const assetsResult = await deleteTaskAssetCollection(taskId)
+  if (!assetsResult.deleted) {
+    return assetsResult
+  }
+
+  await deleteTask(taskId)
+  return { deleted: true as const }
+}
+
 export async function createTask(input: CreateTaskInput): Promise<{ task: TaskSummary; taskRunConfig: unknown }> {
   const project = await getProjectById(input.projectId)
   if (!project) {

@@ -223,4 +223,27 @@ describe("API task asset deletion", () => {
     expect(response.status).toBe(404)
     expect(await response.json()).toEqual({ message: "TASK_NOT_FOUND" })
   })
+
+  it("deletes the whole task record with its detail, timeline, and task-owned files", async () => {
+    const { app, cookie, shared, taskId, scriptPath, generatedImagePath, unsafePath, exportDir, sharedAssetsDir } =
+      await createTaskWithAssets()
+    await shared.updateTaskSummary(taskId, (task) => ({ ...task, status: "completed" }))
+
+    const response = await app.request(`/api/tasks/${taskId}`, {
+      method: "DELETE",
+      headers: { Cookie: cookie },
+    })
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ deleted: true, taskId })
+    expect((await shared.readTaskSummaries()).some((task) => task.id === taskId)).toBe(false)
+    expect(await shared.readTaskDetail(taskId)).toBeNull()
+    expect(await shared.readTaskTimeline(taskId)).toEqual([])
+    expect(await shared.readTaskAssets(taskId)).toEqual([])
+    await expect(stat(scriptPath)).rejects.toThrow()
+    await expect(stat(generatedImagePath)).rejects.toThrow()
+    await expect(stat(exportDir)).rejects.toThrow()
+    await expect(stat(sharedAssetsDir)).rejects.toThrow()
+    expect(await readFile(unsafePath, "utf8")).toBe("keep me")
+  })
 })

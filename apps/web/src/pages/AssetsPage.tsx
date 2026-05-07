@@ -723,6 +723,7 @@ export function AssetsPage() {
   const [resumingTaskId, setResumingTaskId] = useState("")
   const [deletingAssetId, setDeletingAssetId] = useState("")
   const [deletingTaskAssets, setDeletingTaskAssets] = useState(false)
+  const [deletingTask, setDeletingTask] = useState(false)
   const [retryingDeliveryAction, setRetryingDeliveryAction] = useState("")
 
   function syncTaskContext(taskId?: string, replace = true) {
@@ -942,6 +943,46 @@ export function AssetsPage() {
       setActionError(error instanceof Error ? error.message : "清空任务素材失败")
     } finally {
       setDeletingTaskAssets(false)
+    }
+  }
+
+  async function handleDeleteTask() {
+    if (!selectedTask) {
+      return
+    }
+
+    if (!canDeleteTaskAssets(selectedTask)) {
+      setActionError(getAssetDeleteLockLabel(selectedTask))
+      return
+    }
+
+    if (!window.confirm(`确认删除整个任务「${selectedTask.title}」吗？\n\n这会同时删除任务记录、素材文件、排查记录和时间线，无法从页面里恢复。`)) {
+      return
+    }
+
+    const deletedTask = selectedTask
+    setActionError("")
+    setActionSuccess("")
+    setDeletingTask(true)
+    try {
+      await api.deleteTask(deletedTask.id)
+      setTasks((current) => current.filter((task) => task.id !== deletedTask.id))
+      setAssets([])
+      setTimeline([])
+      setDiagnostics(null)
+      setDiagnosticsError("")
+      setDeliveryWorkbench(null)
+      setDeliveryError("")
+      setPreviewAsset(null)
+      setPreviewText("")
+      setPreviewError("")
+      setPreviewLoading(false)
+      syncTaskContext("")
+      setActionSuccess(`已删除任务：${deletedTask.title}`)
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "删除任务失败")
+    } finally {
+      setDeletingTask(false)
     }
   }
 
@@ -1249,20 +1290,24 @@ export function AssetsPage() {
       <div className="workspace-grid">
         <section className="card card--main">
           <label className="field-label">任务选择</label>
-          <select
-            className="input"
-            value={selectedTaskId}
-            onChange={(event) => {
-              setSelectedTaskId(event.target.value)
-              syncTaskContext(event.target.value, false)
-            }}
-          >
-            {tasks.map((task) => (
-              <option key={task.id} value={task.id}>
-                {task.title} · {task.targetDurationSec}s · {task.planning?.generationRouteLabel ?? "待预判"}
-              </option>
-            ))}
-          </select>
+          {tasks.length ? (
+            <select
+              className="input"
+              value={selectedTaskId}
+              onChange={(event) => {
+                setSelectedTaskId(event.target.value)
+                syncTaskContext(event.target.value, false)
+              }}
+            >
+              {tasks.map((task) => (
+                <option key={task.id} value={task.id}>
+                  {task.title} · {task.targetDurationSec}s · {task.planning?.generationRouteLabel ?? "待预判"}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <div className="empty-inline">请先从任务列表中选择一条任务。</div>
+          )}
 
           <div className="planning-summary-card">
             <strong>{selectedTask?.planning?.generationRouteLabel ?? "待预判"}</strong>
@@ -1505,12 +1550,21 @@ export function AssetsPage() {
             <div className="topbar-actions" style={{ justifyContent: "flex-start", marginBottom: 16 }}>
               <button
                 className="ghost-button"
-                disabled={assetDeleteLocked || deletingTaskAssets}
+                disabled={assetDeleteLocked || deletingTaskAssets || deletingTask}
                 onClick={() => void handleDeleteTaskAssets()}
                 title={assetDeleteLocked ? assetDeleteLockLabel : undefined}
                 type="button"
               >
                 {assetDeleteLocked ? "素材清理已锁定" : deletingTaskAssets ? "清理中..." : "清空当前任务素材（全部）"}
+              </button>
+              <button
+                className="ghost-button"
+                disabled={assetDeleteLocked || deletingTaskAssets || deletingTask}
+                onClick={() => void handleDeleteTask()}
+                title={assetDeleteLocked ? assetDeleteLockLabel : undefined}
+                type="button"
+              >
+                {assetDeleteLocked ? "任务删除已锁定" : deletingTask ? "删除中..." : "删除当前任务"}
               </button>
             </div>
           ) : null}

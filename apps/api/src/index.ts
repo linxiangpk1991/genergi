@@ -45,6 +45,7 @@ import {
   deleteTask,
   deleteTaskAsset,
   deleteTaskAssetCollection,
+  deleteTaskWithAssets,
   getTaskAsset,
   getTaskAssets,
   getTaskDetail,
@@ -2293,6 +2294,24 @@ app.get("/api/tasks/:taskId/blueprints/current", async (c) => {
 app.get("/api/tasks/:taskId/assets", async (c) => {
   const assets = await getTaskAssets(c.req.param("taskId"))
   return c.json({ assets })
+})
+
+app.delete("/api/tasks/:taskId", async (c) => {
+  const taskId = c.req.param("taskId")
+  const result = await deleteTaskWithAssets(taskId)
+  if (!result.deleted) {
+    if (result.reason === "TASK_NOT_FOUND") {
+      return c.json({ message: result.reason }, 404)
+    }
+    if (result.reason === "TASK_ASSET_TASK_ID_FORBIDDEN" || result.reason === "ASSET_DELETE_PATH_FORBIDDEN") {
+      return c.json({ message: result.reason }, 403)
+    }
+    if (result.reason === "TASK_ASSETS_LOCKED") {
+      return c.json({ message: result.reason, status: result.status }, 409)
+    }
+    return c.json({ message: result.reason }, 400)
+  }
+  return c.json({ deleted: true, taskId })
 })
 
 app.delete("/api/tasks/:taskId/assets", async (c) => {

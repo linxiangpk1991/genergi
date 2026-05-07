@@ -15,6 +15,7 @@ vi.mock("../../../apps/web/src/api", async () => {
       runtimeStatus: vi.fn(),
       getTaskAssets: vi.fn(),
       getTaskTimeline: vi.fn(),
+      deleteTask: vi.fn(),
       deleteTaskAsset: vi.fn(),
       deleteTaskAssets: vi.fn(),
     },
@@ -140,6 +141,7 @@ describe("AssetsPage inline preview", () => {
       ],
     } as any)
     vi.mocked(api.deleteTaskAsset).mockResolvedValue({ deleted: true, taskId: "task_assets", assetId: "task_assets_source" } as any)
+    vi.mocked(api.deleteTask).mockResolvedValue({ deleted: true, taskId: "task_assets" } as any)
 
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: true,
@@ -296,6 +298,42 @@ describe("AssetsPage inline preview", () => {
       expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining("全部素材文件"))
       expect(vi.mocked(api.deleteTaskAssets)).toHaveBeenCalledWith("task_assets")
       expect(container.textContent ?? "").toContain("已清空任务素材：Asset task")
+    })
+  })
+
+  it("lets operators delete the whole current task from asset center", async () => {
+    await act(async () => {
+      root.render(
+        createElement(
+          MemoryRouter,
+          { initialEntries: ["/asset-center?taskId=task_assets"] },
+          createElement(
+            Routes,
+            null,
+            createElement(Route, { path: "/asset-center", element: createElement(AssetsPage) }),
+          ),
+        ),
+      )
+    })
+
+    await waitFor(() => {
+      expect(container.textContent ?? "").toContain("Asset task")
+    })
+
+    const deleteTaskButton = Array.from(container.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("删除当前任务"),
+    )
+    expect(deleteTaskButton).toBeTruthy()
+
+    await act(async () => {
+      deleteTaskButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }))
+    })
+
+    await waitFor(() => {
+      expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining("删除整个任务"))
+      expect(vi.mocked(api.deleteTask)).toHaveBeenCalledWith("task_assets")
+      expect(container.textContent ?? "").toContain("已删除任务：Asset task")
+      expect(container.textContent ?? "").toContain("请先从任务列表中选择一条任务。")
     })
   })
 

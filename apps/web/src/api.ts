@@ -874,6 +874,10 @@ export const api = {
       method: "POST",
     }),
   getTaskAssets: (taskId: string) => request<{ assets: AssetRecord[] }>(`/api/tasks/${taskId}/assets`),
+  deleteTask: (taskId: string) =>
+    request<{ deleted: boolean; taskId: string }>(`/api/tasks/${taskId}`, {
+      method: "DELETE",
+    }),
   deleteTaskAssets: (taskId: string) =>
     request<{ deleted: boolean; taskId: string }>(`/api/tasks/${taskId}/assets`, {
       method: "DELETE",
