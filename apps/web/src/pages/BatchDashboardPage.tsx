@@ -5,6 +5,7 @@ import {
   buildAssetCenterUrl,
   buildTaskReviewUrl,
   getAudioStrategyLabel,
+  normalizeOperatorCopy,
   type RuntimeStatusResponse,
   type TaskSummary,
 } from "../api"
@@ -18,12 +19,12 @@ type TaskAction = {
 }
 
 const productionLanes: Array<{ id: ProductionLaneId; label: string; description: string }> = [
-  { id: "queued", label: "queued", description: "已入队，等待 worker 接单" },
-  { id: "running", label: "running", description: "正在生成，重点看阶段和心跳" },
-  { id: "waiting_review", label: "waiting_review", description: "蓝图待审、已通过待继续或已驳回待处理" },
-  { id: "blocked", label: "blocked", description: "心跳过期、取消中或需要人工保守恢复" },
-  { id: "failed", label: "failed", description: "生成链失败，先分类再处理" },
-  { id: "completed", label: "completed", description: "已完成，进入交付验收" },
+  { id: "queued", label: "排队中", description: "已提交，等待生成服务接单" },
+  { id: "running", label: "生成中", description: "正在生成，重点看当前步骤和最近进展" },
+  { id: "waiting_review", label: "待审核", description: "生成方案待审、已通过待继续或已驳回待处理" },
+  { id: "blocked", label: "卡住", description: "长时间无进展、取消中或需要人工恢复" },
+  { id: "failed", label: "失败", description: "生成失败，先看原因再处理" },
+  { id: "completed", label: "已完成", description: "已完成，进入交付检查" },
 ]
 
 function formatDurationDelta(task: TaskSummary) {
@@ -38,19 +39,19 @@ function formatDurationDelta(task: TaskSummary) {
 
 function getTaskExceptionLabel(task: TaskSummary) {
   if (task.statusDetail?.trim()) {
-    return task.statusDetail.trim()
+    return normalizeOperatorCopy(task.statusDetail.trim())
   }
 
   if (task.executionMode === "review_required" && task.blueprintStatus === "ready_for_review") {
-    return `蓝图待审 v${task.blueprintVersion}`
+    return `生成方案待审 v${task.blueprintVersion}`
   }
 
   if (task.executionMode === "review_required" && task.blueprintStatus === "approved") {
-    return `蓝图已通过，待继续执行 v${task.blueprintVersion}`
+    return `生成方案已通过，待继续生成 v${task.blueprintVersion}`
   }
 
   if (task.executionMode === "review_required" && task.blueprintStatus === "rejected") {
-    return `蓝图已驳回，待重建 v${task.blueprintVersion}`
+    return `生成方案已驳回，待重做 v${task.blueprintVersion}`
   }
 
   if (task.status === "failed") {
@@ -61,7 +62,7 @@ function getTaskExceptionLabel(task: TaskSummary) {
     return `时长偏差 ${formatDurationDelta(task)}`
   }
 
-  return "查看当前任务上下文"
+  return "查看当前任务详情"
 }
 
 function canCancelTask(task: TaskSummary) {
@@ -173,11 +174,11 @@ function getTaskEta(task: TaskSummary) {
   }
 
   if (lane === "blocked") {
-    return isStaleRunningTask(task) ? "已卡住" : "等待人工动作"
+    return isStaleRunningTask(task) ? "已卡住" : "等待人工处理"
   }
 
   if (lane === "waiting_review") {
-    return "等待人工动作"
+    return "等待人工处理"
   }
 
   if (task.progressPct <= 0 || task.progressPct >= 100) {
@@ -196,9 +197,7 @@ function getTaskEta(task: TaskSummary) {
 
 function getTaskHeartbeat(task: TaskSummary) {
   const heartbeat = formatRelativeAge(task.lastHeartbeatAt ?? task.updatedAt)
-  const worker = task.workerId ? ` · ${task.workerId}` : ""
-  const job = task.activeJobId ? ` · ${task.activeJobId}` : ""
-  return `心跳 ${heartbeat}${worker}${job}`
+  return `最近进展 ${heartbeat}`
 }
 
 function getFailureCategory(task: TaskSummary) {
@@ -227,47 +226,87 @@ function getFailureCategory(task: TaskSummary) {
   return "execution_error"
 }
 
+function getFailureCategoryLabel(category: string) {
+  switch (category) {
+    case "provider_timeout":
+      return "接入方超时"
+    case "provider_quota":
+      return "额度或限流"
+    case "asset_missing":
+      return "缺少文件"
+    case "blueprint_contract":
+      return "方案内容问题"
+    case "execution_error":
+      return "生成异常"
+    default:
+      return "正常"
+  }
+}
+
+function getStatusDisplayLabel(status: TaskSummary["status"]) {
+  switch (status) {
+    case "queued":
+      return "排队中"
+    case "running":
+      return "生成中"
+    case "waiting_review":
+      return "待审核"
+    case "blocked":
+      return "卡住"
+    case "failed":
+      return "失败"
+    case "completed":
+      return "已完成"
+    case "canceling":
+      return "终止中"
+    case "canceled":
+      return "已终止"
+    default:
+      return status
+  }
+}
+
 function getRecommendedAction(task: TaskSummary) {
   const lane = getTaskLane(task)
   const failureCategory = getFailureCategory(task)
 
   if (lane === "blocked") {
-    return "保守继续：先打开资产排查，再恢复卡住任务"
+    return "先查看素材和失败原因，再恢复卡住任务"
   }
 
   if (lane === "waiting_review") {
     if (task.blueprintStatus === "approved") {
-      return "进入任务审核，确认版本后继续完整生成"
+      return "进入任务审核，确认版本后继续生成正片"
     }
 
     if (task.blueprintStatus === "rejected") {
-      return "进入任务审核，查看驳回原因后重建蓝图"
+      return "进入任务审核，查看驳回原因后重做方案"
     }
 
-    return "进入任务审核，先通过或驳回蓝图"
+    return "进入任务审核，先通过或驳回生成方案"
   }
 
   if (lane === "failed") {
     if (failureCategory === "provider_timeout" || failureCategory === "provider_quota") {
-      return "先打开资产排查，确认已产出，再恢复运行"
+      return "先查看素材文件，确认已有内容，再恢复生成"
     }
 
     if (failureCategory === "asset_missing") {
-      return "先打开资产中心，确认缺失文件后再决定是否恢复"
+      return "先查看素材与交付，确认缺失文件后再决定是否恢复"
     }
 
-    return "先看失败详情和资产缺口，再恢复运行"
+    return "先看失败详情和缺失文件，再恢复生成"
   }
 
   if (lane === "queued") {
-    return "观察 worker 容量，避免重复提交"
+    return "观察生成服务容量，避免重复提交"
   }
 
   if (lane === "running") {
-    return "观察心跳和阶段进度，超过 10 分钟无心跳再处理"
+    return "观察最近进展和当前步骤，超过 10 分钟无更新再处理"
   }
 
-  return "进入资产中心做交付验收"
+  return "进入素材与交付做发布前检查"
 }
 
 function canResumeTask(task: TaskSummary) {
@@ -287,7 +326,7 @@ function getTaskActions(task: TaskSummary) {
 
   if (task.executionMode === "review_required" && task.blueprintStatus === "approved") {
     actions.push({
-      label: `继续完整生成 · v${task.blueprintVersion}`,
+      label: `继续生成正片 · v${task.blueprintVersion}`,
       to: buildTaskReviewUrl(task),
       tone: "primary",
     })
@@ -295,7 +334,7 @@ function getTaskActions(task: TaskSummary) {
 
   if (task.executionMode === "review_required" && task.blueprintStatus === "rejected") {
     actions.push({
-      label: `查看驳回蓝图 · v${task.blueprintVersion}`,
+      label: `查看驳回原因 · v${task.blueprintVersion}`,
       to: buildTaskReviewUrl(task),
       tone: "primary",
     })
@@ -307,7 +346,7 @@ function getTaskActions(task: TaskSummary) {
     actions.length === 0
   ) {
     actions.push({
-      label: task.status === "failed" ? "查看失败任务资产" : "打开任务资产",
+      label: task.status === "failed" ? "查看失败素材" : "查看素材文件",
       to: buildAssetCenterUrl(task.id),
       tone: actions.length === 0 ? "primary" : "ghost",
     })
@@ -450,10 +489,10 @@ export function BatchDashboardPage() {
     const redisStatus = runtime?.redis.status ?? "degraded"
     const isDegraded = workerStatus !== "healthy" || redisStatus !== "healthy" || metrics.blockedCount > 0
     const recommendation = isDegraded
-      ? "先处理 blocked / failed，再追加新任务；不要重复提交同一母本。"
+      ? "先处理卡住和失败的任务，再追加新任务；不要重复提交同一条原始文案。"
       : metrics.queuedCount > metrics.runningCount + 2
-        ? "排队数偏高，暂停追加大批量任务，等 worker 消化。"
-        : "容量可接受，可以继续观察 queued 到 running 的流转。"
+        ? "排队数偏高，先暂停追加大批量任务，等生成服务消化。"
+        : "容量可接受，可以继续观察排队任务是否开始生成。"
 
     return {
       status: isDegraded ? "需关注" : "可用",
@@ -482,18 +521,18 @@ export function BatchDashboardPage() {
     <>
       <header className="topbar">
         <div>
-          <div className="eyebrow">Batch Command Center</div>
+          <div className="eyebrow">生产看板</div>
           <h1>生产调度台</h1>
-          <p>按生产 lane 观察真实任务、卡住信号、ETA、心跳和容量风险；动作入口只做安全调度，不改 BullMQ 内核。</p>
+          <p>集中查看任务排队、生成、审核、失败和卡住情况，先处理异常，再追加新任务。</p>
         </div>
         <div className="topbar-actions">
           <span className="pill">任务总数 {tasks.length}</span>
-          <span className="pill pill--accent">运行中 {metrics.runningCount}</span>
-          <span className="pill">阻塞 {metrics.blockedCount}</span>
+          <span className="pill pill--accent">生成中 {metrics.runningCount}</span>
+          <span className="pill">卡住 {metrics.blockedCount}</span>
         </div>
       </header>
 
-      <section className="production-lane-strip" aria-label="生产 lane">
+      <section className="production-lane-strip" aria-label="任务状态分组">
         {laneStats.map((lane) => (
           <article key={lane.id} className={lane.id === "blocked" && lane.count > 0 ? "production-lane production-lane--blocked" : "production-lane"}>
             <div className="production-lane__header">
@@ -520,15 +559,15 @@ export function BatchDashboardPage() {
           ) : null}
           <div className="metric-grid">
             <div className="metric-card"><span>排队中</span><strong>{metrics.queuedCount}</strong></div>
-            <div className="metric-card"><span>运行中</span><strong>{metrics.runningCount}</strong></div>
+            <div className="metric-card"><span>生成中</span><strong>{metrics.runningCount}</strong></div>
             <div className="metric-card"><span>卡住任务</span><strong>{metrics.blockedCount}</strong></div>
             <div className="metric-card"><span>已完成</span><strong>{metrics.completedCount}</strong></div>
             <div className="metric-card"><span>异常任务</span><strong>{metrics.failedCount}</strong></div>
             <div className="metric-card"><span>保真优先</span><strong>{metrics.sourceLockedCount}</strong></div>
             <div className="metric-card"><span>已有成片</span><strong>{metrics.durationReadyCount}</strong></div>
             <div className="metric-card"><span>时长达标</span><strong>{metrics.inToleranceCount}</strong></div>
-            <div className="metric-card"><span>待审蓝图</span><strong>{metrics.blueprintReviewCount}</strong></div>
-            <div className="metric-card"><span>待继续执行</span><strong>{metrics.blueprintResumeCount}</strong></div>
+            <div className="metric-card"><span>待审方案</span><strong>{metrics.blueprintReviewCount}</strong></div>
+            <div className="metric-card"><span>待继续生成</span><strong>{metrics.blueprintResumeCount}</strong></div>
           </div>
         </section>
 
@@ -562,14 +601,14 @@ export function BatchDashboardPage() {
                     <div className="task-item__title-row">
                       <strong>{task.title}</strong>
                       <span className={lane === "blocked" || lane === "failed" ? "pill pill--sm pill--danger" : "pill pill--sm"}>
-                        {lane}
+                        {productionLanes.find((item) => item.id === lane)?.label ?? lane}
                       </span>
                       {isFocused ? <span className="pill pill--sm pill--accent">当前定位</span> : null}
                     </div>
                     <span>
                       {task.targetDurationSec}s · {task.planning?.generationRouteLabel ?? "待预判"} · {task.planning?.generationPreferenceLabel ?? "待接入"} · {getAudioStrategyLabel(task.audioStrategy)}
                       {task.executionMode === "review_required" && task.blueprintStatus === "ready_for_review"
-                        ? ` · 待审蓝图(v${task.blueprintVersion})`
+                        ? ` · 待审方案(v${task.blueprintVersion})`
                         : task.executionMode === "review_required" && task.blueprintStatus === "approved"
                           ? ` · 已通过待继续(v${task.blueprintVersion})`
                           : task.executionMode === "review_required" && task.blueprintStatus === "rejected"
@@ -580,14 +619,14 @@ export function BatchDashboardPage() {
                   </div>
                   <div>
                     <strong>{task.progressPct}%</strong>
-                    <span>{task.statusDetail ?? `重试 ${task.retryCount} · ${task.actualDurationSec ? `偏差 ${formatDurationDelta(task)}` : "等待成片"}`}</span>
+                    <span>{normalizeOperatorCopy(task.statusDetail) || `重试 ${task.retryCount} · ${task.actualDurationSec ? `偏差 ${formatDurationDelta(task)}` : "等待成片"}`}</span>
                     <span className="task-item__subline">预计剩余 {getTaskEta(task)}</span>
                   </div>
                   <div>
                     <strong>¥{task.estimatedCostCny.toFixed(2)}</strong>
-                    <span>{task.status} · {task.channelId} · {getTaskExceptionLabel(task)}</span>
+                    <span>{getStatusDisplayLabel(task.status)} · {task.channelId} · {getTaskExceptionLabel(task)}</span>
                     <span className="task-item__subline">
-                      {getTaskHeartbeat(task)} · 失败分类 {failureCategory}
+                      {getTaskHeartbeat(task)} · 问题类型 {getFailureCategoryLabel(failureCategory)}
                     </span>
                   </div>
                   <div className="task-item__actions">
@@ -621,7 +660,7 @@ export function BatchDashboardPage() {
                           ? "恢复中..."
                           : isStaleRunningTask(task)
                             ? "恢复卡住任务"
-                            : "恢复运行"}
+                            : "恢复生成"}
                       </button>
                     ) : null}
                   </div>
@@ -633,15 +672,15 @@ export function BatchDashboardPage() {
 
         <aside className="side-panel">
           <section className="card card--compact">
-            <h3>Worker / Redis 容量</h3>
+            <h3>生成服务容量</h3>
             <div className="capacity-summary">
               <strong>{capacityState.status}</strong>
-              <span>运行 {metrics.runningCount} / 排队 {metrics.queuedCount} / 阻塞 {metrics.blockedCount}</span>
+              <span>生成中 {metrics.runningCount} / 排队 {metrics.queuedCount} / 卡住 {metrics.blockedCount}</span>
               <p>{capacityState.recommendation}</p>
             </div>
             <div className="task-list compact-list">
-              <div className="task-item"><strong>{runtime?.worker.name ?? "worker"}</strong><span>{runtime?.worker.status ?? "unknown"} · {runtime?.worker.message ?? "N/A"}</span></div>
-              <div className="task-item"><strong>{runtime?.redis.name ?? "redis"}</strong><span>{runtime?.redis.status ?? "unknown"} · {runtime?.redis.message ?? "N/A"}</span></div>
+              <div className="task-item"><strong>生成服务</strong><span>{runtime?.worker.status ?? "unknown"} · {normalizeOperatorCopy(runtime?.worker.message) || "N/A"}</span></div>
+              <div className="task-item"><strong>排队服务</strong><span>{runtime?.redis.status ?? "unknown"} · {normalizeOperatorCopy(runtime?.redis.message) || "N/A"}</span></div>
             </div>
           </section>
 
@@ -653,13 +692,13 @@ export function BatchDashboardPage() {
                   <div key={task.id} className="task-item task-item--blocked">
                     <div className="task-item__title-row">
                       <strong>{task.title}</strong>
-                      <span className="pill pill--sm pill--danger">blocked</span>
+                      <span className="pill pill--sm pill--danger">卡住</span>
                     </div>
                     <span>{getTaskHeartbeat(task)} · 预计剩余 {getTaskEta(task)}</span>
                     <span className="task-item__subline">{getRecommendedAction(task)}</span>
                     <div className="task-item__actions">
                       <Link className="ghost-button" to={buildAssetCenterUrl(task.id)}>
-                        打开资产排查
+                        查看素材文件
                       </Link>
                       {canResumeTask(task) ? (
                         <button
@@ -677,7 +716,7 @@ export function BatchDashboardPage() {
               ) : (
                 <div className="task-item">
                   <strong>暂无卡住任务</strong>
-                  <span>当前没有心跳超过 10 分钟的运行任务。</span>
+                  <span>当前没有超过 10 分钟无进展的生成任务。</span>
                 </div>
               )}
             </div>
@@ -686,9 +725,9 @@ export function BatchDashboardPage() {
           <section className="card card--compact">
             <h3>系统健康</h3>
             <div className="task-list compact-list">
-              <div className="task-item"><strong>{runtime?.worker.name ?? "worker"}</strong><span>{runtime?.worker.status ?? "unknown"} · {runtime?.worker.message ?? "N/A"}</span></div>
-              <div className="task-item"><strong>{runtime?.api.name ?? "api"}</strong><span>{runtime?.api.status ?? "unknown"} · {runtime?.api.message ?? "N/A"}</span></div>
-              <div className="task-item"><strong>{runtime?.redis.name ?? "redis"}</strong><span>{runtime?.redis.status ?? "unknown"} · {runtime?.redis.message ?? "N/A"}</span></div>
+              <div className="task-item"><strong>生成服务</strong><span>{runtime?.worker.status ?? "unknown"} · {normalizeOperatorCopy(runtime?.worker.message) || "N/A"}</span></div>
+              <div className="task-item"><strong>后台接口</strong><span>{runtime?.api.status ?? "unknown"} · {normalizeOperatorCopy(runtime?.api.message) || "N/A"}</span></div>
+              <div className="task-item"><strong>排队服务</strong><span>{runtime?.redis.status ?? "unknown"} · {normalizeOperatorCopy(runtime?.redis.message) || "N/A"}</span></div>
             </div>
           </section>
 
@@ -696,15 +735,15 @@ export function BatchDashboardPage() {
             <h3>内容结构分布</h3>
             <div className="task-list compact-list">
               <div className="task-item"><strong>多段成片</strong><span>{tasks.filter((task) => task.generationRoute === "multi_scene").length} 条任务</span></div>
-              <div className="task-item"><strong>忠于原脚本</strong><span>{tasks.filter((task) => task.generationMode === "user_locked").length} 条任务</span></div>
-              <div className="task-item"><strong>历史增强任务</strong><span>{metrics.legacyEnhancedCount} 条任务</span></div>
+              <div className="task-item"><strong>忠于原始文案</strong><span>{tasks.filter((task) => task.generationMode === "user_locked").length} 条任务</span></div>
+              <div className="task-item"><strong>系统整理文案</strong><span>{metrics.legacyEnhancedCount} 条任务</span></div>
             </div>
           </section>
 
           <section className="card card--compact">
             <h3>需要复核</h3>
             <div className="muted" style={{ marginBottom: 10 }}>
-              共 {reviewQueue.length} 条任务正在等待人工确认、重新审阅或资产排查。
+              共 {reviewQueue.length} 条任务正在等待人工确认、重新审核或素材排查。
             </div>
             <div className="task-list compact-list">
               {reviewQueue.length ? (

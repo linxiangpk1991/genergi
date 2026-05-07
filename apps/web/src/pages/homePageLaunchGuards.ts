@@ -134,22 +134,22 @@ export function getLaunchReadiness(input: {
     },
     {
       key: "script",
-      label: "内容母本",
+      label: "原始文案",
       status: script ? "ready" : "risk",
-      detail: script ? "已填写内容母本。" : "必须补齐内容母本，否则无法稳定生成正确视频。",
+      detail: script ? "已填写原始文案。" : "必须补齐原始文案，否则无法稳定生成正确视频。",
     },
   ]
 
   if (script) {
     checks.push({
       key: "script_length",
-      label: "母本长度",
+      label: "文案长度",
       status: script.length < 80 ? "suggestion" : script.length > 1600 ? "suggestion" : "ready",
       detail:
         script.length < 80
-          ? "母本偏短，建议补充产品、目标人群、场景、卖点和 CTA。"
+          ? "文案偏短，建议补充产品、目标人群、场景、卖点和 CTA。"
           : script.length > 1600
-            ? "母本较长，系统会压缩为短视频表达，建议保留核心卖点和禁忌点。"
+            ? "文案较长，系统会压缩为短视频表达，建议保留核心卖点和禁忌点。"
             : "长度适合进入短视频规划。",
     })
     checks.push({
@@ -170,11 +170,11 @@ export function getLaunchReadiness(input: {
     })
     checks.push({
       key: "technical_prompt",
-      label: "技术提示词",
+      label: "技术说明",
       status: hasPattern(script, TECH_PROMPT_PATTERNS) ? "suggestion" : "ready",
       detail: hasPattern(script, TECH_PROMPT_PATTERNS)
-        ? "母本里疑似包含模型技术提示词，建议改成业务内容和画面约束。"
-        : "未发现明显技术提示词混入。",
+        ? "文案里疑似包含模型参数或技术指令，建议改成业务内容和画面约束。"
+        : "未发现明显技术指令混入。",
     })
     checks.push({
       key: "language",
@@ -182,8 +182,8 @@ export function getLaunchReadiness(input: {
       status: input.outputLanguage === "English" && hasMostlyChinese(script) ? "suggestion" : "ready",
       detail:
         input.outputLanguage === "English" && hasMostlyChinese(script)
-          ? "当前输出为 English，中文母本建议写清品牌名、专名和不可翻译词。"
-          : "输出语言与母本风险可控。",
+          ? "当前输出为 English，中文文案建议写清品牌名、专名和不可翻译词。"
+          : "输出语言与文案风险可控。",
     })
   }
 
@@ -193,7 +193,7 @@ export function getLaunchReadiness(input: {
       ? "必须补齐关键输入后再提交。"
       : level === "suggestion"
         ? "可提交，但建议补充关键信息以减少重跑。"
-        : "母本质量可进入审核优先队列。"
+        : "文案质量可进入审核优先队列。"
 
   return { level, summary, checks }
 }
@@ -233,7 +233,7 @@ export function findSimilarLaunchTasks(input: {
       const reason = exactishTitle
         ? "任务名称相似"
         : scriptOverlap >= 0.6 && nearDuration
-          ? "母本内容和目标时长相似"
+          ? "原始文案和目标时长相似"
         : sameProject && sameDuration
           ? "同项目和同目标时长"
           : "配置相似"
@@ -266,7 +266,7 @@ export function estimateLaunchProduction(targetDurationSec: number): LaunchProdu
     sceneCount,
     routeLabel,
     estimatedBudgetCny,
-    budgetLabel: `预计 ${sceneCount} 个 scene，预算约 ¥${estimatedBudgetCny.toFixed(2)}`,
+    budgetLabel: `预计 ${sceneCount} 段，预算约 ¥${estimatedBudgetCny.toFixed(2)}`,
   }
 }
 

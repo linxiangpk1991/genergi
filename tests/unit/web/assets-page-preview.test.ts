@@ -104,7 +104,7 @@ describe("AssetsPage inline preview", () => {
           id: "task_assets_source",
           taskId: "task_assets",
           assetType: "source_script",
-          label: "任务母本",
+          label: "任务原始文案",
           status: "ready",
           path: "/tmp/source-script.txt",
           createdAt: "2026-04-20T00:00:00.000Z",
@@ -199,7 +199,7 @@ describe("AssetsPage inline preview", () => {
             id: "task_assets_source",
             taskId: "task_assets",
             assetType: "source_script",
-            label: "任务母本",
+            label: "任务原始文案",
             status: "ready",
             path: "/tmp/source-script.txt",
             createdAt: "2026-04-20T00:00:00.000Z",
@@ -236,11 +236,11 @@ describe("AssetsPage inline preview", () => {
     })
 
     await waitFor(() => {
-      expect(container.textContent ?? "").toContain("任务母本")
+      expect(container.textContent ?? "").toContain("任务原始文案")
     })
 
     const deleteButton = Array.from(container.querySelectorAll("button")).find((button) =>
-      button.textContent?.includes("删除资产"),
+      button.textContent?.includes("删除素材"),
     )
     expect(deleteButton).toBeTruthy()
 
@@ -249,9 +249,9 @@ describe("AssetsPage inline preview", () => {
     })
 
     await waitFor(() => {
-      expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining("任务母本"))
+      expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining("任务原始文案"))
       expect(vi.mocked(api.deleteTaskAsset)).toHaveBeenCalledWith("task_assets", "task_assets_source")
-      expect(container.textContent ?? "").toContain("已删除资产：任务母本")
+      expect(container.textContent ?? "").toContain("已删除素材：任务原始文案")
       expect(container.textContent ?? "").toContain("当前暂无记录")
     })
   })
@@ -313,7 +313,7 @@ describe("AssetsPage inline preview", () => {
       const text = container.textContent ?? ""
       expect(text).toContain("失败原因")
       expect(text).toContain("Scene 2 video generation timeout")
-      expect(text).toContain("分镜路由依据")
+      expect(text).toContain("视频结构依据")
       expect(text).toContain("target duration 30s exceeds the current model single-shot limit of 8s")
     })
   })
@@ -337,8 +337,8 @@ describe("AssetsPage inline preview", () => {
 
     await waitFor(() => {
       const text = container.textContent ?? ""
-      expect(text).toContain("资产列表加载失败")
-      expect(text).toContain("资产加载失败")
+      expect(text).toContain("素材列表加载失败")
+      expect(text).toContain("素材加载失败")
       expect(text).toContain("请先处理上方错误")
       expect(text).not.toContain("当前暂无记录 · 等待任务继续产出")
     })

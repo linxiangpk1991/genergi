@@ -19,7 +19,7 @@ import {
 } from "./homePageLaunchGuards";
 
 function getCreateTaskNotice(task: TaskSummary) {
-  return `任务“${task.title}”已提交到审核优先队列。系统会先生成蓝图和关键画面，进入待审核后再继续完整成片。`;
+  return `任务“${task.title}”已提交。系统会先准备生成方案和关键画面，等你审核通过后再继续生成正片。`;
 }
 
 type FloatingToastState = {
@@ -111,13 +111,13 @@ function getRenderSpec(terminalPresetId: TerminalPresetId): RenderSpec {
 const AUDIO_STRATEGY_OPTIONS = [
   {
     id: "tts_only" as const,
-    label: "TTS 主导",
-    description: "保持当前稳定链路，使用 TTS 旁白作为最终主音轨。",
+    label: "系统配音",
+    description: "使用稳定的系统配音作为主音轨，适合大多数任务。",
   },
   {
     id: "native_plus_tts_ducked" as const,
-    label: "原生音频 + TTS 混音",
-    description: "保留 Veo 原生环境音，再叠加 TTS 旁白，增强临场感。",
+    label: "保留环境音 + 系统配音",
+    description: "保留视频自带环境音，再叠加旁白，画面会更有现场感。",
   },
 ]
 
@@ -128,13 +128,13 @@ const SUBTITLE_STRATEGY_OPTIONS: Array<{
 }> = [
   {
     id: "tts_aligned",
-    label: "TTS 对齐字幕",
-    description: "沿用当前稳定链路，字幕直接跟随 TTS 旁白时间轴。",
+    label: "跟随配音生成字幕",
+    description: "字幕直接跟随系统配音时间轴，稳定、速度快。",
   },
   {
     id: "whisper_cpp",
-    label: "Whisper 字幕",
-    description: "用本地 ASR 从最终音频识别字幕，适合后续替换非 TTS 音轨。",
+    label: "从成片音频识别字幕",
+    description: "从最终音频里识别字幕，适合后续保留更多原生声音的任务。",
   },
 ]
 
@@ -175,7 +175,7 @@ function getTaskStatusLabel(task: TaskSummary) {
     return "待审核"
   }
   if (task.status === "running" || task.status === "queued") {
-    return "运行中"
+    return "生成中"
   }
   if (task.status === "failed") {
     return "异常"
@@ -343,7 +343,7 @@ export function HomePage() {
     routePreview === "单条成片"
       ? "这次内容会优先保持一条完整表达，减少切换感。"
       : "这次内容会按多段组织后再合成为完整成片，优先保证表达稳定。";
-  const planningSummary = "系统只会按母本保真优先做结构化分镜，不会主动改变主题、人物、场景和内容领域。";
+  const planningSummary = "系统会尽量保留原始文案的主题、人物、场景和内容方向，只做视频结构整理。";
   const taskStatusSummary = useMemo(() => {
     const runningCount = tasks.filter(
       (task) => task.status === "running",
@@ -403,7 +403,7 @@ export function HomePage() {
       nextErrors.title = "请填写任务名称"
     }
     if (!script.trim()) {
-      nextErrors.script = "请填写内容母本"
+      nextErrors.script = "请填写原始文案"
     }
     setFieldErrors(nextErrors)
     if (nextErrors.title || nextErrors.script) {
@@ -412,7 +412,7 @@ export function HomePage() {
       setError("请先补齐必填字段")
       setFloatingToast({
         tone: "error",
-        message: "请先补齐任务名称和内容母本",
+        message: "请先补齐任务名称和原始文案",
       })
       focusFirstInvalidField(nextErrors)
       return false
@@ -485,7 +485,7 @@ export function HomePage() {
       const infrastructureError = /queue|redis|worker/i.test(errorMessage) || errorMessage.includes("队列")
       const friendlyMessage =
         infrastructureError
-          ? "队列暂不可用，请先去生产看板检查 worker / redis 后再提交。"
+          ? "任务排队服务暂不可用，请先去生产看板检查生成服务后再提交。"
           : errorMessage
       setError(friendlyMessage);
       setFloatingToast({
@@ -508,7 +508,7 @@ export function HomePage() {
           <div className="eyebrow">GENERGI Command Center</div>
           <h1>新建生产任务</h1>
           <p>
-            按 3 步完成发车：先确认项目与输出，再写清内容母本，最后做启动前确认。提交后先进入审核优先队列。
+            按 3 步新建任务：先确认项目和输出规格，再写清原始文案，最后检查风险后提交。提交后会先进入审核。
           </p>
         </div>
         <div className="topbar-actions">
@@ -523,7 +523,7 @@ export function HomePage() {
       {draftRestored ? (
         <section className="planning-summary-card launch-draft-card">
           <strong>已恢复未提交草稿</strong>
-          <span>标题、内容母本和输出设置已从本机草稿恢复。提交成功后会自动清理草稿。</span>
+          <span>标题、原始文案和输出设置已从本机草稿恢复。提交成功后会自动清理草稿。</span>
           <button className="ghost-button ghost-button--compact" onClick={() => setDraftRestored(false)} type="button">
             知道了
           </button>
@@ -531,23 +531,23 @@ export function HomePage() {
       ) : null}
       {notice && createdTask ? (
         <section className="planning-summary-card launch-success-card">
-          <strong>审核优先路径</strong>
+          <strong>已提交，等待审核</strong>
           <span>{notice}</span>
           <div className="launch-path">
             <span>已入队</span>
-            <span>蓝图/关键画面生成中</span>
+            <span>生成方案和关键画面准备中</span>
             <span>进入任务审核</span>
             <span>审核通过后继续成片</span>
           </div>
           <div className="planning-summary-tags">
             <a className="primary-button" href={buildBatchDashboardUrl(createdTask.id)}>
-              生产看板跟进
+              去看板跟进
             </a>
             <a className="ghost-button" href={buildTaskReviewUrl(createdTask)}>
               进入任务审核
             </a>
             <a className="ghost-button" href={buildAssetCenterUrl(createdTask.id)}>
-              打开任务资产
+              查看素材文件
             </a>
           </div>
           <span>项目、时长、音频和字幕策略已保留，方便继续创建同类任务。</span>
@@ -561,7 +561,7 @@ export function HomePage() {
               <span className="launch-step__index">1</span>
               <div>
                 <h2>项目与输出</h2>
-                <p className="section-note">先确认这条任务属于哪个项目、默认渠道和最终画幅，避免后续蓝图归错项目。</p>
+              <p className="section-note">先确认这条任务属于哪个项目、默认渠道和最终画幅，避免后续内容归错项目。</p>
               </div>
             </div>
 
@@ -583,7 +583,7 @@ export function HomePage() {
             <div className="launch-project-preview">
               <strong>{selectedProject?.name ?? "未选择项目"}</strong>
               <span>默认渠道：{channelLabel} · 输出语言：English · 模式：high_quality</span>
-              <span>{selectedProject?.brandDirection ?? "暂无品牌方向"} · {(selectedProject?.reusableStyleConstraints ?? []).join(" / ") || "暂无复用约束"}</span>
+              <span>{selectedProject?.brandDirection ?? "暂无品牌方向"} · {(selectedProject?.reusableStyleConstraints ?? []).join(" / ") || "暂无固定风格要求"}</span>
             </div>
 
             <label className="field-label" htmlFor="launch-terminal">终端预设</label>
@@ -627,9 +627,9 @@ export function HomePage() {
             <div className="launch-step__header">
               <span className="launch-step__index">2</span>
               <div>
-                <h2>内容母本</h2>
+                <h2>原始文案</h2>
                 <p className="section-note" id="launch-script-help">
-                  写业务内容、卖点、目标人群、场景和 CTA，不需要手动写技术提示词。
+                  写清业务内容、卖点、目标人群、使用场景和 CTA，不需要写模型指令。
                 </p>
               </div>
             </div>
@@ -652,7 +652,7 @@ export function HomePage() {
             />
             {fieldErrors.title ? <div className="field-error" id="launch-title-error">{fieldErrors.title}</div> : null}
 
-            <div className="template-row" aria-label="内容母本模板">
+            <div className="template-row" aria-label="原始文案模板">
               {SCRIPT_TEMPLATES.map((template) => (
                 <button className="ghost-button ghost-button--compact" key={template.id} onClick={() => applyScriptTemplate(template.body)} type="button">
                   套用{template.label}
@@ -660,7 +660,7 @@ export function HomePage() {
               ))}
             </div>
 
-            <label className="field-label" htmlFor="launch-script">内容母本</label>
+            <label className="field-label" htmlFor="launch-script">原始文案</label>
             <textarea
               aria-describedby={fieldErrors.script ? "launch-script-error launch-script-help" : "launch-script-help"}
               aria-invalid={Boolean(fieldErrors.script)}
@@ -674,13 +674,13 @@ export function HomePage() {
                 setScript(event.target.value)
                 setFieldErrors((current) => ({ ...current, script: undefined }))
               }}
-              placeholder="直接写你要表达的内容、卖点、情绪和转化目标，不需要手动写技术提示词。"
+              placeholder="直接写要表达的内容、卖点、情绪和转化目标，不需要写技术参数或模型指令。"
             />
             {fieldErrors.script ? <div className="field-error" id="launch-script-error">{fieldErrors.script}</div> : null}
 
             <div className={`launch-preflight launch-preflight--${launchReadiness.level}`}>
               <div>
-                <strong>内容母本预检</strong>
+                <strong>原始文案检查</strong>
                 <span>{launchReadiness.summary}</span>
               </div>
               <span className="pill pill--sm">{readyCheckCount}/{launchReadiness.checks.length} 已通过</span>
@@ -700,28 +700,28 @@ export function HomePage() {
               <span className="launch-step__index">3</span>
               <div>
                 <h2>启动前确认</h2>
-                <p className="section-note">确认冻结配置、预算粗估、相似任务和审核优先路径，再提交到队列。</p>
+                <p className="section-note">确认输出设置、预算粗估、相似任务和审核流程，再提交排队。</p>
               </div>
             </div>
 
             <div className="planning-strip launch-confirm-strip">
               <div className="planning-chip">
-                <span className="planning-chip__label">成片组织</span>
+                <span className="planning-chip__label">视频结构</span>
                 <strong>{productionEstimate.routeLabel}</strong>
                 <span>{routePreviewDetail}</span>
               </div>
               <div className="planning-chip">
-                <span className="planning-chip__label">场景与预算粗估</span>
+                <span className="planning-chip__label">镜头数与预算粗估</span>
                 <strong>{productionEstimate.budgetLabel}</strong>
-                <span>目标 {targetDurationSec}s · 审核优先 · 预算仅用于提交前判断。</span>
+                <span>目标 {targetDurationSec}s · 先审后生成 · 预算仅用于提交前判断。</span>
               </div>
               <div className="planning-chip">
                 <span className="planning-chip__label">默认渠道</span>
                 <strong>{channelLabel}</strong>
-                <span>输出 English，交付文案会按默认渠道进入资产验收。</span>
+                <span>输出 English，发布文案会按默认渠道进入交付检查。</span>
               </div>
               <div className="planning-chip">
-                <span className="planning-chip__label">审核节点</span>
+                <span className="planning-chip__label">审核流程</span>
                 <strong>{selectedExecutionModeLabel}</strong>
                 <span>{planningSummary}</span>
               </div>
@@ -744,7 +744,7 @@ export function HomePage() {
             )}
 
             <details className="advanced-settings" open={advancedOpen} onToggle={(event) => setAdvancedOpen(event.currentTarget.open)}>
-              <summary>高级设置：音频、字幕和冻结配置</summary>
+              <summary>更多设置：音频、字幕和本次任务固定配置</summary>
               <div className="mode-grid" role="radiogroup" aria-label="音频策略">
                 {AUDIO_STRATEGY_OPTIONS.map((option) => (
                   <button
@@ -757,7 +757,7 @@ export function HomePage() {
                   >
                     <div className="mode-title">{option.label}</div>
                     <span className={option.id === "tts_only" ? "status-text--success" : "status-text--warning"}>
-                      {option.id === "tts_only" ? "稳定推荐" : "实验链路"}
+                      {option.id === "tts_only" ? "稳定推荐" : "谨慎使用"}
                     </span>
                     <div className="mode-description">{option.description}</div>
                   </button>
@@ -775,7 +775,7 @@ export function HomePage() {
                   >
                     <div className="mode-title">{option.label}</div>
                     <span className={option.id === "tts_aligned" ? "status-text--success" : "status-text--warning"}>
-                      {option.id === "tts_aligned" ? "稳定推荐" : "适合非 TTS 音轨"}
+                      {option.id === "tts_aligned" ? "稳定推荐" : "适合保留原声"}
                     </span>
                     <div className="mode-description">{option.description}</div>
                   </button>
@@ -803,7 +803,7 @@ export function HomePage() {
             <div className="metric-row"><span>成片组织</span><strong>{productionEstimate.routeLabel}</strong></div>
             <div className="metric-row"><span>预计预算</span><strong>¥{productionEstimate.estimatedBudgetCny.toFixed(2)}</strong></div>
             <div className="metric-row"><span>音频/字幕</span><strong>{selectedAudioStrategy.label} / {getSubtitleStrategyLabel(subtitleStrategy)}</strong></div>
-            <div className="metric-row"><span>审核链路</span><strong>蓝图与关键画面先审</strong></div>
+            <div className="metric-row"><span>审核流程</span><strong>生成方案与关键画面先审</strong></div>
             <div className="launch-risk-summary">
               <span>风险 {riskyCheckCount}</span>
               <span>建议 {suggestionCheckCount}</span>
@@ -814,7 +814,7 @@ export function HomePage() {
           <section className="card card--compact">
             <h3>我的最近任务</h3>
             <div className="planning-summary-tags compact-list">
-              <span className="pill pill--sm">运行中 {taskStatusSummary.runningCount}</span>
+              <span className="pill pill--sm">生成中 {taskStatusSummary.runningCount}</span>
               <span className="pill pill--sm">已完成 {taskStatusSummary.completedCount}</span>
               {taskStatusSummary.failedCount ? <span className="pill pill--sm pill--danger">异常 {taskStatusSummary.failedCount}</span> : null}
             </div>
@@ -850,7 +850,7 @@ export function HomePage() {
           清空草稿
         </button>
         <button className="primary-button" disabled={submitting} form="launch-form" type="submit">
-          {submitting ? "正在启动…" : "提交并生成审核蓝图"}
+          {submitting ? "正在提交…" : "提交，先生成审核内容"}
         </button>
       </div>
 
@@ -859,8 +859,8 @@ export function HomePage() {
           <section aria-labelledby="launch-confirm-title" className="modal-card launch-confirm-modal" role="dialog" aria-modal="true">
             <div className="section-header">
               <div>
-                <div className="eyebrow">Launch Preflight</div>
-                <h2 id="launch-confirm-title">确认入队并冻结配置</h2>
+                <div className="eyebrow">提交前确认</div>
+                <h2 id="launch-confirm-title">确认提交并固定本次设置</h2>
               </div>
               <button className="ghost-button ghost-button--compact" onClick={() => setConfirmOpen(false)} type="button">关闭</button>
             </div>
@@ -868,18 +868,18 @@ export function HomePage() {
               <div className="metric-row"><span>任务名称</span><strong>{title}</strong></div>
               <div className="metric-row"><span>项目 / 渠道</span><strong>{selectedProject?.name ?? "未选择"} / {channelLabel}</strong></div>
               <div className="metric-row"><span>时长 / 画幅</span><strong>{targetDurationSec}s / {renderSpec.aspectRatio}</strong></div>
-              <div className="metric-row"><span>场景 / 预算</span><strong>{productionEstimate.sceneCount} 个 scene / ¥{productionEstimate.estimatedBudgetCny.toFixed(2)}</strong></div>
-              <div className="metric-row"><span>执行方式</span><strong>审核优先</strong></div>
+              <div className="metric-row"><span>镜头 / 预算</span><strong>{productionEstimate.sceneCount} 段 / ¥{productionEstimate.estimatedBudgetCny.toFixed(2)}</strong></div>
+              <div className="metric-row"><span>生成流程</span><strong>先审后生成</strong></div>
               <div className="metric-row"><span>相似任务</span><strong>{similarTasks.matches.length ? `${similarTasks.matches.length} 条需确认` : "未发现明显重复"}</strong></div>
             </div>
             <div className={`launch-preflight launch-preflight--${launchReadiness.level}`}>
               <strong>{launchReadiness.summary}</strong>
-              <span>提交后会冻结当前项目、时长、终端、音频和字幕策略。</span>
+              <span>提交后会固定当前项目、时长、画幅、音频和字幕设置。</span>
             </div>
             <div className="action-row">
               <button className="ghost-button" onClick={() => setConfirmOpen(false)} type="button">返回修改</button>
               <button className="primary-button" disabled={submitting} onClick={() => void handleCreateTask()} type="button">
-                {submitting ? "正在启动…" : "确认入队并冻结配置"}
+                {submitting ? "正在提交…" : "确认提交"}
               </button>
             </div>
           </section>
@@ -896,7 +896,7 @@ export function HomePage() {
           }
           role={floatingToast.tone === "success" ? "status" : "alert"}
         >
-          <strong>{floatingToast.tone === "success" ? "已提交到审核优先队列" : "提交失败"}</strong>
+          <strong>{floatingToast.tone === "success" ? "已提交，等待审核" : "提交失败"}</strong>
           <span>{floatingToast.message}</span>
         </div>
       ) : null}

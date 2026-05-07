@@ -40,9 +40,9 @@ function ModelControlNav() {
 
   const navItems = [
     { to: "/model-control-center", label: "总览" },
-    { to: "/model-control-center/providers", label: "Provider 管理" },
-    { to: "/model-control-center/registry", label: "Model Registry" },
-    { to: "/model-control-center/defaults", label: "Defaults Center" },
+    { to: "/model-control-center/providers", label: "接入方管理" },
+    { to: "/model-control-center/registry", label: "模型列表" },
+    { to: "/model-control-center/defaults", label: "默认模型" },
   ]
 
   return (
@@ -85,7 +85,7 @@ export function ModelProvidersPage() {
       const response = await api.listModelProviders()
       setProviders(response.providers)
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Provider 列表加载失败")
+      setError(err instanceof Error ? err.message : "接入方列表加载失败")
     } finally {
       setLoading(false)
     }
@@ -117,7 +117,7 @@ export function ModelProvidersPage() {
 
   async function handleSubmit() {
     if (!form.providerKey.trim() || !form.displayName.trim() || !form.providerType.trim() || !form.authType.trim()) {
-      setError("请先填写 providerKey、显示名、Provider 类型和鉴权方式")
+      setError("请先填写内部 Key、显示名称、接入类型和鉴权方式")
       return
     }
 
@@ -138,7 +138,7 @@ export function ModelProvidersPage() {
         }
 
         await api.updateModelProvider(editingProviderId, payload)
-        setNotice("Provider 已更新。若改了 endpoint 或密钥，请重新校验。")
+        setNotice("接入方已更新。若改了接口地址或密钥，请重新校验。")
       } else {
         await api.createModelProvider({
           providerKey: form.providerKey.trim(),
@@ -149,13 +149,13 @@ export function ModelProvidersPage() {
           secret: form.secret?.trim() || undefined,
           status: form.status,
         })
-        setNotice("Provider 已创建。下一步请执行真实校验。")
+        setNotice("接入方已创建。下一步请执行真实校验。")
       }
 
       resetForm()
       await loadProviders()
     } catch (err) {
-      setError(err instanceof Error ? err.message : "保存 Provider 失败")
+      setError(err instanceof Error ? err.message : "保存接入方失败")
     } finally {
       setSaving(false)
     }
@@ -168,10 +168,10 @@ export function ModelProvidersPage() {
 
     try {
       await api.validateModelProvider(providerId)
-      setNotice("已触发真实 Provider 校验。结果请看状态和错误字段。")
+      setNotice("已开始真实校验。结果请看状态和错误信息。")
       await loadProviders()
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Provider 校验失败")
+      setError(err instanceof Error ? err.message : "接入方校验失败")
     } finally {
       setActionProviderId(null)
     }
@@ -185,10 +185,10 @@ export function ModelProvidersPage() {
     try {
       const nextStatus: ModelControlLifecycleStatus = provider.status === "disabled" ? "draft" : "disabled"
       await api.updateModelProvider(provider.id, { status: nextStatus })
-      setNotice(nextStatus === "disabled" ? "Provider 已标记为禁用。" : "Provider 已恢复为草稿状态，请重新校验。")
+      setNotice(nextStatus === "disabled" ? "接入方已禁用。" : "接入方已恢复为草稿状态，请重新校验。")
       await loadProviders()
     } catch (err) {
-      setError(err instanceof Error ? err.message : "更新 Provider 状态失败")
+      setError(err instanceof Error ? err.message : "更新接入方状态失败")
     } finally {
       setActionProviderId(null)
     }
@@ -199,14 +199,14 @@ export function ModelProvidersPage() {
       <section className="card">
         <div className="section-header section-header--stack">
           <div>
-            <div className="eyebrow">Provider Registry</div>
-            <h2>Provider 管理</h2>
+            <div className="eyebrow">接入方管理</div>
+            <h2>接入方管理</h2>
             <p className="section-note">
-              管理连接目标、鉴权方式和密钥状态。
+              管理模型服务的接口地址、鉴权方式和密钥状态。
             </p>
           </div>
           <div className="planning-summary-tags">
-            <span className="pill pill--sm">真实 endpoint</span>
+            <span className="pill pill--sm">真实接口地址</span>
             <span className="pill pill--sm">真实校验</span>
             <span className="pill pill--sm">掩码展示</span>
           </div>
@@ -221,7 +221,7 @@ export function ModelProvidersPage() {
       <div className="model-control-grid">
         <section className="card">
           <div className="section-header">
-            <h3>{editingProviderId ? "编辑 Provider" : "新增 Provider"}</h3>
+            <h3>{editingProviderId ? "编辑接入方" : "新增接入方"}</h3>
             {editingProviderId ? (
               <button
                 className="ghost-button ghost-button--compact"
@@ -237,7 +237,7 @@ export function ModelProvidersPage() {
             <div className="form-section">
               <div className="form-section__title">
                 <strong>身份标识</strong>
-                <span>先定义内部 key 和运营可读名称，后续所有默认值和任务快照都基于这里的标识。</span>
+                <span>先定义内部 Key 和运营能看懂的名称，后续默认模型和历史任务都会引用这里。</span>
               </div>
 
               <label>
@@ -264,12 +264,12 @@ export function ModelProvidersPage() {
             <div className="form-section">
               <div className="form-section__title">
                 <strong>连接方式</strong>
-                <span>这里决定 Provider 的协议族、鉴权方法和实际接入目标。</span>
+                <span>这里决定接入协议、鉴权方法和实际接口地址。</span>
               </div>
 
               <div className="modal-grid">
                 <label>
-                  <span className="field-label">Provider 类型</span>
+                  <span className="field-label">接入类型</span>
                   <select
                     className="input"
                     value={form.providerType}
@@ -300,7 +300,7 @@ export function ModelProvidersPage() {
               </div>
 
               <label>
-                <span className="field-label">Endpoint URL</span>
+                <span className="field-label">接口地址</span>
                 <input
                   className="input"
                   value={form.endpointUrl}
@@ -346,7 +346,7 @@ export function ModelProvidersPage() {
             </div>
 
             <div className="form-note">
-              密钥不会回显；留空表示保持当前值。
+              密钥不会回显；编辑时留空表示保持当前值。
             </div>
 
             <div className="action-row">
@@ -354,7 +354,7 @@ export function ModelProvidersPage() {
                 清空表单
               </button>
               <button className="primary-button" disabled={saving} onClick={handleSubmit} type="button">
-                {saving ? "提交中..." : editingProviderId ? "保存 Provider" : "创建 Provider"}
+                {saving ? "提交中..." : editingProviderId ? "保存接入方" : "创建接入方"}
               </button>
             </div>
           </div>
@@ -362,20 +362,20 @@ export function ModelProvidersPage() {
 
         <section className="card">
           <div className="section-header">
-            <h3>已登记 Provider</h3>
-            <span className="muted">仅展示真实后端返回的数据</span>
+            <h3>已登记接入方</h3>
+            <span className="muted">仅展示系统真实保存的数据</span>
           </div>
 
           {loading ? (
-            <div className="empty-inline">正在加载 Provider 列表...</div>
+            <div className="empty-inline">正在加载接入方列表...</div>
           ) : providers.length ? (
             <div className="table-wrap">
               <table className="user-table">
                 <thead>
                   <tr>
-                    <th>Provider</th>
+                    <th>接入方</th>
                     <th>类型 / 鉴权</th>
-                    <th>Endpoint</th>
+                    <th>接口地址</th>
                     <th>密钥状态</th>
                     <th>校验状态</th>
                     <th>操作</th>
@@ -419,7 +419,7 @@ export function ModelProvidersPage() {
                             onClick={() => void handleValidate(provider.id)}
                             type="button"
                           >
-                            {actionProviderId === provider.id ? "处理中..." : "执行校验"}
+                            {actionProviderId === provider.id ? "处理中..." : "开始校验"}
                           </button>
                           <button
                             className="ghost-button ghost-button--compact"
@@ -437,7 +437,7 @@ export function ModelProvidersPage() {
               </table>
             </div>
           ) : (
-            <div className="empty-inline">还没有 Provider 记录。先创建真实连接目标，再去登记模型。</div>
+            <div className="empty-inline">还没有接入方记录。先创建真实连接目标，再去登记模型。</div>
           )}
         </section>
       </div>

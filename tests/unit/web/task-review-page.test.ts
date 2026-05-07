@@ -468,16 +468,16 @@ describe("TaskReviewPage", () => {
     })
 
     const text = container.textContent ?? ""
-    expect(text).toContain("Blueprint v3")
+    expect(text).toContain("方案 v3")
     expect(text).toContain("Show the clutter, reveal the product")
     expect(text).toContain("Hook frame with cable clutter")
     expect(text).toContain("Vertical product ad frame, cable clutter on desk")
     expect(text).toContain("Slow push-in over the clutter before the product appears")
     expect(text).toContain("1080 × 1920")
     expect(text).toContain("9:16")
-    expect(text).toContain("母本原文")
+    expect(text).toContain("原始文案")
     expect(text).toContain("Original source script.")
-    expect(text).toContain("一致性契约")
+    expect(text).toContain("一致性要求")
     expect(text).toContain("主体：Single hero product")
   })
 
@@ -630,12 +630,12 @@ describe("TaskReviewPage", () => {
       button.textContent?.includes("审核通过") || button.textContent?.includes("已审核通过"),
     )
     const resumeButton = Array.from(container.querySelectorAll("button")).find((button) =>
-      button.textContent?.includes("继续完整视频生成"),
+      button.textContent?.includes("继续生成正片"),
     )
 
     expect(approveButton).toBeTruthy()
     expect((approveButton as HTMLButtonElement | undefined)?.disabled).toBe(true)
-    expect(container.textContent ?? "").toContain("approved")
+    expect(container.textContent ?? "").toContain("已通过")
     expect((resumeButton as HTMLButtonElement | undefined)?.disabled).toBe(false)
   })
 
@@ -655,7 +655,7 @@ describe("TaskReviewPage", () => {
     })
 
     await waitFor(() => {
-      expect(container.textContent ?? "").toContain("ready_for_review")
+      expect(container.textContent ?? "").toContain("待审核")
     })
 
     const approveButton = Array.from(container.querySelectorAll("button")).find((button) =>
@@ -677,12 +677,12 @@ describe("TaskReviewPage", () => {
 
     await waitFor(() => {
       const text = container.textContent ?? ""
-      expect(text).toContain("approved")
-      expect(text).not.toContain("ready_for_review")
+      expect(text).toContain("方案状态已通过")
+      expect(text).not.toContain("方案状态待审核")
     })
 
     const resumeButton = Array.from(container.querySelectorAll("button")).find((button) =>
-      button.textContent?.includes("继续完整视频生成"),
+      button.textContent?.includes("继续生成正片"),
     )
     expect(resumeButton).toBeTruthy()
     expect(resumeButton?.getAttribute("disabled")).toBeNull()
@@ -1331,11 +1331,11 @@ describe("TaskReviewPage", () => {
     })
 
     await waitFor(() => {
-      expect(container.textContent ?? "").toContain("TTS 主导")
+      expect(container.textContent ?? "").toContain("系统配音")
     })
 
     const audioButton = Array.from(container.querySelectorAll("button")).find((button) =>
-      button.textContent?.includes("原生音频 + TTS 混音"),
+      button.textContent?.includes("保留环境音 + 系统配音"),
     )
     expect(audioButton).toBeTruthy()
 
@@ -1654,3 +1654,4 @@ describe("TaskReviewPage", () => {
     })
   })
 })
+

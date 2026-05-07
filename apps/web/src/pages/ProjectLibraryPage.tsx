@@ -30,7 +30,7 @@ export function ProjectLibraryPage() {
         if (!active) {
           return
         }
-        setError(loadError instanceof Error ? loadError.message : "项目审核库加载失败")
+        setError(loadError instanceof Error ? loadError.message : "项目模板库加载失败")
       }
     }
 
@@ -57,7 +57,7 @@ export function ProjectLibraryPage() {
       })
       .catch((loadError) => {
         if (active) {
-          setError(loadError instanceof Error ? loadError.message : "项目审核库加载失败")
+          setError(loadError instanceof Error ? loadError.message : "项目模板库加载失败")
         }
       })
 
@@ -75,9 +75,9 @@ export function ProjectLibraryPage() {
     <div className="workspace-page">
       <header className="topbar">
         <div>
-          <div className="eyebrow">Project Blueprint Library</div>
-          <h1>项目审核库</h1>
-          <p>这里只沉淀审核通过版本，方便后续任务继承同样的风格、提示词和关键画面逻辑。</p>
+          <div className="eyebrow">项目模板库</div>
+          <h1>项目模板库</h1>
+          <p>这里只沉淀审核通过的方案，方便后续任务复用同样的风格、生成说明和关键画面规则。</p>
         </div>
       </header>
 
@@ -109,7 +109,7 @@ export function ProjectLibraryPage() {
                 <div className="section-header">
                   <div>
                     <h3>{`任务 ${entry.taskId}`}</h3>
-                    <span className="muted">{`Blueprint v${entry.blueprintVersion}`}</span>
+                    <span className="muted">{`方案 v${entry.blueprintVersion}`}</span>
                   </div>
                   <span className="pill pill--sm">{entry.approvedAt}</span>
                 </div>
@@ -124,7 +124,7 @@ export function ProjectLibraryPage() {
               </section>
             ))
           ) : (
-            <div className="empty-inline">当前项目还没有审核通过的蓝图沉淀。</div>
+            <div className="empty-inline">当前项目还没有审核通过的方案沉淀。</div>
           )}
         </div>
       </section>

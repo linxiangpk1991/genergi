@@ -34,9 +34,9 @@ function ModelControlNav() {
 
   const navItems = [
     { to: "/model-control-center", label: "总览" },
-    { to: "/model-control-center/providers", label: "Provider 管理" },
-    { to: "/model-control-center/registry", label: "Model Registry" },
-    { to: "/model-control-center/defaults", label: "Defaults Center" },
+    { to: "/model-control-center/providers", label: "接入方管理" },
+    { to: "/model-control-center/registry", label: "模型列表" },
+    { to: "/model-control-center/defaults", label: "默认模型" },
   ]
 
   return (
@@ -129,7 +129,7 @@ export function ModelControlCenterPage() {
   )
 
   if (loading) {
-    return <div className="empty-state">模型控制中心正在加载真实配置...</div>
+    return <div className="empty-state">模型设置正在加载真实配置...</div>
   }
 
   return (
@@ -137,15 +137,15 @@ export function ModelControlCenterPage() {
       <section className="card">
         <div className="section-header section-header--stack">
           <div>
-            <div className="eyebrow">Model Control Plane</div>
-            <h2>模型控制中心</h2>
+            <div className="eyebrow">模型设置</div>
+            <h2>模型设置</h2>
             <p className="section-note">
-              管理 Provider、Model、全局默认值和任务创建默认值。
+              管理模型接入方、可用模型、新任务默认使用的模型。
             </p>
           </div>
           <div className="planning-summary-tags">
-            <span className="pill pill--sm">四个运行时槽位</span>
-            <span className="pill pill--sm">冻结快照 &gt; 任务创建默认值 &gt; 全局默认</span>
+            <span className="pill pill--sm">文案 / 图片 / 视频 / 配音</span>
+            <span className="pill pill--sm">任务设置 &gt; 新任务默认 &gt; 全局兜底</span>
           </div>
         </div>
 
@@ -153,16 +153,16 @@ export function ModelControlCenterPage() {
 
         {error ? (
           <div className="alert" style={{ marginTop: 14 }}>
-            模型控制面 API 当前未就绪或返回异常：{error}
+            模型设置服务当前未就绪或返回异常：{error}
           </div>
         ) : null}
 
         <div className="model-control-hero">
           <div className="model-control-hero__copy">
-            <span className="eyebrow">控制面概览</span>
+            <span className="eyebrow">配置概览</span>
             <h3>先看当前可用能力，再进入具体配置。</h3>
             <p>
-              这里汇总当前可用 Provider、可用 Model、默认值和最近变更。
+              这里汇总当前可用接入方、可用模型、默认模型和最近变更。
             </p>
           </div>
           <div className="model-control-hero__rail">
@@ -171,30 +171,30 @@ export function ModelControlCenterPage() {
               <span>只有可用记录会出现在默认值选择列表里。</span>
             </div>
             <div className="hero-rail-card">
-              <strong>创建后即冻结</strong>
-              <span>任务创建时会冻结当下有效的默认值解析结果。</span>
+              <strong>提交后固定</strong>
+              <span>任务创建时会固定当时生效的模型组合。</span>
             </div>
           </div>
         </div>
 
         <div className="model-control-section-label">
-          <strong>控制面健康</strong>
+          <strong>配置健康度</strong>
           <span>先看当前可用能力，再进入具体配置页面。</span>
         </div>
 
         <div className="model-control-metrics">
           <div className="stat-card">
-            <span>可用 Provider</span>
+            <span>可用接入方</span>
             <strong>{providerSummary.available}</strong>
             <small>校验通过后才会进入可选池</small>
           </div>
           <div className="stat-card">
-            <span>校验中 Provider</span>
+            <span>校验中接入方</span>
             <strong>{providerSummary.validating}</strong>
             <small>等待真实连通性与鉴权结果</small>
           </div>
           <div className="stat-card">
-            <span>可用模型记录</span>
+            <span>可用模型</span>
             <strong>{modelSummary.available}</strong>
             <small>仅 `available` 才能进入默认值选择池</small>
           </div>
@@ -208,13 +208,13 @@ export function ModelControlCenterPage() {
 
       <div className="model-control-section-label">
         <strong>常用操作路径</strong>
-        <span>先处理接入，再登记模型，最后调整默认值。</span>
+        <span>先处理接入方，再登记模型，最后调整默认模型。</span>
       </div>
       <section className="model-control-link-grid">
         <Link className="card model-control-link-card" to="/model-control-center/providers">
           <div className="eyebrow">Step 1</div>
-          <h3>Provider 管理</h3>
-          <p>维护 endpoint、鉴权方式、密钥状态和最近一次校验结果。</p>
+          <h3>接入方管理</h3>
+          <p>维护接口地址、鉴权方式、密钥状态和最近一次校验结果。</p>
           <div className="planning-inline">
             <span className={getStatusClass("available")}>{providerSummary.available} 可用</span>
             <span className={getStatusClass("invalid")}>{providerSummary.invalid} 异常</span>
@@ -224,8 +224,8 @@ export function ModelControlCenterPage() {
 
         <Link className="card model-control-link-card" to="/model-control-center/registry">
           <div className="eyebrow">Step 2</div>
-          <h3>Model Registry</h3>
-          <p>为四个运行时槽位登记可运行模型，并记录能力元数据和绑定的 provider。</p>
+          <h3>模型列表</h3>
+          <p>为文案、图片、视频、配音登记可运行模型，并记录能力说明和绑定的接入方。</p>
           <div className="planning-inline">
             <span className={getStatusClass("available")}>{modelSummary.available} 可用</span>
             <span className={getStatusClass("validating")}>{modelSummary.validating} 校验中</span>
@@ -235,11 +235,11 @@ export function ModelControlCenterPage() {
 
         <Link className="card model-control-link-card" to="/model-control-center/defaults">
           <div className="eyebrow">Step 3</div>
-          <h3>Defaults Center</h3>
-          <p>设置全局默认值和任务创建默认值，并明确告诉运营新任务真正会用哪套组合。</p>
+          <h3>默认模型</h3>
+          <p>设置全局兜底和新任务默认模型，让运营知道新任务会用哪套组合。</p>
           <div className="planning-inline">
             <span className="pill pill--sm">单一路径</span>
-            <span className="pill pill--sm">创建即冻结</span>
+            <span className="pill pill--sm">提交后固定</span>
           </div>
         </Link>
       </section>
@@ -247,7 +247,7 @@ export function ModelControlCenterPage() {
       <section className="card">
         <div className="section-header">
           <h2>优先级规则</h2>
-          <span className="muted">任务创建时会把最终解析结果冻结进 taskRunConfig</span>
+          <span className="muted">任务创建时会把最终生效的模型组合固定下来</span>
         </div>
         <div className="precedence-strip">
           <div className="planning-note-card">
@@ -256,18 +256,18 @@ export function ModelControlCenterPage() {
           </div>
           <div className="planning-note-card">
             <strong>2. 任务创建默认值</strong>
-            <span>这套默认值就是新任务真正会命中的运行时组合，会覆盖全局兜底。</span>
+            <span>这套默认值就是新任务真正会使用的模型组合，会覆盖全局兜底。</span>
           </div>
           <div className="planning-note-card">
-            <strong>3. 任务冻结快照</strong>
-            <span>任务创建时会把当下有效的默认值冻结进 taskRunConfig，之后历史任务不再跟随后续默认值变化。</span>
+            <strong>3. 任务固定设置</strong>
+            <span>任务创建时会把当下生效的模型组合固定下来，之后历史任务不再跟随后续默认值变化。</span>
           </div>
         </div>
       </section>
 
       <section className="card">
         <div className="section-header">
-          <h2>四槽位默认值现状</h2>
+          <h2>当前默认模型</h2>
           <span className="muted">按单一路径任务创建查看当前默认组合。</span>
         </div>
         <div className="summary-list">
@@ -276,13 +276,13 @@ export function ModelControlCenterPage() {
               <strong>{MODEL_CONTROL_SLOT_LABELS[slot]}</strong>
               <div className="summary-row__detail">
                 <span>
-                  全局默认：
+                  全局兜底：
                   {defaults?.global?.[slot]?.displayName
                     ? `${defaults.global[slot]?.displayName} / ${defaults.global[slot]?.providerDisplayName ?? "未标注 provider"}`
                     : "未设置"}
                 </span>
                 <span>
-                  任务创建默认值：
+                  新任务默认：
                   {getDefaultSelection(defaults, slot)?.displayName
                     ? `${getDefaultSelection(defaults, slot)?.displayName} / ${getDefaultSelection(defaults, slot)?.providerDisplayName ?? "未标注 provider"}`
                     : "未设置"}
@@ -300,7 +300,7 @@ export function ModelControlCenterPage() {
       <section className="model-control-link-grid">
         <div className="card">
           <div className="section-header">
-            <h3>最近 Provider 校验</h3>
+          <h3>最近接入方校验</h3>
             <span className="muted">按更新时间展示</span>
           </div>
           <div className="task-list compact-list">
@@ -308,7 +308,7 @@ export function ModelControlCenterPage() {
               <div key={provider.id} className="task-item">
                 <strong>{provider.displayName}</strong>
                 <span>
-                  {provider.providerType} · {provider.endpointUrl || "未填 endpoint"}
+                  {provider.providerType} · {provider.endpointUrl || "未填接口地址"}
                 </span>
                 <span>
                   状态 {provider.status} · 最近校验 {formatDateTime(provider.lastValidatedAt)}
@@ -321,7 +321,7 @@ export function ModelControlCenterPage() {
         <div className="card">
           <div className="section-header">
             <h3>最近模型变更</h3>
-            <span className="muted">查看 slot 绑定和能力元数据是否完整</span>
+            <span className="muted">查看用途绑定和能力说明是否完整</span>
           </div>
           <div className="task-list compact-list">
             {recentModels.map((model) => (

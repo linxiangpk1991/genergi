@@ -9,15 +9,15 @@ const navGroups = [
       { to: "/", label: "任务启动" },
       { to: "/task-review", label: "任务审核" },
       { to: "/batch-dashboard", label: "生产看板" },
-      { to: "/asset-center", label: "交付资产" },
+      { to: "/asset-center", label: "素材与交付" },
     ],
   },
   {
     label: "系统管理",
     items: [
-      { to: "/project-library", label: "项目审核库" },
+      { to: "/project-library", label: "项目模板库" },
       { to: "/help-center", label: "帮助中心" },
-      { to: "/model-control-center", label: "模型控制中心" },
+      { to: "/model-control-center", label: "模型设置" },
       { to: "/user-center", label: "用户中心" },
     ],
   },
@@ -31,28 +31,28 @@ function getWorkspaceMeta(pathname: string) {
   if (pathname === "/task-review") {
     return {
       title: "任务审核",
-      description: "整任务查看蓝图、关键画面、提示词和尺寸规格，通过后再继续完整视频生成。",
+      description: "先检查整条视频的生成方案、关键画面和画幅，确认没问题后再继续生成正片。",
     }
   }
 
   if (pathname === "/batch-dashboard") {
     return {
       title: "生产看板",
-      description: "只看真实任务、真实运行状态和需要人工处理的异常。",
+      description: "集中查看任务进度、卡住情况和需要人工处理的问题。",
     }
   }
 
   if (pathname === "/asset-center") {
     return {
-      title: "交付资产",
-      description: "查看最终视频、字幕、脚本和中间资产。",
+      title: "素材与交付",
+      description: "查看成片、字幕、脚本、分段视频和排查用文件。",
     }
   }
 
   if (pathname.startsWith("/model-control-center")) {
     return {
-      title: "模型控制中心",
-      description: "管理 Provider、模型和默认值。",
+      title: "模型设置",
+      description: "管理模型接入方、可用模型和新任务默认使用的模型。",
     }
   }
 
@@ -65,8 +65,8 @@ function getWorkspaceMeta(pathname: string) {
 
   if (pathname === "/project-library") {
     return {
-      title: "项目审核库",
-      description: "查看当前项目沉淀下来的审核通过蓝图与复用素材。",
+      title: "项目模板库",
+      description: "查看项目里已经确认过的生成方案和可复用风格。",
     }
   }
 
@@ -79,7 +79,7 @@ function getWorkspaceMeta(pathname: string) {
 
   return {
     title: "任务启动",
-    description: "从内容母本开始，把一次完整的短视频生产任务发起出去。",
+    description: "从原始文案开始，新建一条完整的短视频生产任务。",
   }
 }
 

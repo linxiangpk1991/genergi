@@ -608,7 +608,7 @@ export const MODEL_CONTROL_SLOT_LABELS: Record<ModelControlSlotType, string> = {
   textModel: "文案规划",
   imageModel: "图片模型",
   videoModel: "视频模型",
-  ttsProvider: "TTS 配音",
+  ttsProvider: "系统配音",
 }
 
 export const MODEL_CONTROL_MODE_LABELS: Record<ModelControlModeId, string> = {
@@ -731,11 +731,58 @@ export type CreateTaskPayload = {
 }
 
 export function getAudioStrategyLabel(strategy: AudioStrategy | null | undefined) {
-  return strategy === "native_plus_tts_ducked" ? "原生音频 + TTS 混音" : "TTS 主导"
+  return strategy === "native_plus_tts_ducked" ? "保留环境音 + 系统配音" : "系统配音"
 }
 
 export function getSubtitleStrategyLabel(strategy: SubtitleStrategy | null | undefined) {
-  return strategy === "whisper_cpp" ? "Whisper 字幕" : "TTS 对齐字幕"
+  return strategy === "whisper_cpp" ? "从成片音频识别字幕" : "跟随配音生成字幕"
+}
+
+export function getExecutionModeLabel(mode: ExecutionMode | null | undefined) {
+  return mode === "review_required" ? "先审后生成" : "自动生成"
+}
+
+export function getBlueprintStatusLabel(status: BlueprintStatus | null | undefined) {
+  switch (status) {
+    case "ready_for_review":
+      return "待审核"
+    case "approved":
+      return "已通过"
+    case "rejected":
+      return "已驳回"
+    case "pending_generation":
+      return "准备方案中"
+    case "queued_for_video":
+      return "待生成正片"
+    case "video_generating":
+      return "正片生成中"
+    case "completed":
+      return "已完成"
+    default:
+      return status || "未知"
+  }
+}
+
+export function normalizeOperatorCopy(text: string | null | undefined) {
+  if (!text) {
+    return ""
+  }
+
+  return text
+    .replace(/蓝图/g, "生成方案")
+    .replace(/提示词/g, "生成说明")
+    .replace(/母本/g, "原始文案")
+    .replace(/\bworker\b/gi, "生成服务")
+    .replace(/\bredis\b/gi, "排队服务")
+    .replace(/\bprovider\b/gi, "接入方")
+    .replace(/\bwaiting_review\b/g, "待审核")
+    .replace(/\bready_for_review\b/g, "待审核")
+    .replace(/\brunning\b/g, "生成中")
+    .replace(/\bqueued\b/g, "排队中")
+    .replace(/\bblocked\b/g, "卡住")
+    .replace(/\bfailed\b/g, "失败")
+    .replace(/\bcompleted\b/g, "已完成")
+    .replace(/\bTTS\b/g, "系统配音")
 }
 
 export const api = {

@@ -42,9 +42,9 @@ function ModelControlNav() {
 
   const navItems = [
     { to: "/model-control-center", label: "总览" },
-    { to: "/model-control-center/providers", label: "Provider 管理" },
-    { to: "/model-control-center/registry", label: "Model Registry" },
-    { to: "/model-control-center/defaults", label: "Defaults Center" },
+    { to: "/model-control-center/providers", label: "接入方管理" },
+    { to: "/model-control-center/registry", label: "模型列表" },
+    { to: "/model-control-center/defaults", label: "默认模型" },
   ]
 
   return (
@@ -153,7 +153,7 @@ export function ModelRegistryPage() {
 
   async function handleSubmit() {
     if (!form.modelKey.trim() || !form.displayName.trim() || !form.providerId || !form.providerModelId.trim()) {
-      setError("请先填写 modelKey、显示名、绑定 Provider 和 providerModelId")
+      setError("请先填写内部 Key、显示名称、绑定接入方和上游模型 ID")
       return
     }
 
@@ -182,7 +182,7 @@ export function ModelRegistryPage() {
 
       if (editingModelId) {
         await api.updateModelRegistryEntry(editingModelId, payload)
-        setNotice("模型记录已更新。若 provider 或能力元数据改过，请重新校验。")
+        setNotice("模型记录已更新。若接入方或能力说明改过，请重新校验。")
       } else {
         await api.createModelRegistryEntry(payload)
         setNotice("模型记录已创建。只有校验通过后才会进入默认值可选池。")
@@ -234,16 +234,16 @@ export function ModelRegistryPage() {
       <section className="card">
         <div className="section-header section-header--stack">
           <div>
-            <div className="eyebrow">Model Registry</div>
-            <h2>模型注册表</h2>
-            <p className="section-note">
-              每条记录都要明确绑定一个 provider、一个槽位和一份能力元数据。只有 `available` 的记录才会进入默认值选择池。
-            </p>
+          <div className="eyebrow">模型列表</div>
+          <h2>模型列表</h2>
+          <p className="section-note">
+              每条记录都要绑定接入方、用途和能力说明。只有校验通过的模型才会出现在默认模型里。
+          </p>
           </div>
           <div className="planning-summary-tags">
-            <span className="pill pill--sm">四槽位实链</span>
-            <span className="pill pill--sm">能力元数据 JSON</span>
-            <span className="pill pill--sm">真实校验后入池</span>
+            <span className="pill pill--sm">文案 / 图片 / 视频 / 配音</span>
+            <span className="pill pill--sm">能力说明 JSON</span>
+            <span className="pill pill--sm">校验通过后可选</span>
           </div>
         </div>
 
@@ -268,7 +268,7 @@ export function ModelRegistryPage() {
             <div className="form-section">
               <div className="form-section__title">
                 <strong>模型身份</strong>
-                <span>先定义内部 key 和运营名称，让默认值中心和任务快照都能稳定引用。</span>
+                <span>先定义内部 Key 和运营能看懂的名称，让默认模型和历史任务都能稳定引用。</span>
               </div>
 
               <label>
@@ -295,12 +295,12 @@ export function ModelRegistryPage() {
             <div className="form-section">
               <div className="form-section__title">
                 <strong>绑定关系</strong>
-                <span>每条模型记录都必须明确归属到一个槽位，并绑定一个已可用的 Provider。</span>
+                <span>每条模型记录都必须明确用途，并绑定一个已可用的接入方。</span>
               </div>
 
               <div className="modal-grid">
                 <label>
-                  <span className="field-label">槽位</span>
+                  <span className="field-label">用途</span>
                   <select
                     className="input"
                     value={form.slotType}
@@ -320,7 +320,7 @@ export function ModelRegistryPage() {
                 </label>
 
                 <label>
-                  <span className="field-label">绑定 Provider</span>
+                  <span className="field-label">绑定接入方</span>
                   <select
                     className="input"
                     value={form.providerId}
@@ -349,7 +349,7 @@ export function ModelRegistryPage() {
             <div className="form-section">
               <div className="form-section__title">
                 <strong>能力与生命周期</strong>
-                <span>能力元数据会直接影响后端校验和运行时摘要，所以这里要像正式配置一样认真填写。</span>
+                <span>能力说明会影响系统校验和任务摘要，所以这里要像正式配置一样认真填写。</span>
               </div>
 
               <label>
@@ -370,7 +370,7 @@ export function ModelRegistryPage() {
               </label>
 
               <label>
-                <span className="field-label">能力元数据 JSON</span>
+                <span className="field-label">能力说明 JSON</span>
                 <textarea
                   className="textarea textarea--mono"
                   value={capabilityText}
@@ -381,7 +381,7 @@ export function ModelRegistryPage() {
             </div>
 
             <div className="form-note">
-              能力元数据会参与校验和任务快照，请保持为合法 JSON。
+              能力说明会参与校验和任务固定设置，请保持为合法 JSON。
             </div>
 
             <div className="action-row">
@@ -417,7 +417,7 @@ export function ModelRegistryPage() {
           </div>
 
           {loading ? (
-            <div className="empty-inline">正在加载模型注册表...</div>
+            <div className="empty-inline">正在加载模型列表...</div>
           ) : filteredModels.length ? (
             <div className="registry-list">
               {filteredModels.map((model) => (
@@ -435,7 +435,7 @@ export function ModelRegistryPage() {
 
                   <div className="registry-item__meta">
                     <div className="meta-tile">
-                      <span>绑定 Provider</span>
+                      <span>绑定接入方</span>
                       <strong>{model.providerDisplayName ?? model.providerId}</strong>
                     </div>
                     <div className="meta-tile">
@@ -476,7 +476,7 @@ export function ModelRegistryPage() {
                       onClick={() => void handleValidate(model.id)}
                       type="button"
                     >
-                      {actionModelId === model.id ? "处理中..." : "执行校验"}
+                      {actionModelId === model.id ? "处理中..." : "开始校验"}
                     </button>
                     <button
                       className="ghost-button ghost-button--compact"
@@ -509,7 +509,7 @@ export function ModelRegistryPage() {
               ))}
             </div>
           ) : (
-            <div className="empty-inline">当前筛选下没有模型记录。先绑定 Provider，再补充能力元数据。</div>
+            <div className="empty-inline">当前筛选下没有模型记录。先绑定接入方，再补充能力说明。</div>
           )}
         </section>
       </div>

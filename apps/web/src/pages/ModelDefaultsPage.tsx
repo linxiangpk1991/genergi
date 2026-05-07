@@ -20,9 +20,9 @@ function ModelControlNav() {
 
   const navItems = [
     { to: "/model-control-center", label: "总览" },
-    { to: "/model-control-center/providers", label: "Provider 管理" },
-    { to: "/model-control-center/registry", label: "Model Registry" },
-    { to: "/model-control-center/defaults", label: "Defaults Center" },
+    { to: "/model-control-center/providers", label: "接入方管理" },
+    { to: "/model-control-center/registry", label: "模型列表" },
+    { to: "/model-control-center/defaults", label: "默认模型" },
   ]
 
   return (
@@ -108,7 +108,7 @@ export function ModelDefaultsPage() {
       setGlobalDraft(buildDraftFromDefaults(defaultsResponse))
       setTaskCreationDraft(buildDraftFromDefaults(defaultsResponse, ACTIVE_TASK_CREATION_MODE))
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Defaults Center 加载失败")
+      setError(err instanceof Error ? err.message : "默认模型加载失败")
     } finally {
       setLoading(false)
     }
@@ -148,9 +148,9 @@ export function ModelDefaultsPage() {
       setDefaults(response)
       setGlobalDraft(buildDraftFromDefaults(response))
       setTaskCreationDraft(buildDraftFromDefaults(response, ACTIVE_TASK_CREATION_MODE))
-      setNotice("全局默认值已提交。当前以真实后端响应为准。")
+      setNotice("全局兜底模型已保存。当前以系统返回结果为准。")
     } catch (err) {
-      setError(err instanceof Error ? err.message : "保存全局默认值失败")
+      setError(err instanceof Error ? err.message : "保存全局兜底模型失败")
     } finally {
       setSavingScope(null)
     }
@@ -168,9 +168,9 @@ export function ModelDefaultsPage() {
       setDefaults(response)
       setGlobalDraft(buildDraftFromDefaults(response))
       setTaskCreationDraft(buildDraftFromDefaults(response, ACTIVE_TASK_CREATION_MODE))
-      setNotice("任务创建默认值已提交。")
+      setNotice("新任务默认模型已保存。")
     } catch (err) {
-      setError(err instanceof Error ? err.message : "保存任务创建默认值失败")
+      setError(err instanceof Error ? err.message : "保存新任务默认模型失败")
     } finally {
       setSavingScope(null)
     }
@@ -181,16 +181,16 @@ export function ModelDefaultsPage() {
       <section className="card">
         <div className="section-header section-header--stack">
           <div>
-            <div className="eyebrow">Defaults Center</div>
-            <h2>默认值中心</h2>
+            <div className="eyebrow">默认模型</div>
+            <h2>默认模型</h2>
             <p className="section-note">
-              这里不负责“模拟解析”，而是直接展示和提交真实默认值配置。任务创建时会把当前有效值冻结为任务快照。
+              这里直接展示和保存真实默认模型。新任务创建时，会把当前生效的模型组合固定到任务里。
             </p>
           </div>
           <div className="planning-summary-tags">
             <span className="pill pill--sm">全局兜底</span>
-            <span className="pill pill--sm">任务创建默认值</span>
-            <span className="pill pill--sm">创建时冻结</span>
+            <span className="pill pill--sm">新任务默认</span>
+            <span className="pill pill--sm">创建时固定</span>
           </div>
         </div>
 
@@ -203,32 +203,32 @@ export function ModelDefaultsPage() {
       <section className="card">
         <div className="section-header">
           <h3>优先级说明</h3>
-          <span className="muted">冻结关系说明</span>
+          <span className="muted">生效顺序说明</span>
         </div>
         <div className="precedence-strip">
           <div className="planning-note-card">
-            <strong>任务冻结快照</strong>
-            <span>任务创建时会把当前有效默认值冻结到 taskRunConfig，之后历史任务不再跟随后续默认值变化。</span>
+            <strong>任务固定设置</strong>
+            <span>任务创建时会把当前生效的模型组合固定下来，之后历史任务不再跟随后续默认值变化。</span>
           </div>
           <div className="planning-note-card">
-            <strong>任务创建默认值</strong>
-            <span>这套值就是新任务真正会命中的运行时默认值，会覆盖全局兜底。</span>
+            <strong>新任务默认</strong>
+            <span>这套值就是新任务真正会用到的默认模型，会覆盖全局兜底。</span>
           </div>
           <div className="planning-note-card">
             <strong>全局默认</strong>
-            <span>作为单一路径任务创建的兜底值，只有任务创建默认值没有指定时才会生效。</span>
+            <span>作为兜底模型，只有新任务默认没有指定时才会生效。</span>
           </div>
         </div>
       </section>
 
       <section className="card">
         <div className="section-header">
-          <h3>全局默认</h3>
-          <span className="muted">给单一路径任务创建提供兜底槽位选择</span>
+          <h3>全局兜底</h3>
+          <span className="muted">给新任务提供兜底模型选择</span>
         </div>
 
         {loading ? (
-          <div className="empty-inline">正在加载真实默认值...</div>
+          <div className="empty-inline">正在加载真实默认模型...</div>
         ) : (
           <>
             <div className="default-grid">
@@ -237,7 +237,7 @@ export function ModelDefaultsPage() {
                   <div className="default-slot-row__copy">
                     <strong>{MODEL_CONTROL_SLOT_LABELS[slot]}</strong>
                     <span>
-                      当前后端值：{defaults?.global?.[slot]?.displayName ? describeOption(defaults.global[slot] as SelectableModelOption) : "未设置"}
+                      当前系统值：{defaults?.global?.[slot]?.displayName ? describeOption(defaults.global[slot] as SelectableModelOption) : "未设置"}
                     </span>
                   </div>
                   <select
@@ -258,7 +258,7 @@ export function ModelDefaultsPage() {
                     ))}
                   </select>
                   <div className="muted">
-                    可选项仅来自 `available` 池。
+                    这里只显示已校验可用的模型。
                   </div>
                 </div>
               ))}
@@ -266,10 +266,10 @@ export function ModelDefaultsPage() {
 
             <div className="action-row">
               <button className="ghost-button" onClick={() => setGlobalDraft(buildDraftFromDefaults(defaults))} type="button">
-                恢复到后端当前值
+                恢复到系统当前值
               </button>
               <button className="primary-button" disabled={savingScope === "global"} onClick={() => void handleSaveGlobal()} type="button">
-                {savingScope === "global" ? "保存中..." : "保存全局默认"}
+                {savingScope === "global" ? "保存中..." : "保存全局兜底"}
               </button>
             </div>
           </>
@@ -278,12 +278,12 @@ export function ModelDefaultsPage() {
 
       <section className="card">
         <div className="section-header">
-          <h3>任务创建默认值</h3>
-          <span className="muted">这就是新任务创建时真正会冻结进 taskRunConfig 的默认组合</span>
+          <h3>新任务默认</h3>
+          <span className="muted">这就是新任务创建时真正会固定下来的模型组合</span>
         </div>
 
         {loading ? (
-          <div className="empty-inline">正在加载任务创建默认值...</div>
+          <div className="empty-inline">正在加载新任务默认模型...</div>
         ) : (
           <>
             <div className="default-grid">
@@ -295,7 +295,7 @@ export function ModelDefaultsPage() {
                     <div className="default-slot-row__copy">
                       <strong>{MODEL_CONTROL_SLOT_LABELS[slot]}</strong>
                       <span>全局兜底：{describeOption(globalOptions[slot]?.find((option) => option.recordId === globalDraft[slot]))}</span>
-                      <span>任务创建值：{describeOption(pool?.options.find((option) => option.recordId === taskCreationDraft[slot]))}</span>
+                      <span>新任务默认：{describeOption(pool?.options.find((option) => option.recordId === taskCreationDraft[slot]))}</span>
                       <span>当前有效值：{describeOption(effectiveOption)}</span>
                     </div>
                     <select
@@ -308,7 +308,7 @@ export function ModelDefaultsPage() {
                         }))
                       }
                     >
-                      <option value="">回退到全局默认</option>
+                      <option value="">使用全局兜底</option>
                       {(pool?.options ?? []).map((option) => (
                         <option key={option.recordId} value={option.recordId}>
                           {describeOption(option)}
@@ -316,7 +316,7 @@ export function ModelDefaultsPage() {
                       ))}
                     </select>
                     <div className="muted">
-                      当前池有效项：{pool?.options.length ?? 0}
+                      当前可选模型：{pool?.options.length ?? 0}
                     </div>
                   </div>
                 )
@@ -329,7 +329,7 @@ export function ModelDefaultsPage() {
                 onClick={() => setTaskCreationDraft(buildDraftFromDefaults(defaults, ACTIVE_TASK_CREATION_MODE))}
                 type="button"
               >
-                恢复到后端当前值
+                恢复到系统当前值
               </button>
               <button
                 className="primary-button"
@@ -337,7 +337,7 @@ export function ModelDefaultsPage() {
                 onClick={() => void handleSaveTaskCreationDefaults()}
                 type="button"
               >
-                {savingScope === ACTIVE_TASK_CREATION_MODE ? "保存中..." : "保存任务创建默认值"}
+                {savingScope === ACTIVE_TASK_CREATION_MODE ? "保存中..." : "保存新任务默认"}
               </button>
             </div>
           </>

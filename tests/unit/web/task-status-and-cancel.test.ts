@@ -200,7 +200,7 @@ describe("task status details and cancel actions", () => {
       task: createFailedTask({
         status: "queued",
         failureReason: null,
-        statusDetail: "等待 worker 恢复处理",
+        statusDetail: "等待 生成服务 恢复处理",
       }),
       detail: {
         taskId: "task_failed",
@@ -210,7 +210,7 @@ describe("task status details and cancel actions", () => {
         blueprintVersion: 1,
         blueprintStatus: "queued_for_video",
         failureReason: null,
-        statusDetail: "等待 worker 恢复处理",
+        statusDetail: "等待 生成服务 恢复处理",
         cancelRequestedAt: null,
         taskRunConfig: {
           projectId: "project_default",
@@ -337,7 +337,7 @@ describe("task status details and cancel actions", () => {
     })
 
     const resumeButton = Array.from(container.querySelectorAll("button")).find((button) =>
-      button.textContent?.includes("恢复运行"),
+      button.textContent?.includes("恢复生成"),
     )
     expect(resumeButton).toBeTruthy()
 
@@ -347,7 +347,7 @@ describe("task status details and cancel actions", () => {
 
     await waitFor(() => {
       expect(vi.mocked(api.resumeFailedTask)).toHaveBeenCalledWith("task_failed")
-      expect(container.textContent ?? "").toContain("等待 worker 恢复处理")
+      expect(container.textContent ?? "").toContain("等待 生成服务 恢复处理")
     })
   })
 
@@ -368,7 +368,7 @@ describe("task status details and cancel actions", () => {
         id: "task_stale_running",
         title: "Stale running task",
         status: "queued",
-        statusDetail: "等待 worker 恢复处理",
+        statusDetail: "等待 生成服务 恢复处理",
         updatedAt: "2026-04-20T00:20:00.000Z",
       }),
     } as any)
@@ -402,7 +402,7 @@ describe("task status details and cancel actions", () => {
 
     await waitFor(() => {
       expect(vi.mocked(api.resumeFailedTask)).toHaveBeenCalledWith("task_stale_running")
-      expect(container.textContent ?? "").toContain("等待 worker 恢复处理")
+      expect(container.textContent ?? "").toContain("等待 生成服务 恢复处理")
     })
   })
 
@@ -474,20 +474,20 @@ describe("task status details and cancel actions", () => {
       const text = container.textContent ?? ""
 
       expect(text).toContain("生产调度台")
-      expect(text).toContain("queued")
-      expect(text).toContain("running")
-      expect(text).toContain("waiting_review")
-      expect(text).toContain("blocked")
-      expect(text).toContain("failed")
-      expect(text).toContain("completed")
+      expect(text).toContain("排队中")
+      expect(text).toContain("生成中")
+      expect(text).toContain("待审核")
+      expect(text).toContain("卡住")
+      expect(text).toContain("失败")
+      expect(text).toContain("已完成")
       expect(text).toContain("卡住任务")
-      expect(text).toContain("心跳")
+      expect(text).toContain("最近进展")
       expect(text).toContain("预计剩余")
-      expect(text).toContain("失败分类")
-      expect(text).toContain("provider_timeout")
-      expect(text).toContain("Worker / Redis 容量")
-      expect(text).toContain("保守继续：先打开资产排查，再恢复卡住任务")
-      expect(text).toContain("等待人工动作")
+      expect(text).toContain("问题类型")
+      expect(text).toContain("接入方超时")
+      expect(text).toContain("生成服务容量")
+      expect(text).toContain("先查看素材和失败原因，再恢复卡住任务")
+      expect(text).toContain("等待人工处理")
       expect(text).not.toContain("约 731 小时")
     })
   })
@@ -516,7 +516,7 @@ describe("task status details and cancel actions", () => {
     })
 
     const resumeButton = Array.from(container.querySelectorAll("button")).find((button) =>
-      button.textContent?.includes("恢复运行"),
+      button.textContent?.includes("恢复生成"),
     )
     expect(resumeButton).toBeTruthy()
 
@@ -526,7 +526,7 @@ describe("task status details and cancel actions", () => {
 
     await waitFor(() => {
       expect(vi.mocked(api.resumeFailedTask)).toHaveBeenCalledWith("task_failed")
-      expect(container.textContent ?? "").toContain("等待 worker 恢复处理")
+      expect(container.textContent ?? "").toContain("等待 生成服务 恢复处理")
     })
   })
 
@@ -571,7 +571,7 @@ describe("task status details and cancel actions", () => {
         id: "task_stale_running",
         title: "Stale running task",
         status: "queued",
-        statusDetail: "等待 worker 恢复处理",
+        statusDetail: "等待 生成服务 恢复处理",
         updatedAt: "2026-04-20T00:20:00.000Z",
       }),
       detail: {
@@ -582,7 +582,7 @@ describe("task status details and cancel actions", () => {
         blueprintVersion: 1,
         blueprintStatus: "pending_generation",
         failureReason: null,
-        statusDetail: "等待 worker 恢复处理",
+        statusDetail: "等待 生成服务 恢复处理",
         cancelRequestedAt: null,
         taskRunConfig: {
           projectId: "project_default",
@@ -651,7 +651,7 @@ describe("task status details and cancel actions", () => {
 
     await waitFor(() => {
       expect(vi.mocked(api.resumeFailedTask)).toHaveBeenCalledWith("task_stale_running")
-      expect(container.textContent ?? "").toContain("等待 worker 恢复处理")
+      expect(container.textContent ?? "").toContain("等待 生成服务 恢复处理")
     })
   })
 })

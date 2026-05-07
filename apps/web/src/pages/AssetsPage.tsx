@@ -9,6 +9,7 @@ import {
   buildDeliveryManifestUrl,
   buildTaskReviewUrl,
   getAudioStrategyLabel,
+  normalizeOperatorCopy,
   type AssetRecord,
   type RuntimeStatusResponse,
   type TaskDiagnostics,
@@ -42,19 +43,19 @@ function getTaskFlowLabel(task: TaskSummary | null) {
   }
 
   if (task.statusDetail?.trim()) {
-    return task.statusDetail.trim()
+    return normalizeOperatorCopy(task.statusDetail.trim())
   }
 
   if (task.executionMode === "review_required" && task.blueprintStatus === "ready_for_review") {
-    return `整任务待审 (蓝图 v${task.blueprintVersion})`
+    return `整条视频待审核 (方案 v${task.blueprintVersion})`
   }
 
   if (task.executionMode === "review_required" && task.blueprintStatus === "approved") {
-    return `审核已通过，待继续执行 (蓝图 v${task.blueprintVersion})`
+    return `审核已通过，待继续生成 (方案 v${task.blueprintVersion})`
   }
 
   if (task.executionMode === "review_required" && task.blueprintStatus === "rejected") {
-    return `蓝图已驳回 (蓝图 v${task.blueprintVersion})`
+    return `生成方案已驳回 (方案 v${task.blueprintVersion})`
   }
 
   if (task.status === "completed") {
@@ -117,7 +118,7 @@ function getAssetDeleteLockLabel(task: TaskSummary | null) {
   if (canDeleteTaskAssets(task)) {
     return ""
   }
-  return "任务仍在生成链路中，资产已锁定"
+  return "任务还在生成中，素材暂时不能清理"
 }
 
 type DeliveryCheckKey =
@@ -198,52 +199,52 @@ const DELIVERY_CHECK_ORDER: DeliveryCheckKey[] = [
 ]
 
 const DELIVERY_CHECK_LABELS: Record<DeliveryCheckKey, string> = {
-  finalVideo: "final video / 成片",
-  subtitles: "subtitles / 字幕",
-  script: "script / 脚本",
-  cover: "cover / 封面",
-  title: "title / 标题",
-  description: "description / 描述",
-  manifest: "manifest / 清单",
+  finalVideo: "成片视频",
+  subtitles: "英文字幕",
+  script: "最终脚本",
+  cover: "发布封面",
+  title: "发布标题",
+  description: "发布描述",
+  manifest: "素材清单",
 }
 
 const DELIVERY_STATUS_COPY: DeliveryStatusSummary[] = [
   {
     id: "ready_to_publish",
-    label: "Ready to Publish",
-    description: "最终交付物齐全，可以进入发布复核。",
+    label: "可以发布",
+    description: "发布需要的文件都齐了，可以进入发布前复核。",
     tone: "success",
   },
   {
     id: "needs_delivery_check",
     label: "交付待检查",
-    description: "有待确认项，先看检查清单和 scene 矩阵。",
+    description: "还有待确认项，先看检查清单和分段状态。",
     tone: "warning",
   },
   {
     id: "missing_assets",
-    label: "缺资产",
-    description: "关键交付物缺失或文件不可访问。",
+    label: "缺文件",
+    description: "关键文件缺失，或记录里的文件当前打不开。",
     tone: "danger",
   },
   {
     id: "failed_recovery",
-    label: "失败待恢复",
-    description: "任务失败或可恢复，需要局部重试或恢复运行。",
+    label: "失败待处理",
+    description: "任务失败或可恢复，需要局部重试或恢复生成。",
     tone: "danger",
   },
 ]
 
 const RETRY_IMPACT_COPY: Record<DeliveryRetryKind, string> = {
-  keyframe: "只重做该 scene 的关键帧，可能影响后续视频画面一致性。",
-  video: "复用当前关键帧重做视频片段，会增加视频模型成本。",
-  scene: "重跑该 scene 的关键帧与视频，成本最高，适合画面方向错误。",
+  keyframe: "只重做这一段的关键画面，适合封面或首帧方向不对。",
+  video: "沿用当前关键画面，只重做这一段视频，会增加视频生成成本。",
+  scene: "这一段的关键画面和视频都重做，成本最高，适合画面方向整体错误。",
 }
 
 const RETRY_BUTTON_LABELS: Record<DeliveryRetryKind, string> = {
-  keyframe: "关键帧",
+  keyframe: "关键画面",
   video: "视频段",
-  scene: "整段",
+  scene: "整段重做",
 }
 
 const ASSET_TYPE_BY_CHECK: Partial<Record<DeliveryCheckKey, AssetRecord["assetType"]>> = {
@@ -433,7 +434,7 @@ function normalizeSceneRows(value: unknown): DeliverySceneRow[] {
     return {
       sceneId,
       index: sceneIndex,
-      title: readString(row.title) || `Scene ${sceneIndex + 1}`,
+      title: readString(row.title) || `第 ${sceneIndex + 1} 段`,
       keyframe: normalizeSceneCell(row.keyframe ?? row.keyframeStatus),
       video: normalizeSceneCell(row.video ?? row.videoStatus),
       review: normalizeSceneCell(row.review ?? row.reviewStatus),
@@ -473,7 +474,7 @@ export function normalizeDeliveryWorkbench(payload: unknown): DeliveryWorkbench 
         key,
         label: DELIVERY_CHECK_LABELS[key],
         status: "unknown" as const,
-        message: "等待交付接口确认",
+        message: "等待系统确认",
       },
   )
 
@@ -532,7 +533,7 @@ export function buildFallbackDeliveryWorkbench(input: {
         key,
         label: DELIVERY_CHECK_LABELS[key],
         status: "missing",
-        message: "现有资产列表未找到该交付物",
+        message: "当前素材列表里没有找到这个文件",
       }
     }
 
@@ -551,7 +552,7 @@ export function buildFallbackDeliveryWorkbench(input: {
       key,
       label: DELIVERY_CHECK_LABELS[key],
       status: "unknown",
-      message: "等待 /delivery 接口返回发布字段",
+      message: "等待系统返回发布字段",
     }
   })
 
@@ -562,18 +563,18 @@ export function buildFallbackDeliveryWorkbench(input: {
     const pendingStatus: DeliverySceneCell = {
       status: isCurrentScene ? "pending" : "unknown",
       label: isCurrentScene ? "生成中" : "待确认",
-      message: isCurrentScene ? "当前运行阶段指向此 scene" : "等待 scene 矩阵接口确认",
+      message: isCurrentScene ? "当前正在处理这一段" : "等待分段状态同步",
     }
     const reviewStatus: DeliverySceneCell = {
       status: "unknown",
       label: "待确认",
-      message: "等待 review 状态同步",
+      message: "等待审核状态同步",
     }
 
     return {
       sceneId: `scene_${index + 1}`,
       index,
-      title: `Scene ${index + 1}`,
+      title: `第 ${index + 1} 段`,
       keyframe: pendingStatus,
       video: pendingStatus,
       review: reviewStatus,
@@ -599,7 +600,7 @@ export function buildFallbackDeliveryWorkbench(input: {
       description: input.task?.planning?.planningSummary ?? "",
       channelId: input.task?.channelId ?? "",
     },
-    message: "交付接口暂未接入，当前根据资产、诊断和 timeline 保守推断。",
+    message: "交付检查暂时没有返回完整结果，当前根据素材、诊断和时间线保守判断。",
   }
 }
 
@@ -665,7 +666,7 @@ async function postDeliveryRetry(input: {
   const content = await response.text()
 
   if (!response.ok) {
-    throw new Error(content || `局部重试失败 (${response.status})`)
+    throw new Error(content || `局部重试提交失败 (${response.status})`)
   }
 
   return content ? JSON.parse(content) : {}
@@ -760,10 +761,10 @@ export function AssetsPage() {
       api
         .getTaskDiagnostics(taskId)
         .then((result) => ({ diagnostics: result.diagnostics, error: "" }))
-        .catch(() => ({ diagnostics: null, error: "诊断暂不可用，资产列表仍可查看。" })),
+        .catch(() => ({ diagnostics: null, error: "诊断暂不可用，素材列表仍可查看。" })),
       fetchTaskDeliveryWorkbench(taskId)
         .then((delivery) => ({ delivery, error: "" }))
-        .catch(() => ({ delivery: null, error: "交付检查接口暂不可用，已根据资产和诊断保守推断。" })),
+        .catch(() => ({ delivery: null, error: "交付检查接口暂不可用，已根据素材和诊断保守推断。" })),
     ])
 
     const taskForFallback = tasks.find((task) => task.id === taskId) ?? null
@@ -795,7 +796,7 @@ export function AssetsPage() {
     }
 
     void load().catch(() => {
-      setLoadError("任务或运行时状态加载失败，当前结果可能不完整。")
+      setLoadError("任务或系统状态加载失败，当前结果可能不完整。")
       setIsStale(true)
     })
 
@@ -836,7 +837,7 @@ export function AssetsPage() {
       setDeliveryWorkbench(null)
       setDeliveryError("")
       setIsStale(true)
-      setLoadError("资产列表加载失败，当前无法确认交付物完整性。")
+      setLoadError("素材列表加载失败，当前无法确认发布文件是否完整。")
     })
 
     const timer = window.setInterval(() => {
@@ -844,7 +845,7 @@ export function AssetsPage() {
         setAssets([])
         setDeliveryWorkbench(null)
         setIsStale(true)
-        setLoadError("资产自动刷新失败，当前可能显示的是旧结果。")
+        setLoadError("素材自动刷新失败，当前可能显示的是旧结果。")
       })
     }, 5000)
 
@@ -884,7 +885,7 @@ export function AssetsPage() {
         setDiagnostics(response.diagnostics)
       }
     } catch (error) {
-      setActionError(error instanceof Error ? error.message : "恢复运行失败")
+      setActionError(error instanceof Error ? error.message : "恢复生成失败")
     } finally {
       setResumingTaskId("")
     }
@@ -896,7 +897,9 @@ export function AssetsPage() {
       return
     }
 
-    if (!window.confirm(`确认删除资产「${asset.label}」吗？该操作会删除任务自己的资产文件，无法从资产中心恢复。`)) {
+    const assetLabel = normalizeOperatorCopy(asset.label)
+
+    if (!window.confirm(`确认删除素材「${assetLabel}」吗？该操作会删除这个任务自己的文件，无法从页面里恢复。`)) {
       return
     }
 
@@ -906,9 +909,9 @@ export function AssetsPage() {
     try {
       await api.deleteTaskAsset(asset.taskId, asset.id)
       await loadTaskWorkData(asset.taskId)
-      setActionSuccess(`已删除资产：${asset.label}`)
+      setActionSuccess(`已删除素材：${assetLabel}`)
     } catch (error) {
-      setActionError(error instanceof Error ? error.message : "删除资产失败")
+      setActionError(error instanceof Error ? error.message : "删除素材失败")
     } finally {
       setDeletingAssetId("")
     }
@@ -924,7 +927,7 @@ export function AssetsPage() {
       return
     }
 
-    if (!window.confirm(`确认清空任务「${selectedTask.title}」的全部资产吗？该操作只会删除该任务的 exports/assets 目录和资产记录。`)) {
+    if (!window.confirm(`确认清空任务「${selectedTask.title}」的全部素材文件吗？该操作只会删除该任务自己的文件和记录。`)) {
       return
     }
 
@@ -934,9 +937,9 @@ export function AssetsPage() {
     try {
       await api.deleteTaskAssets(selectedTask.id)
       await loadTaskWorkData(selectedTask.id)
-      setActionSuccess(`已清空任务资产：${selectedTask.title}`)
+      setActionSuccess(`已清空任务素材：${selectedTask.title}`)
     } catch (error) {
-      setActionError(error instanceof Error ? error.message : "清空任务资产失败")
+      setActionError(error instanceof Error ? error.message : "清空任务素材失败")
     } finally {
       setDeletingTaskAssets(false)
     }
@@ -948,8 +951,8 @@ export function AssetsPage() {
     }
 
     const impact = RETRY_IMPACT_COPY[kind]
-    const targetLabel = sceneId ? `scene ${sceneId}` : "当前任务"
-    if (!window.confirm(`确认发起 ${kind} 局部重试吗？\n\n影响提示：${impact}\n\n目标：${targetLabel}`)) {
+    const targetLabel = sceneId ? `分段 ${sceneId}` : "当前任务"
+    if (!window.confirm(`确认发起 ${RETRY_BUTTON_LABELS[kind]} 局部重试吗？\n\n影响提示：${impact}\n\n目标：${targetLabel}`)) {
       return
     }
 
@@ -965,7 +968,7 @@ export function AssetsPage() {
         sceneId,
       })
       await loadTaskWorkData(selectedTaskId)
-      setActionSuccess(`已提交 ${kind} 局部重试：${targetLabel}`)
+      setActionSuccess(`已提交 ${RETRY_BUTTON_LABELS[kind]} 局部重试：${targetLabel}`)
     } catch (error) {
       setActionError(error instanceof Error ? error.message : "局部重试失败")
     } finally {
@@ -1043,7 +1046,7 @@ export function AssetsPage() {
   const heartbeatAgeLabel = useMemo(() => {
     const ageMs = diagnostics?.stale.ageMs
     if (ageMs == null) {
-      return "暂无心跳"
+      return "暂无进展记录"
     }
 
     const minutes = Math.floor(ageMs / 60000)
@@ -1111,7 +1114,7 @@ export function AssetsPage() {
             <div key={asset.id} className="asset-item">
               <div className="asset-item-header">
                 <div>
-                  <div className="asset-item-title">{asset.label}</div>
+                  <div className="asset-item-title">{normalizeOperatorCopy(asset.label)}</div>
                   <div className="asset-item-tags">
                     <span className="pill pill--sm">{asset.assetType}</span>
                     <span className="pill pill--sm">
@@ -1175,7 +1178,7 @@ export function AssetsPage() {
                     onClick={() => void handleDeleteAsset(asset)}
                     type="button"
                   >
-                    {assetDeleteLocked ? "资产锁定" : deletingAssetId === asset.id ? "删除中..." : "删除资产"}
+                    {assetDeleteLocked ? "素材锁定" : deletingAssetId === asset.id ? "删除中..." : "删除素材"}
                   </button>
                 </div>
               </div>
@@ -1185,8 +1188,8 @@ export function AssetsPage() {
             <div className="task-item">
               {loadError ? (
                 <>
-                  <div><strong>资产加载失败</strong><span> · 请先处理上方错误</span></div>
-                  <div className="muted">接口恢复后，这里会自动刷新为真实资产列表。</div>
+                  <div><strong>素材加载失败</strong><span> · 请先处理上方错误</span></div>
+                  <div className="muted">服务恢复后，这里会自动刷新为真实素材列表。</div>
                 </>
               ) : (
                 <>
@@ -1234,8 +1237,8 @@ export function AssetsPage() {
       <header className="topbar">
         <div>
           <div className="eyebrow">Asset Center</div>
-          <h1>素材资产中心</h1>
-          <p>先看最终交付物是否达标，再回头检查脚本、字幕、关键帧和中间产物有没有偏掉。</p>
+          <h1>素材与交付</h1>
+          <p>先确认成片、字幕、脚本和封面是否齐全，再检查关键画面、分段视频和排查文件。</p>
         </div>
         <div className="topbar-actions">
           <span className="pill">{selectedTask?.planning?.generationRouteLabel ?? "待预判"}</span>
@@ -1263,7 +1266,7 @@ export function AssetsPage() {
 
           <div className="planning-summary-card">
             <strong>{selectedTask?.planning?.generationRouteLabel ?? "待预判"}</strong>
-            <span>{selectedTask?.planning?.planningSummary ?? "这里会展示分镜路由、目标时长和规划原则的真实摘要。"}</span>
+            <span>{selectedTask?.planning?.planningSummary ?? "这里会展示视频结构、目标时长和生成原则的摘要。"}</span>
             <div className="planning-summary-tags">
               <span className="pill pill--sm">{selectedTask?.planning?.generationPreferenceLabel ?? "待接入"}</span>
               <span className="pill pill--sm">{getAudioStrategyLabel(selectedTask?.audioStrategy)}</span>
@@ -1278,8 +1281,8 @@ export function AssetsPage() {
             <strong>当前任务已写入链接</strong>
             <span>
               {selectedTaskId
-                ? `任务 ${selectedTaskId} 已同步到 URL，可直接收藏这个资产视角，再从侧栏回到对应处理页。`
-                : "选择任务后，地址会自动同步当前资产上下文。"}
+                ? `任务 ${selectedTaskId} 已同步到 URL，可直接收藏这个素材视角，再从侧栏回到对应处理页。`
+                : "选择任务后，地址会自动同步当前素材视角。"}
             </span>
           </div>
 
@@ -1314,7 +1317,7 @@ export function AssetsPage() {
                 <h2>交付工作台</h2>
                 <div className="muted">
                   当前判断：{deliveryStatus.label}
-                  {deliveryWorkbench?.source === "fallback" ? " · 使用资产/诊断回退推断" : " · 来自交付检查接口"}
+                  {deliveryWorkbench?.source === "fallback" ? " · 根据素材和诊断保守判断" : " · 来自交付检查"}
                   {deliveryWorkbench?.updatedAt ? ` · ${new Date(deliveryWorkbench.updatedAt).toLocaleString("zh-CN")}` : ""}
                 </div>
               </div>
@@ -1337,11 +1340,11 @@ export function AssetsPage() {
 
             <div className="delivery-command-bar">
               <div>
-                <strong>发布交接</strong>
+                <strong>发布前交接</strong>
                 <span>
                   {deliveryWorkbench?.publishCopy.channelId
                     ? `渠道 ${deliveryWorkbench.publishCopy.channelId}`
-                    : "复制发布字段并下载交付清单，交给运营复核。"}
+                    : "复制发布字段并下载清单，交给运营复核。"}
                 </span>
               </div>
               <div className="delivery-command-bar__actions">
@@ -1376,14 +1379,14 @@ export function AssetsPage() {
                   </div>
                   <div className="muted">{check.message}</div>
                   {check.assetId ? (
-                    <div className="mono delivery-check__asset">asset {check.assetId}</div>
+                    <div className="mono delivery-check__asset">文件记录 {check.assetId}</div>
                   ) : null}
                 </div>
               ))}
               {!deliveryChecks.length ? (
                 <div className="task-item">
                   <strong>等待任务上下文</strong>
-                  <span>选择任务后会显示 final video、subtitles、script、cover、title、description、manifest 检查。</span>
+                  <span>选择任务后会显示成片、字幕、脚本、封面、标题、描述和素材清单检查。</span>
                 </div>
               ) : null}
             </div>
@@ -1397,7 +1400,7 @@ export function AssetsPage() {
             <div className="delivery-retry-guide">
               {(Object.keys(RETRY_IMPACT_COPY) as DeliveryRetryKind[]).map((kind) => (
                 <div key={kind}>
-                  <strong>{kind}</strong>
+                  <strong>{RETRY_BUTTON_LABELS[kind]}</strong>
                   <span>{RETRY_IMPACT_COPY[kind]}</span>
                 </div>
               ))}
@@ -1405,10 +1408,10 @@ export function AssetsPage() {
 
             <div className="delivery-scene-matrix">
               <div className="delivery-scene-matrix__head">
-                <span>scene</span>
-                <span>keyframe</span>
-                <span>video</span>
-                <span>review</span>
+                <span>分段</span>
+                <span>关键画面</span>
+                <span>视频段</span>
+                <span>审核</span>
                 <span>重试</span>
               </div>
               {deliveryScenes.map((scene) => (
@@ -1435,8 +1438,8 @@ export function AssetsPage() {
               ))}
               {!deliveryScenes.length ? (
                 <div className="delivery-scene-matrix__empty">
-                  <strong>暂无 scene 矩阵</strong>
-                  <span>后端返回 sceneMatrix 后，这里会逐段显示 keyframe / video / review 状态。</span>
+                  <strong>暂无分段状态</strong>
+                  <span>系统返回分段结果后，这里会逐段显示关键画面、视频段和审核状态。</span>
                 </div>
               ) : null}
             </div>
@@ -1483,19 +1486,19 @@ export function AssetsPage() {
               <strong className="metric-value">{assetStats.deliverableReadyCount}/{assetStats.deliverableTotal || 0}</strong>
             </div>
             <div className="asset-metric-card">
-              <div className="metric-label">当前链路</div>
+              <div className="metric-label">当前流程</div>
               <strong className="metric-value">{getTaskFlowLabel(selectedTask)}</strong>
             </div>
           </div>
 
           {assetStats.missingCount ? (
             <div className="asset-missing-notice">
-              {assetStats.missingCount} 个记录指向的文件当前不可访问，列表仍保留元数据以兼容历史资产。
+              {assetStats.missingCount} 个记录指向的文件当前不可访问，列表仍保留记录方便排查历史任务。
             </div>
           ) : null}
           {assetDeleteLocked ? (
             <div className="asset-missing-notice">
-              {assetDeleteLockLabel}。只有任务失败、完成或终止后，才能清理该任务的资产文件。
+              {assetDeleteLockLabel}。只有任务失败、完成或终止后，才能清理该任务的素材文件。
             </div>
           ) : null}
           {selectedTask && assets.length ? (
@@ -1507,7 +1510,7 @@ export function AssetsPage() {
                 title={assetDeleteLocked ? assetDeleteLockLabel : undefined}
                 type="button"
               >
-                {assetDeleteLocked ? "资产清理已锁定" : deletingTaskAssets ? "清理中..." : "清空当前任务资产"}
+                {assetDeleteLocked ? "素材清理已锁定" : deletingTaskAssets ? "清理中..." : "清空当前任务素材"}
               </button>
             </div>
           ) : null}
@@ -1517,7 +1520,7 @@ export function AssetsPage() {
               <div className="section-header">
                 <div>
                   <strong>页内预览</strong>
-                  <div className="muted">{previewAsset.label} · {previewAsset.fileName}</div>
+                  <div className="muted">{normalizeOperatorCopy(previewAsset.label)} · {previewAsset.fileName}</div>
                 </div>
                 <button
                   className="ghost-button"
@@ -1539,7 +1542,7 @@ export function AssetsPage() {
               ) : null}
               {!previewLoading && !previewError && previewAsset.mimeType.startsWith("image/") ? (
                 <img
-                  alt={previewAsset.label}
+                  alt={normalizeOperatorCopy(previewAsset.label)}
                   className="visual-preview__image"
                   src={buildAssetPreviewUrl(previewAsset.taskId, previewAsset.id)}
                 />
@@ -1561,25 +1564,25 @@ export function AssetsPage() {
             </section>
           ) : null}
 
-          {renderAssetList("最终交付物", "优先确认成片、字幕、脚本和音频是否已经齐全。", deliverableAssets)}
-          {renderAssetList("规划与中间资产", "用于排查生成过程和回溯中间阶段，不应和最终交付物混读。", supportingAssets)}
+          {renderAssetList("发布文件", "优先确认成片、字幕、脚本和音频是否已经齐全。", deliverableAssets)}
+          {renderAssetList("排查文件", "用于查看生成过程和中间结果，不要和最终发布文件混在一起判断。", supportingAssets)}
         </section>
 
         <aside className="side-panel">
           <section className="card card--compact">
-            <h3>运行时状态</h3>
+            <h3>系统状态</h3>
             <div className="task-list compact-list">
               <div className="task-item">
-                <strong>{runtime?.api.name ?? "api"}</strong>
-                <span>{runtime?.api.status ?? "unknown"} · {runtime?.api.message ?? "N/A"}</span>
+                <strong>后台接口</strong>
+                <span>{runtime?.api.status ?? "unknown"} · {normalizeOperatorCopy(runtime?.api.message) || "N/A"}</span>
               </div>
               <div className="task-item">
-                <strong>{runtime?.worker.name ?? "worker"}</strong>
-                <span>{runtime?.worker.status ?? "unknown"} · {runtime?.worker.message ?? "N/A"}</span>
+                <strong>生成服务</strong>
+                <span>{runtime?.worker.status ?? "unknown"} · {normalizeOperatorCopy(runtime?.worker.message) || "N/A"}</span>
               </div>
               <div className="task-item">
-                <strong>{runtime?.redis.name ?? "redis"}</strong>
-                <span>{runtime?.redis.status ?? "unknown"} · {runtime?.redis.message ?? "N/A"}</span>
+                <strong>排队服务</strong>
+                <span>{runtime?.redis.status ?? "unknown"} · {normalizeOperatorCopy(runtime?.redis.message) || "N/A"}</span>
               </div>
             </div>
           </section>
@@ -1589,7 +1592,7 @@ export function AssetsPage() {
             <div className="task-list compact-list">
               <div className="task-item">
                 <strong>{getTaskFlowLabel(selectedTask)}</strong>
-                <span>资产排查完成后，直接回到当前任务真正需要处理的唯一主工作台。</span>
+                <span>素材排查完成后，直接回到当前任务真正需要处理的页面。</span>
                 <div className="task-item__actions">
                   {selectedTaskId && canCancelTask(selectedTask) ? (
                     <button
@@ -1612,7 +1615,7 @@ export function AssetsPage() {
                         ? "恢复中..."
                         : diagnostics?.recoveryReason === "stale_running_task" || isStaleRunningTask(selectedTask)
                           ? "恢复卡住任务"
-                          : "恢复运行"}
+                          : "恢复生成"}
                     </button>
                   ) : null}
                   {selectedTask?.executionMode === "review_required" &&
@@ -1640,14 +1643,14 @@ export function AssetsPage() {
             <div className="task-list compact-list">
               <div className="task-item">
                 <strong>{diagnostics?.operatorMessage ?? (diagnosticsError || "等待诊断同步")}</strong>
-                <span>系统会结合任务心跳、队列和资产产出判断是否真的卡住。</span>
+                <span>系统会结合最近进展、排队情况和素材产出判断是否真的卡住。</span>
               </div>
               <div className="task-item">
                 <strong>当前阶段</strong>
                 <span>{diagnostics?.runtimeTrace.currentStageLabel ?? selectedTask?.currentStageLabel ?? getTaskFlowLabel(selectedTask)}</span>
               </div>
               <div className="task-item">
-                <strong>场景进度</strong>
+                <strong>分段进度</strong>
                 <span>
                   {diagnostics?.runtimeTrace.currentSceneTotal
                     ? `${(diagnostics.runtimeTrace.currentSceneIndex ?? 0) + 1}/${diagnostics.runtimeTrace.currentSceneTotal}`
@@ -1655,21 +1658,21 @@ export function AssetsPage() {
                 </span>
               </div>
               <div className="task-item">
-                <strong>任务心跳</strong>
+                <strong>最近进展</strong>
                 <span>{heartbeatAgeLabel}</span>
               </div>
               <div className="task-item">
-                <strong>队列状态</strong>
+                <strong>排队状态</strong>
                 <span>
                   {!diagnostics
                     ? diagnosticsError || "诊断加载中"
                     : diagnostics.queue.available
-                      ? `active ${diagnostics.queue.activeJobIds.length} · waiting ${diagnostics.queue.waitingJobIds.length} · delayed ${diagnostics.queue.delayedJobIds.length} · failed ${diagnostics.queue.failedJobIds.length}`
-                      : `不可用 · ${diagnostics.queue.unavailableReason ?? "无法连接 Redis"}`}
+                      ? `处理中 ${diagnostics.queue.activeJobIds.length} · 等待中 ${diagnostics.queue.waitingJobIds.length} · 延后 ${diagnostics.queue.delayedJobIds.length} · 失败 ${diagnostics.queue.failedJobIds.length}`
+                      : `不可用 · ${diagnostics.queue.unavailableReason ?? "无法连接排队服务"}`}
                 </span>
               </div>
               <div className="task-item">
-                <strong>下一资产</strong>
+                <strong>下一步缺口</strong>
                 <span>{diagnostics ? diagnostics.assets.expectedNextAssetType ?? "暂无缺口" : "等待诊断同步"}</span>
               </div>
             </div>
@@ -1693,24 +1696,24 @@ export function AssetsPage() {
               ) : (
                 <div className="task-item">
                   <strong>当前暂无记录</strong>
-                  <span>worker 进入下一阶段后，这里会记录关键过程和失败原因。</span>
+                  <span>生成服务进入下一阶段后，这里会记录关键过程和失败原因。</span>
                 </div>
               )}
             </div>
           </section>
 
           <section className="card card--compact">
-            <h3>规划依据</h3>
+            <h3>生成依据</h3>
             <div className="task-list compact-list">
               {selectedTask?.status === "failed" && selectedTask?.failureReason ? (
                 <div className="task-item"><strong>失败原因</strong><span>{selectedTask.failureReason}</span></div>
               ) : null}
-              <div className="task-item"><strong>分镜路由依据</strong><span>{selectedTask?.routeReason ?? "待接入"}</span></div>
-              <div className="task-item"><strong>规划原则</strong><span>{selectedTask?.planning?.generationPreferenceLabel ?? "待接入"}</span></div>
+              <div className="task-item"><strong>视频结构依据</strong><span>{selectedTask?.routeReason ?? "待同步"}</span></div>
+              <div className="task-item"><strong>生成原则</strong><span>{selectedTask?.planning?.generationPreferenceLabel ?? "待同步"}</span></div>
               <div className="task-item"><strong>音频策略</strong><span>{getAudioStrategyLabel(selectedTask?.audioStrategy)}</span></div>
-              <div className="task-item"><strong>当前链路</strong><span>{getTaskFlowLabel(selectedTask)}</span></div>
-              <div className="task-item"><strong>可预览资产</strong><span>{assetStats.previewableCount} 个</span></div>
-              <div className="task-item"><strong>已就绪资产</strong><span>{assetStats.readyCount} 个</span></div>
+              <div className="task-item"><strong>当前流程</strong><span>{getTaskFlowLabel(selectedTask)}</span></div>
+              <div className="task-item"><strong>可预览素材</strong><span>{assetStats.previewableCount} 个</span></div>
+              <div className="task-item"><strong>已就绪文件</strong><span>{assetStats.readyCount} 个</span></div>
             </div>
           </section>
         </aside>

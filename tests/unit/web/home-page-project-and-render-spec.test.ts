@@ -158,7 +158,7 @@ describe("HomePage project and terminal preset flow", () => {
     })
 
     const titleInput = container.querySelector('input[placeholder*="夏季新品种草短视频"]') as HTMLInputElement | null
-    const scriptInput = container.querySelector('textarea[placeholder*="直接写你要表达的内容"]') as HTMLTextAreaElement | null
+    const scriptInput = container.querySelector('textarea[placeholder*="直接写要表达的内容"]') as HTMLTextAreaElement | null
     expect(titleInput).toBeTruthy()
     expect(scriptInput).toBeTruthy()
 
@@ -185,11 +185,11 @@ describe("HomePage project and terminal preset flow", () => {
     })
 
     const mixedAudioButton = Array.from(container.querySelectorAll("button")).find((button) =>
-      button.textContent?.includes("原生音频 + TTS 混音"),
+      button.textContent?.includes("保留环境音 + 系统配音"),
     )
     expect(mixedAudioButton).toBeTruthy()
     const whisperSubtitleButton = Array.from(container.querySelectorAll("button")).find((button) =>
-      button.textContent?.includes("Whisper 字幕"),
+      button.textContent?.includes("从成片音频识别字幕"),
     )
     expect(whisperSubtitleButton).toBeTruthy()
 
@@ -203,13 +203,13 @@ describe("HomePage project and terminal preset flow", () => {
       expect(text).toContain("审核优先")
       expect(text).toContain("2048 × 1536")
       expect(text).toContain("4:3")
-      expect(text).toContain("保真优先")
+      expect(text).toContain("审核优先")
       expect(text).toContain("单一路径")
-      expect(text).toContain("Whisper 字幕")
+      expect(text).toContain("从成片音频识别字幕")
     })
 
     const submitButton = Array.from(container.querySelectorAll("button")).find((button) =>
-      /提交并生成审核蓝图/.test(button.textContent ?? ""),
+      /提交，先生成审核内容/.test(button.textContent ?? ""),
     )
     expect(submitButton).toBeTruthy()
 
@@ -217,7 +217,7 @@ describe("HomePage project and terminal preset flow", () => {
       submitButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }))
     })
 
-    const confirmButton = findHomeButton(container, /确认入队并冻结配置/)
+    const confirmButton = findHomeButton(container, /确认提交/)
     expect(confirmButton).toBeTruthy()
 
     await act(async () => {
@@ -230,15 +230,15 @@ describe("HomePage project and terminal preset flow", () => {
 
     await waitFor(() => {
       const text = container.textContent ?? ""
-      expect(text).toContain("审核优先路径")
-      expect(text).toContain("任务“Campaign launch”已提交到审核优先队列。")
-      expect(text).toContain("生产看板跟进")
-      expect(text).toContain("打开任务资产")
+      expect(text).toContain("已提交，等待审核")
+      expect(text).toContain("任务“Campaign launch”已提交。")
+      expect(text).toContain("去看板跟进")
+      expect(text).toContain("查看素材文件")
     })
 
     await waitFor(() => {
       const toast = container.querySelector('[role="status"]')
-      expect(toast?.textContent ?? "").toContain("任务“Campaign launch”已提交到审核优先队列。")
+      expect(toast?.textContent ?? "").toContain("任务“Campaign launch”已提交。")
     })
 
     const payload = vi.mocked(api.createTask).mock.calls[0]?.[0] as Record<string, unknown>
@@ -269,7 +269,7 @@ describe("HomePage project and terminal preset flow", () => {
     })
 
     const titleInput = container.querySelector('input[placeholder*="夏季新品种草短视频"]') as HTMLInputElement | null
-    const scriptInput = container.querySelector('textarea[placeholder*="直接写你要表达的内容"]') as HTMLTextAreaElement | null
+    const scriptInput = container.querySelector('textarea[placeholder*="直接写要表达的内容"]') as HTMLTextAreaElement | null
     expect(titleInput).toBeTruthy()
     expect(scriptInput).toBeTruthy()
 
@@ -279,7 +279,7 @@ describe("HomePage project and terminal preset flow", () => {
     })
 
     const submitButton = Array.from(container.querySelectorAll("button")).find((button) =>
-      /提交并生成审核蓝图/.test(button.textContent ?? ""),
+      /提交，先生成审核内容/.test(button.textContent ?? ""),
     )
     expect(submitButton).toBeTruthy()
 
@@ -288,7 +288,7 @@ describe("HomePage project and terminal preset flow", () => {
     })
 
     const confirmButton = Array.from(container.querySelectorAll("button")).find((button) =>
-      button.textContent?.includes("确认入队并冻结配置"),
+      button.textContent?.includes("确认提交"),
     )
     expect(confirmButton).toBeTruthy()
 
@@ -298,7 +298,7 @@ describe("HomePage project and terminal preset flow", () => {
 
     await waitFor(() => {
       const toast = container.querySelector('[role="alert"]')
-      expect(toast?.textContent ?? "").toContain("队列暂不可用")
+      expect(toast?.textContent ?? "").toContain("任务排队服务暂不可用")
     })
   })
 })
@@ -394,7 +394,7 @@ describe("HomePage P0-P2 launch console behavior", () => {
 
     const text = container.textContent ?? ""
     expect(text).toContain("项目与输出")
-    expect(text).toContain("内容母本")
+    expect(text).toContain("原始文案")
     expect(text).toContain("启动前确认")
     expect(text).toMatch(/启动前检查|启动前确认|预检/)
   })
@@ -404,7 +404,7 @@ describe("HomePage P0-P2 launch console behavior", () => {
 
     const submitButton = findHomeButton(
       container,
-      /提交并生成审核蓝图|确认流程/,
+      /提交，先生成审核内容|确认流程/,
     )
     expect(submitButton).toBeTruthy()
 
@@ -414,9 +414,9 @@ describe("HomePage P0-P2 launch console behavior", () => {
 
     await waitFor(() => {
       const text = container.textContent ?? ""
-      expect(text).toMatch(/提交并生成审核蓝图|确认流程/)
+      expect(text).toMatch(/提交，先生成审核内容|确认流程/)
       expect(text).toMatch(/任务名称.*(必填|不能为空|请填写任务名称)/)
-      expect(text).toMatch(/(内容母本|母本).*(必填|不能为空|请填写内容母本)/)
+      expect(text).toMatch(/(原始文案|文案).*(必填|不能为空|请填写原始文案)/)
     })
     expect(vi.mocked(api.createTask)).not.toHaveBeenCalled()
   })
@@ -425,7 +425,7 @@ describe("HomePage P0-P2 launch console behavior", () => {
     await renderHomePage()
 
     const titleInput = container.querySelector('input[placeholder*="夏季新品种草短视频"]') as HTMLInputElement | null
-    const scriptInput = container.querySelector('textarea[placeholder*="直接写你要表达的内容"]') as HTMLTextAreaElement | null
+    const scriptInput = container.querySelector('textarea[placeholder*="直接写要表达的内容"]') as HTMLTextAreaElement | null
     expect(titleInput).toBeTruthy()
     expect(scriptInput).toBeTruthy()
 
@@ -435,7 +435,7 @@ describe("HomePage P0-P2 launch console behavior", () => {
     })
 
     await waitFor(() => {
-      expect(container.textContent ?? "").toMatch(/母本偏短|建议补充|内容母本.*偏短/)
+      expect(container.textContent ?? "").toMatch(/文案偏短|建议补充|原始文案.*偏短/)
     })
   })
 
@@ -443,7 +443,7 @@ describe("HomePage P0-P2 launch console behavior", () => {
     await renderHomePage()
 
     const titleInput = container.querySelector('input[placeholder*="夏季新品种草短视频"]') as HTMLInputElement | null
-    const scriptInput = container.querySelector('textarea[placeholder*="直接写你要表达的内容"]') as HTMLTextAreaElement | null
+    const scriptInput = container.querySelector('textarea[placeholder*="直接写要表达的内容"]') as HTMLTextAreaElement | null
     expect(titleInput).toBeTruthy()
     expect(scriptInput).toBeTruthy()
 
@@ -457,7 +457,7 @@ describe("HomePage P0-P2 launch console behavior", () => {
 
     const submitButton = findHomeButton(
       container,
-      /提交并生成审核蓝图|确认流程/,
+      /提交，先生成审核内容|确认流程/,
     )
     expect(submitButton).toBeTruthy()
 
@@ -466,7 +466,7 @@ describe("HomePage P0-P2 launch console behavior", () => {
     })
 
     const confirmButton = Array.from(container.querySelectorAll("button")).find((button) =>
-      button.textContent?.includes("确认入队并冻结配置"),
+      button.textContent?.includes("确认提交"),
     )
     expect(confirmButton).toBeTruthy()
 
@@ -480,9 +480,9 @@ describe("HomePage P0-P2 launch console behavior", () => {
 
     await waitFor(() => {
       const text = container.textContent ?? ""
-      expect(text).toContain("审核优先路径")
-      expect(text).toMatch(/蓝图\/关键画面生成中|蓝图生成中|关键画面生成中/)
-      expect(text).toMatch(/进入任务审核|生产看板跟进/)
+      expect(text).toContain("已提交，等待审核")
+      expect(text).toMatch(/生成方案和关键画面准备中/)
+      expect(text).toMatch(/进入任务审核|去看板跟进/)
     })
   })
 
@@ -499,10 +499,11 @@ describe("HomePage P0-P2 launch console behavior", () => {
 
     await waitFor(() => {
       const text = container.textContent ?? ""
-      expect(text).toContain("运行中")
+      expect(text).toContain("生成中")
       expect(text).toContain("异常")
       expect(text).toContain("已完成")
       expect(text).not.toMatch(/\b(running|failed|completed)\b/)
     })
   })
 })
+

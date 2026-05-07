@@ -7,6 +7,8 @@ import {
   buildKeyframePreviewUrl,
   buildBatchDashboardUrl,
   getAudioStrategyLabel,
+  getBlueprintStatusLabel,
+  getExecutionModeLabel,
   type AssetRecord,
   type TaskBlueprintRecord,
   type TaskBlueprintReviewRecord,
@@ -201,7 +203,7 @@ export function TaskReviewPage() {
         if (!active) {
           return
         }
-        setError(loadError instanceof Error ? loadError.message : "审核蓝图加载失败")
+        setError(loadError instanceof Error ? loadError.message : "审核内容加载失败")
         setSourceScript("")
       } finally {
         if (active) {
@@ -313,7 +315,7 @@ export function TaskReviewPage() {
       setBlueprint(result.blueprint)
       applyBlueprintStatus(detail.taskId, result.blueprint.status)
     } catch (resumeError) {
-      setError(resumeError instanceof Error ? resumeError.message : "继续执行失败")
+      setError(resumeError instanceof Error ? resumeError.message : "继续生成失败")
     } finally {
       setSubmitting(false)
     }
@@ -337,20 +339,20 @@ export function TaskReviewPage() {
   }
 
   if (loading) {
-    return <div className="empty-state">正在加载审核蓝图...</div>
+    return <div className="empty-state">正在加载审核内容...</div>
   }
 
   return (
     <div className="workspace-page">
       <header className="topbar">
         <div>
-          <div className="eyebrow">Blueprint Review</div>
+          <div className="eyebrow">任务审核</div>
           <h1>整任务审核工作台</h1>
-          <p>先审整套蓝图、关键画面和提示词，再决定是否继续完整分镜视频生成。</p>
+          <p>先检查整条视频的生成方案、关键画面和画幅，再决定是否继续生成正片。</p>
         </div>
         <div className="topbar-actions">
-          {blueprint ? <span className="pill">{`Blueprint v${blueprint.version}`}</span> : null}
-          {detail?.blueprintStatus ? <span className="pill pill--accent">{detail.blueprintStatus}</span> : null}
+          {blueprint ? <span className="pill">{`方案 v${blueprint.version}`}</span> : null}
+          {detail?.blueprintStatus ? <span className="pill pill--accent">{getBlueprintStatusLabel(detail.blueprintStatus)}</span> : null}
         </div>
       </header>
 
@@ -402,7 +404,7 @@ export function TaskReviewPage() {
               >
                 {taskOptions.map((task) => (
                   <option key={task.id} value={task.id}>
-                    {task.title} · {task.projectId} · {task.blueprintStatus}
+                    {task.title} · {task.projectId} · {getBlueprintStatusLabel(task.blueprintStatus)}
                   </option>
                 ))}
               </select>
@@ -410,7 +412,7 @@ export function TaskReviewPage() {
           ) : null}
 
           <div className="section-header">
-            <h2>蓝图总览</h2>
+            <h2>生成方案总览</h2>
             <div className="section-actions">
               <button
                 className="primary-button"
@@ -426,7 +428,7 @@ export function TaskReviewPage() {
                 onClick={() => void submitReview("rejected")}
                 type="button"
               >
-                {isRejected ? "已驳回当前蓝图" : "驳回当前蓝图"}
+                {isRejected ? "已驳回当前方案" : "驳回当前方案"}
               </button>
               <button
                 className="ghost-button"
@@ -434,7 +436,7 @@ export function TaskReviewPage() {
                 onClick={() => void resumeExecution()}
                 type="button"
               >
-                继续完整视频生成
+                继续生成正片
               </button>
             </div>
           </div>
@@ -451,17 +453,17 @@ export function TaskReviewPage() {
               <span>{blueprint?.blueprint.renderSpec.aspectRatio ?? detail?.taskRunConfig.renderSpecJson.aspectRatio ?? "--"}</span>
             </div>
             <div className="planning-chip">
-              <span className="planning-chip__label">执行方式</span>
-              <strong>{blueprint?.blueprint.executionMode ?? detail?.taskRunConfig.executionMode ?? "--"}</strong>
-              <span>{review ? `最近审核：${review.decision}` : "当前还没有审核记录"}</span>
+              <span className="planning-chip__label">生成流程</span>
+              <strong>{getExecutionModeLabel(blueprint?.blueprint.executionMode ?? detail?.taskRunConfig.executionMode)}</strong>
+              <span>{review ? `最近审核：${review.decision}` : "还没有审核记录"}</span>
             </div>
             <div className="planning-chip">
               <span className="planning-chip__label">音频策略</span>
               <strong>{getAudioStrategyLabel(detail?.taskRunConfig.audioStrategy)}</strong>
               <span>
                 {detail?.taskRunConfig.audioStrategy === "native_plus_tts_ducked"
-                  ? "保留 Veo 原生环境音，并叠加 TTS 旁白。"
-                  : "最终主音轨使用 TTS 旁白。"}
+                  ? "保留视频自带环境音，并叠加系统配音。"
+                  : "最终主音轨使用系统配音。"}
               </span>
               <div className="planning-summary-tags" style={{ marginTop: 10 }}>
                 <button
@@ -470,7 +472,7 @@ export function TaskReviewPage() {
                   onClick={() => void updateAudioStrategy("tts_only")}
                   type="button"
                 >
-                  TTS 主导
+                  系统配音
                 </button>
                 <button
                   className={detail?.taskRunConfig.audioStrategy === "native_plus_tts_ducked" ? "primary-button" : "ghost-button"}
@@ -478,20 +480,20 @@ export function TaskReviewPage() {
                   onClick={() => void updateAudioStrategy("native_plus_tts_ducked")}
                   type="button"
                 >
-                  原生音频 + TTS 混音
+                  保留环境音 + 系统配音
                 </button>
               </div>
               <span>
                 {canEditAudioStrategy
-                  ? "修改只影响最终成片音轨策略，不会重新生成图片和提示词。"
-                  : "任务进入继续生成或成片阶段后，音频策略会自动锁定。"}
+                  ? "修改只影响最终成片音轨，不会重新生成图片和视频文案。"
+                  : "任务进入生成正片阶段后，音频设置会自动锁定。"}
               </span>
             </div>
           </div>
 
           <section className="planning-summary-card">
-            <strong>母本原文</strong>
-            <span>{sourceScript || "当前没有留档的母本原文。"}</span>
+            <strong>原始文案</strong>
+            <span>{sourceScript || "当前没有留档的原始文案。"}</span>
           </section>
 
           <section className="planning-summary-card">
@@ -500,12 +502,12 @@ export function TaskReviewPage() {
           </section>
 
           <section className="planning-summary-card">
-            <strong>全局风格</strong>
+            <strong>整体风格</strong>
             <span>{blueprint?.blueprint.visualStyleGuide ?? detail?.visualStyleGuide ?? "暂无风格指引"}</span>
           </section>
 
           <section className="planning-summary-card">
-            <strong>一致性契约</strong>
+            <strong>一致性要求</strong>
             <span>
               主体：{blueprint?.blueprint.subjectProfile ?? "--"} ·
               物料：{blueprint?.blueprint.productProfile ?? "--"}
@@ -523,7 +525,7 @@ export function TaskReviewPage() {
               <section key={scene.id} className="form-section">
                 <div className="section-header section-header--stack">
                   <div>
-                    <h3>{`Scene #${scene.index + 1}`}</h3>
+                    <h3>{`第 ${scene.index + 1} 段`}</h3>
                     <span className="muted">{scene.sceneGoal}</span>
                   </div>
                   <span className="pill pill--sm">{`${scene.durationSec}s`}</span>
@@ -533,7 +535,7 @@ export function TaskReviewPage() {
                   <div className="review-content">{scene.voiceoverScript}</div>
                 </div>
                 <div className="review-block">
-                  <label className="field-label">起始关键画面描述</label>
+                  <label className="field-label">开场画面描述</label>
                   <div className="review-content">{scene.startFrameDescription}</div>
                 </div>
                 <div className="review-block">
@@ -545,21 +547,21 @@ export function TaskReviewPage() {
                   />
                 </div>
                 <div className="review-block">
-                  <label className="field-label">图片提示词</label>
+                  <label className="field-label">图片生成说明</label>
                   <div className="review-content">{scene.imagePrompt}</div>
                 </div>
                 <div className="review-block">
-                  <label className="field-label">视频提示词</label>
+                  <label className="field-label">视频生成说明</label>
                   <div className="review-content">{scene.videoPrompt}</div>
                 </div>
                 <div className="review-block">
-                  <label className="field-label">连续性约束</label>
+                  <label className="field-label">连续性要求</label>
                   <div className="review-content">
-                    {scene.continuityConstraints.length ? scene.continuityConstraints.join(" / ") : "当前没有额外连续性约束"}
+                    {scene.continuityConstraints.length ? scene.continuityConstraints.join(" / ") : "当前没有额外连续性要求"}
                   </div>
                 </div>
               </section>
-            )) ?? <div className="empty-inline">当前蓝图还没有分镜契约。</div>}
+            )) ?? <div className="empty-inline">当前还没有分段生成方案。</div>}
           </div>
         </section>
 
@@ -568,19 +570,19 @@ export function TaskReviewPage() {
             <h3>当前状态</h3>
             <div className="task-list compact-list">
               <div className="task-item">
-                <strong>蓝图版本</strong>
-                <span>{blueprint ? `Blueprint v${blueprint.version}` : "未生成"}</span>
+                <strong>方案版本</strong>
+                <span>{blueprint ? `方案 v${blueprint.version}` : "未生成"}</span>
               </div>
               <div className="task-item">
-                <strong>蓝图状态</strong>
-                <span>{blueprint?.status ?? detail?.blueprintStatus ?? "未知"}</span>
+                <strong>方案状态</strong>
+                <span>{getBlueprintStatusLabel(blueprint?.status ?? detail?.blueprintStatus)}</span>
               </div>
               <div className="task-item">
                 <strong>最新审核</strong>
                 <span>{review ? `${review.decision} · ${review.decidedAt}` : "暂无"}</span>
               </div>
               <div className="task-item">
-                <strong>母本留档</strong>
+                <strong>原始文案</strong>
                 <span>{sourceScript ? "已加载" : "暂无"}</span>
               </div>
               <div className="task-item">
@@ -591,13 +593,13 @@ export function TaskReviewPage() {
           </section>
 
           <section className="card card--compact">
-            <h3>跳转入口</h3>
+            <h3>相关页面</h3>
             <div className="task-list compact-list">
               <Link className="ghost-button" to={buildBatchDashboardUrl(detail?.taskId ?? undefined)}>
                 返回生产看板
               </Link>
               <Link className="ghost-button" to={buildAssetCenterUrl(detail?.taskId ?? undefined)}>
-                打开任务资产
+                查看素材文件
               </Link>
             </div>
           </section>
