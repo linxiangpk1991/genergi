@@ -9,6 +9,13 @@ import {
   type ModelRegistryRecord,
   type ProviderRegistryRecord,
 } from "../api"
+import {
+  buildCapabilityPreset,
+  getModelCallProfile,
+  IMAGE_TRANSPORT_OPTIONS,
+  normalizeTextWireApiForUi,
+  TEXT_WIRE_API_OPTIONS,
+} from "../lib/model-control-display"
 
 const emptyForm: CreateModelRegistryEntryPayload = {
   modelKey: "",
@@ -71,6 +78,22 @@ function ModelControlNav() {
 
 function stringifyCapabilityJson(value: Record<string, unknown>) {
   return JSON.stringify(value, null, 2)
+}
+
+function parseCapabilityText(value: string) {
+  try {
+    const parsed = JSON.parse(value) as Record<string, unknown>
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+function mergeCapabilityText(currentText: string, patch: Record<string, unknown>) {
+  return stringifyCapabilityJson({
+    ...parseCapabilityText(currentText),
+    ...patch,
+  })
 }
 
 export function ModelRegistryPage() {
@@ -149,6 +172,23 @@ export function ModelRegistryPage() {
     setCapabilityText(stringifyCapabilityJson(model.capabilityJson))
     setNotice("")
     setError("")
+  }
+
+  function applyCapabilityPatch(patch: Record<string, unknown>) {
+    setCapabilityText((current) => mergeCapabilityText(current, patch))
+  }
+
+  function applyAutoCapabilityPreset() {
+    const preset = buildCapabilityPreset(form.slotType, form.providerModelId)
+    setCapabilityText((current) => mergeCapabilityText(current, preset))
+  }
+
+  function getDraftModelForProfile(): Pick<ModelRegistryRecord, "slotType" | "providerModelId" | "capabilityJson"> {
+    return {
+      slotType: form.slotType,
+      providerModelId: form.providerModelId,
+      capabilityJson: parseCapabilityText(capabilityText),
+    }
   }
 
   async function handleSubmit() {
@@ -343,6 +383,9 @@ export function ModelRegistryPage() {
                   onChange={(event) => setForm((current) => ({ ...current, providerModelId: event.target.value }))}
                   placeholder="例如：veo-3.1-fast"
                 />
+                {form.slotType === "textModel" && form.providerModelId.trim().toLowerCase().startsWith("gpt-5") ? (
+                  <span className="field-help">GPT-5 / GPT-5.5 文案模型默认按 Responses API 调用。</span>
+                ) : null}
               </label>
             </div>
 
@@ -368,6 +411,118 @@ export function ModelRegistryPage() {
                   <option value="disabled">disabled</option>
                 </select>
               </label>
+
+              <div className="model-profile-editor">
+                <div className="form-section__title">
+                  <strong>调用方式</strong>
+                  <span>这里会写入能力 JSON，worker 会按这个字段决定实际走哪个接口。</span>
+                </div>
+
+                {form.slotType === "textModel" ? (
+                  <label>
+                    <span className="field-label">文本接口</span>
+                    <select
+                      className="input"
+                      value={normalizeTextWireApiForUi(parseCapabilityText(capabilityText).wireApi, form.providerModelId)}
+                      onChange={(event) =>
+                        applyCapabilityPatch({
+                          wireApi: event.target.value,
+                          endpointStyle: event.target.value === "responses"
+                            ? "responses"
+                            : event.target.value === "messages"
+                              ? "messages"
+                              : "chat-completions",
+                        })
+                      }
+                    >
+                      {TEXT_WIRE_API_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label} ({option.endpoint})
+                        </option>
+                      ))}
+                    </select>
+                    <span className="field-help">
+                      {TEXT_WIRE_API_OPTIONS.find((option) => option.value === normalizeTextWireApiForUi(parseCapabilityText(capabilityText).wireApi, form.providerModelId))?.description}
+                    </span>
+                  </label>
+                ) : null}
+
+                {form.slotType === "imageModel" ? (
+                  <label>
+                    <span className="field-label">图片接口</span>
+                    <select
+                      className="input"
+                      value={String(parseCapabilityText(capabilityText).imageTransport ?? "")}
+                      onChange={(event) => {
+                        const option = IMAGE_TRANSPORT_OPTIONS.find((item) => item.value === event.target.value)
+                        applyCapabilityPatch({
+                          imageTransport: event.target.value,
+                          endpointStyle:
+                            event.target.value === "openai-images-generations"
+                              ? "images-generations"
+                              : event.target.value === "gemini-generate-content"
+                                ? "gemini-generate-content"
+                                : "chat-completions",
+                        })
+                        if (option?.value === "openai-images-generations") {
+                          applyCapabilityPatch({ family: "gpt-image", usage: "image-generation" })
+                        }
+                      }}
+                    >
+                      <option value="">待选择</option>
+                      {IMAGE_TRANSPORT_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label} ({option.endpoint})
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ) : null}
+
+                {form.slotType === "videoModel" ? (
+                  <div className="modal-grid">
+                    <label>
+                      <span className="field-label">最大单段时长</span>
+                      <input
+                        className="input"
+                        min={1}
+                        type="number"
+                        value={String(parseCapabilityText(capabilityText).maxSingleShotSec ?? "")}
+                        onChange={(event) =>
+                          applyCapabilityPatch({
+                            maxSingleShotSec: Number(event.target.value) || undefined,
+                            usage: "video-generation",
+                          })
+                        }
+                        placeholder="例如：8"
+                      />
+                    </label>
+                    <label>
+                      <span className="field-label">质量档位</span>
+                      <select
+                        className="input"
+                        value={String(parseCapabilityText(capabilityText).qualityTier ?? "")}
+                        onChange={(event) => applyCapabilityPatch({ qualityTier: event.target.value, usage: "video-generation" })}
+                      >
+                        <option value="">待选择</option>
+                        <option value="fast">快速</option>
+                        <option value="high">高质量</option>
+                        <option value="hd">高清</option>
+                      </select>
+                    </label>
+                  </div>
+                ) : null}
+
+                <div className="model-call-preview">
+                  <strong>{getModelCallProfile(getDraftModelForProfile()).label}</strong>
+                  <span>{getModelCallProfile(getDraftModelForProfile()).endpoint}</span>
+                  <small>{getModelCallProfile(getDraftModelForProfile()).description}</small>
+                </div>
+
+                <button className="ghost-button ghost-button--compact" onClick={applyAutoCapabilityPreset} type="button">
+                  按模型 ID 自动补全能力
+                </button>
+              </div>
 
               <label>
                 <span className="field-label">能力说明 JSON</span>
@@ -431,6 +586,19 @@ export function ModelRegistryPage() {
                       <span className="pill pill--sm">{MODEL_CONTROL_SLOT_LABELS[model.slotType]}</span>
                       <span className={getStatusClass(model.lifecycleStatus)}>{model.lifecycleStatus}</span>
                     </div>
+                  </div>
+
+                  <div className="model-call-summary">
+                    {(() => {
+                      const profile = getModelCallProfile(model)
+                      return (
+                        <>
+                          <strong>{profile.label}</strong>
+                          <span>{profile.endpoint}</span>
+                          <small>{profile.description}</small>
+                        </>
+                      )
+                    })()}
                   </div>
 
                   <div className="registry-item__meta">

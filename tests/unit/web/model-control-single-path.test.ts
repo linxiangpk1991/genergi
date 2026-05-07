@@ -17,6 +17,9 @@ vi.mock("../../../apps/web/src/api", async () => {
       updateModeModelDefaults: vi.fn(),
       listModelProviders: vi.fn(),
       listModelRegistry: vi.fn(),
+      createModelRegistryEntry: vi.fn(),
+      updateModelRegistryEntry: vi.fn(),
+      validateModelRegistryEntry: vi.fn(),
     },
   }
 })
@@ -24,6 +27,7 @@ vi.mock("../../../apps/web/src/api", async () => {
 import { api } from "../../../apps/web/src/api"
 import { ModelControlCenterPage } from "../../../apps/web/src/pages/ModelControlCenterPage"
 import { ModelDefaultsPage } from "../../../apps/web/src/pages/ModelDefaultsPage"
+import { ModelRegistryPage } from "../../../apps/web/src/pages/ModelRegistryPage"
 
 async function waitFor(assertion: () => void, timeoutMs = 3000) {
   const deadline = Date.now() + timeoutMs
@@ -188,7 +192,7 @@ describe("model control single-path surfaces", () => {
 
     await waitFor(() => {
       const text = container.textContent ?? ""
-      expect(text).toContain("任务创建默认值")
+      expect(text).toContain("新任务默认")
       expect(text).not.toContain("量产模式")
       expect(text).not.toContain("高质量模式")
       expect(text).not.toContain("模式默认")
@@ -216,6 +220,51 @@ describe("model control single-path surfaces", () => {
       expect(text).not.toContain("量产模式")
       expect(text).not.toContain("高质量模式")
       expect(text).not.toContain("模式默认值")
+    })
+  })
+
+  it("shows GPT-5 family text models as Responses API instead of chat completions", async () => {
+    vi.mocked(api.listModelRegistry).mockResolvedValue({
+      models: [
+        {
+          id: "model_gpt_55",
+          modelKey: "gpt-5-5",
+          providerId: "provider_openai_compatible",
+          providerDisplayName: "OpenAI Responses",
+          slotType: "textModel",
+          providerModelId: "gpt-5.5",
+          displayName: "GPT-5.5",
+          lifecycleStatus: "available",
+          capabilityJson: {
+            family: "gpt",
+            usage: "text-planning",
+            endpointStyle: "responses",
+            wireApi: "responses",
+          },
+        },
+      ],
+    } as any)
+
+    await act(async () => {
+      root.render(
+        createElement(
+          MemoryRouter,
+          { initialEntries: ["/model-control-center/registry"] },
+          createElement(
+            Routes,
+            null,
+            createElement(Route, { path: "/model-control-center/registry", element: createElement(ModelRegistryPage) }),
+          ),
+        ),
+      )
+    })
+
+    await waitFor(() => {
+      const text = container.textContent ?? ""
+      expect(text).toContain("GPT-5.5")
+      expect(text).toContain("Responses API")
+      expect(text).toContain("/v1/responses")
+      expect(text).not.toContain("endpointStyle: chat-completions")
     })
   })
 })

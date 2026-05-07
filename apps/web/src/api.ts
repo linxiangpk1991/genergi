@@ -743,6 +743,8 @@ export type SelectableModelOption = {
   displayName: string
   providerDisplayName?: string | null
   providerId?: string
+  providerType?: string
+  providerModelId?: string
   slotType: ModelControlSlotType
   capabilityJson?: Record<string, unknown>
   description?: string | null

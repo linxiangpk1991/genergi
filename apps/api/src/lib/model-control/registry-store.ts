@@ -14,6 +14,7 @@ import {
   type ModelControlStatus,
   type ProviderRecord,
   normalizeImageProviderModelId,
+  normalizeModelCapability,
   normalizeVideoProviderModelId,
   readModelDefaults,
   readModelRecords,
@@ -92,7 +93,7 @@ function createSeedModelRecord(slotType: ModelSlotType, slotValue: { id: string;
     slotType,
     providerModelId,
     displayName: slotValue.label,
-    capabilityJson,
+    capabilityJson: normalizeModelCapability(slotType, providerModelId, capabilityJson),
     lifecycleStatus: "available",
     lastValidatedAt: timestamp,
     lastValidationError: null,
@@ -326,7 +327,7 @@ export async function createModelRecord(input: {
     slotType: input.slotType,
     providerModelId: input.providerModelId.trim(),
     displayName: input.displayName.trim(),
-    capabilityJson: input.capabilityJson ?? {},
+    capabilityJson: normalizeModelCapability(input.slotType, input.providerModelId.trim(), input.capabilityJson ?? {}),
     lifecycleStatus: input.lifecycleStatus ?? "draft",
     lastValidatedAt: null,
     lastValidationError: null,
@@ -394,14 +395,16 @@ export async function updateModelRecord(
   }
 
   const current = models[index]
+  const nextSlotType = patch.slotType ?? current.slotType
+  const nextProviderModelId = patch.providerModelId?.trim() ?? current.providerModelId
   models[index] = {
     ...current,
     modelKey: patch.modelKey?.trim() ?? current.modelKey,
     providerId: patch.providerId ?? current.providerId,
-    slotType: patch.slotType ?? current.slotType,
-    providerModelId: patch.providerModelId?.trim() ?? current.providerModelId,
+    slotType: nextSlotType,
+    providerModelId: nextProviderModelId,
     displayName: patch.displayName?.trim() ?? current.displayName,
-    capabilityJson: patch.capabilityJson ?? current.capabilityJson,
+    capabilityJson: normalizeModelCapability(nextSlotType, nextProviderModelId, patch.capabilityJson ?? current.capabilityJson),
     lifecycleStatus: patch.lifecycleStatus ?? current.lifecycleStatus,
     lastValidatedAt: patch.lastValidatedAt === undefined ? current.lastValidatedAt : patch.lastValidatedAt,
     lastValidationError: patch.lastValidationError === undefined ? current.lastValidationError : patch.lastValidationError,

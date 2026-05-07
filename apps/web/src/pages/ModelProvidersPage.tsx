@@ -7,6 +7,7 @@ import {
   type ProviderAuthType,
   type ProviderRegistryRecord,
 } from "../api"
+import { AUTH_TYPE_OPTIONS, formatAuthType, formatProviderType, PROVIDER_TYPE_OPTIONS } from "../lib/model-control-display"
 
 const emptyForm: CreateModelProviderPayload = {
   providerKey: "",
@@ -275,12 +276,15 @@ export function ModelProvidersPage() {
                     value={form.providerType}
                     onChange={(event) => setForm((current) => ({ ...current, providerType: event.target.value }))}
                   >
-                    <option value="openai-compatible">openai-compatible</option>
-                    <option value="anthropic-compatible">anthropic-compatible</option>
-                    <option value="edge-tts">edge-tts</option>
-                    <option value="azure-tts">azure-tts</option>
-                    <option value="custom">custom</option>
+                    {PROVIDER_TYPE_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
                   </select>
+                  <span className="field-help">
+                    {PROVIDER_TYPE_OPTIONS.find((option) => option.value === form.providerType)?.description}
+                  </span>
                 </label>
 
                 <label>
@@ -290,12 +294,15 @@ export function ModelProvidersPage() {
                     value={form.authType}
                     onChange={(event) => setForm((current) => ({ ...current, authType: event.target.value }))}
                   >
-                    <option value="bearer_token">bearer_token</option>
-                    <option value="api_key_header">api_key_header</option>
-                    <option value="x_api_key">x_api_key</option>
-                    <option value="custom_header">custom_header</option>
-                    <option value="none">none</option>
+                    {AUTH_TYPE_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
                   </select>
+                  <span className="field-help">
+                    {AUTH_TYPE_OPTIONS.find((option) => option.value === form.authType)?.description}
+                  </span>
                 </label>
               </div>
 
@@ -389,8 +396,8 @@ export function ModelProvidersPage() {
                         <div className="muted mono">{provider.providerKey}</div>
                       </td>
                       <td>
-                        <div>{provider.providerType}</div>
-                        <div className="muted">{provider.authType}</div>
+                        <div>{formatProviderType(provider.providerType)}</div>
+                        <div className="muted">{formatAuthType(provider.authType)}</div>
                       </td>
                       <td className="text-break mono">{provider.endpointUrl || "未配置"}</td>
                       <td>

@@ -33,6 +33,7 @@ import {
   normalizeImageProviderModelId,
   normalizeVideoProviderModelId,
 } from "./provider-model-ids.js"
+import { normalizeModelCapability } from "./model-control.js"
 import { renderSpecSchema } from "./video-blueprint.js"
 
 const subtitleStrategyValues = new Set(["tts_aligned", "whisper_cpp"])
@@ -513,7 +514,7 @@ function normalizeModelRecord(record: ModelRecord): ModelRecord | null {
       : slotType === "videoModel"
         ? normalizeVideoProviderModelId(record.providerModelId)
         : record.providerModelId
-  const capabilityJson = normalizeCapabilityJson(record.capabilityJson)
+  const capabilityJson = normalizeModelCapability(slotType, providerModelId, normalizeCapabilityJson(record.capabilityJson))
 
   return {
     ...record,

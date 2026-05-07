@@ -9,6 +9,7 @@ import {
   type SelectableModelOption,
   type SelectableModelPoolsResponse,
 } from "../api"
+import { getModelCallProfile } from "../lib/model-control-display"
 
 type SlotDraft = Partial<Record<(typeof MODEL_CONTROL_SLOT_ORDER)[number], string>>
 
@@ -80,7 +81,17 @@ function describeOption(option: SelectableModelOption | null | undefined) {
     return "未设置"
   }
 
-  return `${option.displayName}${option.providerDisplayName ? ` / ${option.providerDisplayName}` : ""}`
+  const providerLabel = option.providerDisplayName ? ` / ${option.providerDisplayName}` : ""
+  if (option.providerModelId && option.capabilityJson) {
+    const profile = getModelCallProfile({
+      slotType: option.slotType,
+      providerModelId: option.providerModelId,
+      capabilityJson: option.capabilityJson,
+    })
+    return `${option.displayName}${providerLabel} · ${profile.label}`
+  }
+
+  return `${option.displayName}${providerLabel}`
 }
 
 export function ModelDefaultsPage() {

@@ -39,6 +39,90 @@ export type ModelSlotType = z.infer<typeof modelSlotTypeSchema>
 export const modelCapabilitySchema = z.record(z.string(), z.unknown())
 export type ModelCapability = z.infer<typeof modelCapabilitySchema>
 
+export type TextWireApi = "responses" | "chat_completions" | "messages"
+
+function normalizeCapabilityString(value: unknown) {
+  return typeof value === "string" ? value.trim().toLowerCase().replace(/[-\s]+/g, "_") : ""
+}
+
+export function normalizeTextWireApi(value: unknown, providerModelId = ""): TextWireApi | null {
+  const normalized = normalizeCapabilityString(value)
+  if (
+    normalized === "responses" ||
+    normalized === "response" ||
+    normalized === "responses_compatible_openai_chat" ||
+    normalized === "openai_responses"
+  ) {
+    return "responses"
+  }
+  if (
+    normalized === "chat_completions" ||
+    normalized === "chat_completion" ||
+    normalized === "chat" ||
+    normalized === "openai_chat_completions"
+  ) {
+    return "chat_completions"
+  }
+  if (normalized === "messages" || normalized === "anthropic_messages" || normalized === "anthropic") {
+    return "messages"
+  }
+
+  return providerModelId.trim().toLowerCase().startsWith("gpt-5") ? "responses" : null
+}
+
+function endpointStyleForWireApi(wireApi: TextWireApi) {
+  switch (wireApi) {
+    case "responses":
+      return "responses"
+    case "messages":
+      return "messages"
+    case "chat_completions":
+      return "chat-completions"
+  }
+}
+
+export function normalizeModelCapability(
+  slotType: ModelSlotType,
+  providerModelId: string,
+  capabilityJson: Record<string, unknown> = {},
+): Record<string, unknown> {
+  const capability = { ...capabilityJson }
+
+  if (slotType === "textModel") {
+    const wireApi =
+      normalizeTextWireApi(capability.wireApi, providerModelId) ??
+      normalizeTextWireApi(capability.wire_api, providerModelId) ??
+      normalizeTextWireApi(capability.textWireApi, providerModelId) ??
+      normalizeTextWireApi(capability.text_wire_api, providerModelId) ??
+      normalizeTextWireApi(capability.endpointStyle, providerModelId) ??
+      normalizeTextWireApi(capability.endpoint_style, providerModelId)
+
+    if (wireApi) {
+      capability.wireApi = wireApi
+      capability.endpointStyle = endpointStyleForWireApi(wireApi)
+    }
+  }
+
+  if (slotType === "imageModel") {
+    const transport = normalizeCapabilityString(capability.imageTransport)
+    if (transport === "openai_images_generations") {
+      capability.imageTransport = "openai-images-generations"
+      capability.endpointStyle = "images-generations"
+    } else if (transport === "gemini_generate_content") {
+      capability.imageTransport = "gemini-generate-content"
+      capability.endpointStyle = "gemini-generate-content"
+    } else if (transport === "openai_chat_completions") {
+      capability.imageTransport = "openai-chat-completions"
+      capability.endpointStyle = "chat-completions"
+    } else if (providerModelId.trim().toLowerCase().startsWith("gpt-image")) {
+      capability.imageTransport = capability.imageTransport ?? "openai-images-generations"
+      capability.endpointStyle = capability.endpointStyle ?? "images-generations"
+    }
+  }
+
+  return capability
+}
+
 export const providerRecordSchema = z.object({
   id: z.string(),
   providerKey: z.string().min(1),

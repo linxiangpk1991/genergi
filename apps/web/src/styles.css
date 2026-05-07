@@ -392,6 +392,49 @@ select {
   line-height: 1.45;
 }
 
+.model-profile-editor {
+  display: grid;
+  gap: 12px;
+  border: 1px solid rgba(0, 71, 171, 0.08);
+  border-radius: 12px;
+  background: #f8fbff;
+  padding: 12px;
+}
+
+.model-call-preview,
+.model-call-summary {
+  display: grid;
+  gap: 3px;
+  border: 1px solid rgba(0, 71, 171, 0.08);
+  border-radius: 10px;
+  background: #ffffff;
+  padding: 10px 12px;
+}
+
+.model-call-summary {
+  grid-template-columns: minmax(160px, 0.7fr) minmax(120px, 0.5fr) minmax(0, 1fr);
+  align-items: center;
+}
+
+.model-call-preview strong,
+.model-call-summary strong {
+  color: var(--genergi-primary-deep);
+}
+
+.model-call-preview span,
+.model-call-summary span {
+  color: #475569;
+  font-family: var(--font-latin);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.model-call-preview small,
+.model-call-summary small {
+  color: var(--genergi-muted);
+  line-height: 1.45;
+}
+
 .section-note {
   margin: -4px 0 14px;
   color: var(--genergi-muted);
@@ -3389,6 +3432,7 @@ select.input {
 
   .model-control-grid,
   .registry-item__meta,
+  .model-call-summary,
   .default-slot-row,
   .summary-row {
     grid-template-columns: 1fr;

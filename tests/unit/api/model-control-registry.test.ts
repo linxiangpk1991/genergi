@@ -456,4 +456,66 @@ describe("API model control registry routes", () => {
       true,
     )
   })
+
+  it("normalizes GPT-5 family text models to the Responses API capability profile", async () => {
+    const { app, cookie } = await createAuthedApp()
+
+    const providerResponse = await app.request("/api/model-control/providers", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: cookie,
+      },
+      body: JSON.stringify({
+        providerKey: "openai-responses",
+        providerType: "openai-compatible",
+        displayName: "OpenAI Responses",
+        endpointUrl: "https://api.openai.com/v1",
+        authType: "bearer_token",
+        secret: "test-secret",
+      }),
+    })
+    const providerPayload = (await providerResponse.json()) as { provider: { id: string } }
+
+    const modelResponse = await app.request("/api/model-control/models", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: cookie,
+      },
+      body: JSON.stringify({
+        modelKey: "gpt-5-5",
+        providerId: providerPayload.provider.id,
+        slotType: "textModel",
+        providerModelId: "gpt-5.5",
+        displayName: "GPT-5.5",
+        capabilityJson: {
+          family: "gpt",
+          usage: "text-planning",
+          endpointStyle: "chat-completions",
+          wireApi: "responses-compatible-openai-chat",
+        },
+      }),
+    })
+
+    expect(modelResponse.status).toBe(201)
+    const modelPayload = (await modelResponse.json()) as {
+      model: {
+        capabilityJson: Record<string, unknown>
+      }
+    }
+
+    expect(modelPayload.model.capabilityJson.wireApi).toBe("responses")
+    expect(modelPayload.model.capabilityJson.endpointStyle).toBe("responses")
+
+    const listResponse = await app.request("/api/model-control/models", {
+      headers: { Cookie: cookie },
+    })
+    const listPayload = (await listResponse.json()) as {
+      models: Array<{ displayName: string; capabilityJson: Record<string, unknown> }>
+    }
+    const listedModel = listPayload.models.find((model) => model.displayName === "GPT-5.5")
+    expect(listedModel?.capabilityJson.wireApi).toBe("responses")
+    expect(listedModel?.capabilityJson.endpointStyle).toBe("responses")
+  })
 })

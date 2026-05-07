@@ -9,6 +9,7 @@ import {
   type ModelRegistryRecord,
   type ProviderRegistryRecord,
 } from "../api"
+import { formatProviderType, getModelCallProfile } from "../lib/model-control-display"
 
 const ACTIVE_TASK_CREATION_MODE: ModelControlModeId = "high_quality"
 
@@ -308,7 +309,7 @@ export function ModelControlCenterPage() {
               <div key={provider.id} className="task-item">
                 <strong>{provider.displayName}</strong>
                 <span>
-                  {provider.providerType} · {provider.endpointUrl || "未填接口地址"}
+                  {formatProviderType(provider.providerType)} · {provider.endpointUrl || "未填接口地址"}
                 </span>
                 <span>
                   状态 {provider.status} · 最近校验 {formatDateTime(provider.lastValidatedAt)}
@@ -329,6 +330,9 @@ export function ModelControlCenterPage() {
                 <strong>{model.displayName}</strong>
                 <span>
                   {MODEL_CONTROL_SLOT_LABELS[model.slotType]} · {model.providerDisplayName ?? model.providerId}
+                </span>
+                <span>
+                  调用方式：{getModelCallProfile(model).label} · {getModelCallProfile(model).endpoint}
                 </span>
                 <span>
                   状态 {model.lifecycleStatus} · 最近校验 {formatDateTime(model.lastValidatedAt)}

@@ -21,6 +21,7 @@ import {
   createTaskInputSchema,
   createUserInputSchema,
   normalizeImageProviderModelId,
+  normalizeModelCapability,
   normalizeVideoProviderModelId,
   readModelDefaults,
   readModelRecords,
@@ -995,10 +996,13 @@ function normalizeModelRecord(raw: unknown): ModelControlModelRecord | null {
         : typeof record.providerModelId === "string" && record.providerModelId.trim()
           ? record.providerModelId.trim()
           : "Unknown Model",
-    capabilityJson:
+    capabilityJson: normalizeModelCapability(
+      slotType,
+      providerModelId,
       record.capabilityJson && typeof record.capabilityJson === "object" && !Array.isArray(record.capabilityJson)
         ? { ...(record.capabilityJson as Record<string, unknown>) }
         : {},
+    ),
     lifecycleStatus,
     lastValidatedAt: typeof record.lastValidatedAt === "string" && record.lastValidatedAt.trim() ? record.lastValidatedAt : null,
     lastValidationError:
@@ -1139,9 +1143,17 @@ function buildModelControlSeedState(): {
             ? normalizeVideoProviderModelId(modelRef.id)
             : modelRef.id,
       displayName: modelRef.label,
-      capabilityJson: slotType.startsWith("video")
-        ? { ...resolveVideoModelCapability(normalizeVideoProviderModelId(modelRef.id)) }
-        : { provider: modelRef.provider },
+      capabilityJson: normalizeModelCapability(
+        slotType,
+        slotType === "imageModel"
+          ? normalizeImageProviderModelId(modelRef.id)
+          : slotType === "videoModel"
+            ? normalizeVideoProviderModelId(modelRef.id)
+            : modelRef.id,
+        slotType.startsWith("video")
+          ? { ...resolveVideoModelCapability(normalizeVideoProviderModelId(modelRef.id)) }
+          : { provider: modelRef.provider },
+      ),
       lifecycleStatus: "available",
       lastValidatedAt: now,
       lastValidationError: null,
@@ -1796,7 +1808,7 @@ app.post("/api/model-control/models", zValidator("json", createModelInputSchema)
     slotType: payload.slotType,
     providerModelId: payload.providerModelId,
     displayName: payload.displayName,
-    capabilityJson: payload.capabilityJson,
+    capabilityJson: normalizeModelCapability(payload.slotType, payload.providerModelId, payload.capabilityJson),
     lifecycleStatus: "draft",
     lastValidatedAt: null,
     lastValidationError: null,
@@ -1818,14 +1830,20 @@ app.patch("/api/model-control/models/:modelId", zValidator("json", updateModelIn
   }
 
   const current = state.models[index]
+  const nextSlotType = payload.slotType ?? current.slotType
+  const nextProviderModelId = payload.providerModelId ?? current.providerModelId
   const next: ModelControlModelRecord = {
     ...current,
     modelKey: payload.modelKey ?? current.modelKey,
     providerId: payload.providerId ?? current.providerId,
-    slotType: payload.slotType ?? current.slotType,
-    providerModelId: payload.providerModelId ?? current.providerModelId,
+    slotType: nextSlotType,
+    providerModelId: nextProviderModelId,
     displayName: payload.displayName ?? current.displayName,
-    capabilityJson: payload.capabilityJson ?? current.capabilityJson,
+    capabilityJson: normalizeModelCapability(
+      nextSlotType,
+      nextProviderModelId,
+      payload.capabilityJson ?? current.capabilityJson,
+    ),
     lifecycleStatus: payload.lifecycleStatus ?? "draft",
     lastValidatedAt: payload.lifecycleStatus && payload.lifecycleStatus !== "available" ? current.lastValidatedAt : null,
     lastValidationError:
