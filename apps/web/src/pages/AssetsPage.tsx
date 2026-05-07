@@ -1501,7 +1501,7 @@ export function AssetsPage() {
               {assetDeleteLockLabel}。只有任务失败、完成或终止后，才能清理该任务的素材文件。
             </div>
           ) : null}
-          {selectedTask && assets.length ? (
+          {selectedTask ? (
             <div className="topbar-actions" style={{ justifyContent: "flex-start", marginBottom: 16 }}>
               <button
                 className="ghost-button"
@@ -1510,7 +1510,7 @@ export function AssetsPage() {
                 title={assetDeleteLocked ? assetDeleteLockLabel : undefined}
                 type="button"
               >
-                {assetDeleteLocked ? "素材清理已锁定" : deletingTaskAssets ? "清理中..." : "清空当前任务素材"}
+                {assetDeleteLocked ? "素材清理已锁定" : deletingTaskAssets ? "清理中..." : "清空当前任务素材（全部）"}
               </button>
             </div>
           ) : null}

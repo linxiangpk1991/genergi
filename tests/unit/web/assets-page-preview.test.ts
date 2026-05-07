@@ -256,6 +256,49 @@ describe("AssetsPage inline preview", () => {
     })
   })
 
+  it("keeps the full task cleanup button visible even when no assets are listed", async () => {
+    vi.mocked(api.getTaskAssets)
+      .mockResolvedValueOnce({ assets: [] } as any)
+      .mockResolvedValueOnce({ assets: [] } as any)
+    vi.mocked(api.deleteTaskAssets).mockResolvedValue({
+      deleted: true,
+      taskId: "task_assets",
+    } as any)
+
+    await act(async () => {
+      root.render(
+        createElement(
+          MemoryRouter,
+          { initialEntries: ["/asset-center?taskId=task_assets"] },
+          createElement(
+            Routes,
+            null,
+            createElement(Route, { path: "/asset-center", element: createElement(AssetsPage) }),
+          ),
+        ),
+      )
+    })
+
+    await waitFor(() => {
+      expect(container.textContent ?? "").toContain("当前暂无记录")
+    })
+
+    const clearButton = Array.from(container.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("清空当前任务素材"),
+    )
+    expect(clearButton).toBeTruthy()
+
+    await act(async () => {
+      clearButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }))
+    })
+
+    await waitFor(() => {
+      expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining("全部素材文件"))
+      expect(vi.mocked(api.deleteTaskAssets)).toHaveBeenCalledWith("task_assets")
+      expect(container.textContent ?? "").toContain("已清空任务素材：Asset task")
+    })
+  })
+
   it("separates failure reason from scene routing basis on failed tasks", async () => {
     vi.mocked(api.listTasks).mockResolvedValueOnce({
       tasks: [
