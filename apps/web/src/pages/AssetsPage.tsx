@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react"
 import { Link, useSearchParams } from "react-router-dom"
+import { MoreActionsMenu } from "../components/MoreActionsMenu"
 import {
   API_BASE_URL,
   api,
@@ -1142,6 +1143,8 @@ export function AssetsPage() {
   }
 
   function renderAssetList(title: string, description: string, items: AssetRecord[]) {
+    const isDeliverySection = title === "发布文件"
+
     return (
       <section className="asset-section">
         <div className="section-header">
@@ -1149,6 +1152,14 @@ export function AssetsPage() {
             <h3>{title}</h3>
             <div className="muted">{description}</div>
           </div>
+        </div>
+        <div className={isDeliverySection ? "asset-trust-note asset-trust-note--delivery" : "asset-trust-note"}>
+          <strong>{isDeliverySection ? "可发布文件层" : "内部排查文件层"}</strong>
+          <span>
+            {isDeliverySection
+              ? "只把这里的成片、字幕、脚本和清单作为对外发布依据。"
+              : "这里用于定位问题和恢复任务，不直接交给发布同事使用。"}
+          </span>
         </div>
         <div className="task-list">
           {items.map((asset) => (
@@ -1212,15 +1223,20 @@ export function AssetsPage() {
                   <a className="primary-button" href={buildAssetDownloadUrl(asset.taskId, asset.id)} target="_blank" rel="noreferrer">
                     下载文件
                   </a>
-                  <button
-                    className="ghost-button"
-                    disabled={assetDeleteLocked || deletingAssetId === asset.id}
-                    title={assetDeleteLocked ? assetDeleteLockLabel : undefined}
-                    onClick={() => void handleDeleteAsset(asset)}
-                    type="button"
-                  >
-                    {assetDeleteLocked ? "素材锁定" : deletingAssetId === asset.id ? "删除中..." : "删除素材"}
-                  </button>
+                  <MoreActionsMenu
+                    ariaLabel={`${normalizeOperatorCopy(asset.label)} 更多操作`}
+                    items={[
+                      {
+                        label: assetDeleteLocked ? "素材清理已锁定" : deletingAssetId === asset.id ? "删除中..." : "删除素材",
+                        description: assetDeleteLocked
+                          ? assetDeleteLockLabel
+                          : "只删除当前任务自己的这个文件记录和文件。",
+                        tone: "danger",
+                        disabled: assetDeleteLocked || deletingAssetId === asset.id,
+                        onSelect: () => void handleDeleteAsset(asset),
+                      },
+                    ]}
+                  />
                 </div>
               </div>
             </div>
@@ -1547,26 +1563,35 @@ export function AssetsPage() {
             </div>
           ) : null}
           {selectedTask ? (
-            <div className="topbar-actions" style={{ justifyContent: "flex-start", marginBottom: 16 }}>
-              <button
-                className="ghost-button"
-                disabled={assetDeleteLocked || deletingTaskAssets || deletingTask}
-                onClick={() => void handleDeleteTaskAssets()}
-                title={assetDeleteLocked ? assetDeleteLockLabel : undefined}
-                type="button"
-              >
-                {assetDeleteLocked ? "素材清理已锁定" : deletingTaskAssets ? "清理中..." : "清空当前任务素材（全部）"}
-              </button>
-              <button
-                className="ghost-button"
-                disabled={assetDeleteLocked || deletingTaskAssets || deletingTask}
-                onClick={() => void handleDeleteTask()}
-                title={assetDeleteLocked ? assetDeleteLockLabel : undefined}
-                type="button"
-              >
-                {assetDeleteLocked ? "任务删除已锁定" : deletingTask ? "删除中..." : "删除当前任务"}
-              </button>
-            </div>
+            <section className="danger-zone asset-danger-zone">
+              <div>
+                <strong>清理与删除</strong>
+                <span>
+                  只处理当前任务「{selectedTask.title}」。清空素材会删除该任务自己的文件和记录；删除任务会同时删除任务记录、素材、排查记录和时间线。
+                </span>
+                {assetDeleteLocked ? <span>{assetDeleteLockLabel}。</span> : <span>删除前请确认发布文件已经不再需要，操作无法从页面里恢复。</span>}
+              </div>
+              <div className="danger-zone__actions">
+                <button
+                  className="ghost-button danger-button"
+                  disabled={assetDeleteLocked || deletingTaskAssets || deletingTask}
+                  onClick={() => void handleDeleteTaskAssets()}
+                  title={assetDeleteLocked ? assetDeleteLockLabel : undefined}
+                  type="button"
+                >
+                  {assetDeleteLocked ? "素材清理已锁定" : deletingTaskAssets ? "清理中..." : "清空当前任务素材"}
+                </button>
+                <button
+                  className="ghost-button danger-button"
+                  disabled={assetDeleteLocked || deletingTaskAssets || deletingTask}
+                  onClick={() => void handleDeleteTask()}
+                  title={assetDeleteLocked ? assetDeleteLockLabel : undefined}
+                  type="button"
+                >
+                  {assetDeleteLocked ? "任务删除已锁定" : deletingTask ? "删除中..." : "删除当前任务"}
+                </button>
+              </div>
+            </section>
           ) : null}
 
           {previewAsset ? (

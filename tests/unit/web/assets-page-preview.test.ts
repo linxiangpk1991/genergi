@@ -241,6 +241,15 @@ describe("AssetsPage inline preview", () => {
       expect(container.textContent ?? "").toContain("任务原始文案")
     })
 
+    const moreButton = Array.from(container.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("更多"),
+    )
+    expect(moreButton).toBeTruthy()
+
+    await act(async () => {
+      moreButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }))
+    })
+
     const deleteButton = Array.from(container.querySelectorAll("button")).find((button) =>
       button.textContent?.includes("删除素材"),
     )

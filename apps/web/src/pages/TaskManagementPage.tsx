@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react"
-import { Link } from "react-router-dom"
+import { MoreActionsMenu } from "../components/MoreActionsMenu"
 import {
   api,
   buildAssetCenterUrl,
@@ -105,6 +105,76 @@ function getConfirmationText(operation: TaskBulkOperation, count: number) {
     return `清空 ${count} 个任务素材`
   }
   return ""
+}
+
+function getTaskStatusPillClass(task: TaskSummary) {
+  if (task.archivedAt) {
+    return "status-pill status-pill--disabled"
+  }
+  if (task.status === "failed") {
+    return "status-pill status-pill--danger"
+  }
+  return "status-pill status-pill--active"
+}
+
+function getTaskNextStep(task: TaskSummary) {
+  if (task.archivedAt) {
+    return {
+      label: "已归档，按需恢复",
+      description: "不会出现在日常生产队列里。",
+    }
+  }
+  if (task.status === "failed") {
+    return {
+      label: "查看失败原因",
+      description: "先看素材与排查记录，再决定恢复或删除。",
+      href: buildAssetCenterUrl(task.id),
+    }
+  }
+  if (
+    task.executionMode === "review_required" &&
+    (task.status === "waiting_review" ||
+      task.blueprintStatus === "ready_for_review" ||
+      task.blueprintStatus === "approved" ||
+      task.blueprintStatus === "rejected")
+  ) {
+    return {
+      label: task.blueprintStatus === "approved" ? "继续审核流程" : "进入任务审核",
+      description: getReviewLabel(task),
+      href: buildTaskReviewUrl(task),
+    }
+  }
+  if (task.status === "completed") {
+    return {
+      label: "检查发布文件",
+      description: "确认成片、字幕、脚本和素材清单。",
+      href: buildAssetCenterUrl(task.id),
+    }
+  }
+  if (task.status === "queued" || task.status === "running") {
+    return {
+      label: "观察生产进度",
+      description: getTaskStageLabel(task),
+      href: buildAssetCenterUrl(task.id),
+    }
+  }
+  return {
+    label: "查看任务详情",
+    description: getTaskStageLabel(task),
+    href: buildAssetCenterUrl(task.id),
+  }
+}
+
+function getSelectedBulkHint(selectedTasks: TaskSummary[]) {
+  const lockedCount = selectedTasks.filter(
+    (task) => task.status === "queued" || task.status === "running" || task.status === "waiting_review",
+  ).length
+
+  if (lockedCount) {
+    return `已选任务里有 ${lockedCount} 条仍在生产或审核，危险操作会在预检中跳过。`
+  }
+
+  return "只处理当前已选任务；删除和清空素材会要求二次确认。"
 }
 
 export function TaskManagementPage() {
@@ -316,20 +386,67 @@ export function TaskManagementPage() {
           </button>
         </div>
 
-        <div className="bulk-action-bar">
-          <div>
-            <strong>已选择 {selectedTasks.length} 条</strong>
-            <span>先预检，再执行；不可操作项会逐条说明原因。</span>
+        {selectedTaskIds.length ? (
+          <div className="bulk-action-bar bulk-action-bar--active">
+            <div className="bulk-action-bar__meta">
+              <strong>已选择 {selectedTasks.length} 条</strong>
+              <span>{getSelectedBulkHint(selectedTasks)}</span>
+            </div>
+            <div className="bulk-action-bar__actions">
+              <button className="ghost-button" disabled={actionLoading} onClick={() => void openBulkPreview("archive")} type="button">归档</button>
+              <button className="ghost-button" disabled={actionLoading} onClick={() => void openBulkPreview("resume")} type="button">恢复失败</button>
+              <MoreActionsMenu
+                ariaLabel="更多批量操作"
+                label="更多批量操作"
+                items={[
+                  {
+                    label: "恢复归档",
+                    description: "把已归档任务放回日常列表。",
+                    disabled: actionLoading,
+                    onSelect: () => void openBulkPreview("restore"),
+                  },
+                  {
+                    label: "取消任务",
+                    description: "只会取消可停止的排队或生产中任务。",
+                    disabled: actionLoading,
+                    onSelect: () => void openBulkPreview("cancel"),
+                  },
+                  {
+                    label: "清空素材",
+                    description: "删除已选任务自己的素材文件和记录。",
+                    tone: "danger",
+                    disabled: actionLoading,
+                    onSelect: () => void openBulkPreview("delete_assets_only"),
+                  },
+                  {
+                    label: "删除任务",
+                    description: "同时删除任务、素材、排查记录和时间线。",
+                    tone: "danger",
+                    disabled: actionLoading,
+                    onSelect: () => void openBulkPreview("delete_task_with_assets"),
+                  },
+                ]}
+              />
+              <button
+                className="ghost-button"
+                disabled={actionLoading}
+                onClick={() => {
+                  setSelectedTaskIds([])
+                  setPreview(null)
+                  setResult(null)
+                  setConfirmationText("")
+                }}
+                type="button"
+              >
+                取消选择
+              </button>
+            </div>
           </div>
-          <div className="row-actions">
-            <button className="ghost-button" disabled={!selectedTaskIds.length || actionLoading} onClick={() => void openBulkPreview("archive")} type="button">归档</button>
-            <button className="ghost-button" disabled={!selectedTaskIds.length || actionLoading} onClick={() => void openBulkPreview("restore")} type="button">恢复归档</button>
-            <button className="ghost-button" disabled={!selectedTaskIds.length || actionLoading} onClick={() => void openBulkPreview("cancel")} type="button">取消任务</button>
-            <button className="ghost-button" disabled={!selectedTaskIds.length || actionLoading} onClick={() => void openBulkPreview("resume")} type="button">恢复失败</button>
-            <button className="ghost-button" disabled={!selectedTaskIds.length || actionLoading} onClick={() => void openBulkPreview("delete_assets_only")} type="button">清空素材</button>
-            <button className="ghost-button danger-button" disabled={!selectedTaskIds.length || actionLoading} onClick={() => void openBulkPreview("delete_task_with_assets")} type="button">删除任务</button>
+        ) : (
+          <div className="selection-hint">
+            勾选任务后显示批量操作；删除和清空素材都会先预检影响范围。
           </div>
-        </div>
+        )}
 
         {preview ? (
           <div className="bulk-preview-panel">
@@ -389,43 +506,69 @@ export function TaskManagementPage() {
               <thead>
                 <tr>
                   <th><input checked={allVisibleSelected} onChange={toggleVisibleTasks} type="checkbox" /></th>
-                  <th>任务名称</th>
-                  <th>当前状态</th>
-                  <th>生产阶段</th>
-                  <th>审阅进度</th>
-                  <th>渠道</th>
+                  <th>任务</th>
+                  <th>状态</th>
+                  <th>下一步</th>
+                  <th>交付</th>
                   <th>进度</th>
                   <th>成本</th>
-                  <th>重试</th>
                   <th>最后更新</th>
-                  <th>操作</th>
+                  <th>更多</th>
                 </tr>
               </thead>
               <tbody>
-                {filteredTasks.map((task) => (
-                  <tr key={task.id}>
-                    <td><input checked={selectedTaskIds.includes(task.id)} onChange={() => toggleTask(task.id)} type="checkbox" /></td>
-                    <td>
-                      <strong>{task.title}</strong>
-                      <div className="mono">{task.id}</div>
-                      {task.archivedAt ? <span className="status-pill status-pill--disabled">已归档</span> : null}
-                    </td>
-                    <td><span className={task.status === "failed" ? "status-pill status-pill--danger" : "status-pill status-pill--active"}>{getStatusLabel(task.status)}</span></td>
-                    <td>{getTaskStageLabel(task)}</td>
-                    <td>{getReviewLabel(task)}</td>
-                    <td>{task.channelId}</td>
-                    <td>{task.progressPct}%</td>
-                    <td>¥{task.estimatedCostCny.toFixed(2)}</td>
-                    <td>{task.retryCount}</td>
-                    <td>{formatUpdatedAt(task.updatedAt)}</td>
-                    <td>
-                      <div className="row-actions">
-                        <Link className="ghost-button ghost-button--compact" to={buildTaskReviewUrl(task)}>去审阅</Link>
-                        <Link className="ghost-button ghost-button--compact" to={buildAssetCenterUrl(task.id)}>看素材</Link>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                {filteredTasks.map((task) => {
+                  const nextStep = getTaskNextStep(task)
+
+                  return (
+                    <tr key={task.id}>
+                      <td><input checked={selectedTaskIds.includes(task.id)} onChange={() => toggleTask(task.id)} type="checkbox" /></td>
+                      <td>
+                        <strong>{task.title}</strong>
+                        <div className="mono">{task.id}</div>
+                        {task.archivedAt ? <span className="status-pill status-pill--disabled">已归档</span> : null}
+                      </td>
+                      <td><span className={getTaskStatusPillClass(task)}>{getStatusLabel(task.status)}</span></td>
+                      <td>
+                        {nextStep.href ? (
+                          <a className="task-next-step" href={nextStep.href}>
+                            <strong>{nextStep.label}</strong>
+                            <span>{nextStep.description}</span>
+                          </a>
+                        ) : (
+                          <div className="task-next-step">
+                            <strong>{nextStep.label}</strong>
+                            <span>{nextStep.description}</span>
+                          </div>
+                        )}
+                      </td>
+                      <td>
+                        <strong>{task.channelId}</strong>
+                        <div className="muted">{getReviewLabel(task)}</div>
+                      </td>
+                      <td>{task.progressPct}%</td>
+                      <td>¥{task.estimatedCostCny.toFixed(2)}</td>
+                      <td>{formatUpdatedAt(task.updatedAt)}</td>
+                      <td>
+                        <MoreActionsMenu
+                          ariaLabel={`${task.title} 更多操作`}
+                          items={[
+                            {
+                              label: "去任务审核",
+                              description: "查看生成方案、关键画面和审核状态。",
+                              href: buildTaskReviewUrl(task),
+                            },
+                            {
+                              label: "查看素材与交付",
+                              description: "检查发布文件、排查文件和局部重试。",
+                              href: buildAssetCenterUrl(task.id),
+                            },
+                          ]}
+                        />
+                      </td>
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
           </div>

@@ -170,7 +170,14 @@ describe("TaskManagementPage", () => {
     await act(async () => {
       checkboxes[0]?.click()
     })
-    const deleteButton = Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "删除任务")
+    const moreBulkButton = Array.from(container.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("更多批量操作"),
+    )
+    await act(async () => {
+      moreBulkButton?.click()
+    })
+
+    const deleteButton = Array.from(container.querySelectorAll("button")).find((button) => button.textContent?.includes("删除任务"))
     await act(async () => {
       deleteButton?.click()
     })

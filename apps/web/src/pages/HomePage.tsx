@@ -860,7 +860,8 @@ export function HomePage() {
             <div className="section-header">
               <div>
                 <div className="eyebrow">提交前确认</div>
-                <h2 id="launch-confirm-title">确认提交并固定本次设置</h2>
+                <h2 id="launch-confirm-title">将按以下配置创建任务</h2>
+                <div className="muted">确认后会固定项目、时长、画幅、音频和字幕设置；提交后先生成审核内容。</div>
               </div>
               <button className="ghost-button ghost-button--compact" onClick={() => setConfirmOpen(false)} type="button">关闭</button>
             </div>
@@ -874,12 +875,12 @@ export function HomePage() {
             </div>
             <div className={`launch-preflight launch-preflight--${launchReadiness.level}`}>
               <strong>{launchReadiness.summary}</strong>
-              <span>提交后会固定当前项目、时长、画幅、音频和字幕设置。</span>
+              <span>创建后先进入生成方案与关键画面审核，通过后再继续产出成片。</span>
             </div>
             <div className="action-row">
               <button className="ghost-button" onClick={() => setConfirmOpen(false)} type="button">返回修改</button>
               <button className="primary-button" disabled={submitting} onClick={() => void handleCreateTask()} type="button">
-                {submitting ? "正在提交…" : "确认提交"}
+                {submitting ? "正在提交…" : "确认提交，先生成审核内容"}
               </button>
             </div>
           </section>
