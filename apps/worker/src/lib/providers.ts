@@ -66,6 +66,12 @@ function ensureTaskDir(taskId: string) {
   return dir
 }
 
+async function writeFileAtomic(filePath: string, content: Buffer | string) {
+  const tempPath = `${filePath}.tmp-${process.pid}-${Date.now()}`
+  await fs.writeFile(tempPath, content)
+  await fs.rename(tempPath, filePath)
+}
+
 function buildGatewayHeaders() {
   return {
     Authorization: `Bearer ${gatewayApiKey}`,
@@ -2625,6 +2631,183 @@ export async function buildProgressAssetRecords(input: {
   return [...documentAssets, ...keyframeAssets]
 }
 
+export type PartialAssetRetryScope = "scene" | "keyframe" | "video"
+
+export async function retryPartialTaskAssets(input: {
+  taskId: string
+  detail: TaskDetail
+  scope: PartialAssetRetryScope
+  sceneId: string
+  imageModel: string
+  videoModel: string
+  blueprintRecord?: TaskBlueprintRecord | null
+  signal?: AbortSignal
+}, deps: {
+  createKeyframeBundle?: typeof createKeyframeBundle
+  createSceneVideoBundle?: typeof createSceneVideoBundle
+  buildFinalVideoWithNarration?: typeof buildFinalVideoWithNarration
+  synthesizeNarration?: typeof synthesizeNarration
+} = {}) {
+  const scene = input.detail.scenes.find((item) => item.id === input.sceneId)
+  if (!scene) {
+    throw new Error(`Partial retry scene not found: ${input.sceneId}`)
+  }
+
+  const createdAt = new Date().toISOString()
+  const taskDir = ensureTaskDir(input.taskId)
+  const runtime = resolveRuntimeGenerationConfig(input.detail)
+  const runtimeLabels = buildWorkerRuntimeLabels(runtime, {
+    sceneCount: input.detail.scenes.length,
+    targetDurationSec: input.detail.taskRunConfig.targetDurationSec,
+    keyframeCount: input.detail.scenes.length,
+  })
+  const createNarrowKeyframes = deps.createKeyframeBundle ?? createKeyframeBundle
+  const createNarrowSceneVideos = deps.createSceneVideoBundle ?? createSceneVideoBundle
+  const buildFinalVideo = deps.buildFinalVideoWithNarration ?? buildFinalVideoWithNarration
+  const createNarration = deps.synthesizeNarration ?? synthesizeNarration
+
+  let keyframeManifestPath = input.blueprintRecord?.keyframeManifestPath ?? path.join(taskDir, "keyframes", "manifest.json")
+  let keyframeFrameCount = input.detail.scenes.length
+  const assets: AssetRecord[] = [
+    ...await buildTaskDocumentAssetRecords({
+      taskId: input.taskId,
+      taskDir,
+      createdAt,
+    }),
+  ]
+
+  if (input.scope === "keyframe" || input.scope === "scene") {
+    const keyframes = await createNarrowKeyframes({
+      taskId: input.taskId,
+      detail: input.detail,
+      model: input.imageModel,
+      sceneIds: [scene.id],
+      signal: input.signal,
+    })
+    keyframeManifestPath = keyframes.manifestPath
+    keyframeFrameCount = keyframes.frameCount
+  } else {
+    const existingKeyframes = await readKeyframeBundleSnapshot(keyframeManifestPath)
+    keyframeFrameCount = existingKeyframes?.frameCount ?? keyframeFrameCount
+  }
+
+  if (await fileExists(keyframeManifestPath)) {
+    assets.push(
+      ...await buildKeyframeAssetRecords({
+        taskId: input.taskId,
+        manifestPath: keyframeManifestPath,
+        label: buildWorkerRuntimeLabels(runtime, {
+          sceneCount: input.detail.scenes.length,
+          targetDurationSec: input.detail.taskRunConfig.targetDurationSec,
+          keyframeCount: keyframeFrameCount,
+        }).keyframes,
+        createdAt,
+      }),
+    )
+  }
+
+  if (input.scope === "keyframe") {
+    return {
+      phase: "review_ready" as const,
+      sceneId: scene.id,
+      keyframeManifestPath,
+      assets,
+      actualDurationSec: null,
+    }
+  }
+
+  const sceneVideos = await createNarrowSceneVideos({
+    taskId: input.taskId,
+    detail: input.detail,
+    model: input.videoModel,
+    sceneIds: [scene.id],
+    blueprintRecord: input.blueprintRecord ?? null,
+    signal: input.signal,
+  })
+  const generatedSceneVideo = sceneVideos.find((video) => video.sceneId === scene.id) ?? sceneVideos[0]
+  if (!generatedSceneVideo) {
+    throw new Error(`Partial retry did not produce a scene video for ${scene.id}`)
+  }
+
+  const sourceVideoPaths = input.detail.scenes.map((item) => path.join(taskDir, "video", `scene-${item.index + 1}.mp4`))
+  const missingSceneVideo = await Promise.all(sourceVideoPaths.map(async (videoPath) => ({
+    videoPath,
+    exists: await fileExists(videoPath),
+  }))).then((items) => items.find((item) => !item.exists) ?? null)
+  if (missingSceneVideo) {
+    throw new Error(`Cannot rebuild final video because scene video is missing: ${missingSceneVideo.videoPath}`)
+  }
+
+  let narrationPath = path.join(taskDir, "narration.mp3")
+  let subtitlesPath = path.join(taskDir, "subtitles.srt")
+  if (!(await fileExists(narrationPath)) || !(await fileExists(subtitlesPath))) {
+    const narration = await createNarration(input.detail)
+    narrationPath = narration.audioPath
+    subtitlesPath = narration.srtPath
+  }
+
+  const finalVideo = await buildFinalVideo({
+    taskId: input.taskId,
+    sourceVideoPaths,
+    narrationPath,
+    subtitlesPath,
+    renderSpec: input.detail.taskRunConfig.renderSpecJson,
+    targetDurationSec: input.detail.taskRunConfig.targetDurationSec,
+    audioStrategy: input.detail.taskRunConfig.audioStrategy,
+  })
+
+  assets.push(
+    {
+      id: `${input.taskId}_scene_video_${scene.id}`,
+      taskId: input.taskId,
+      assetType: "scene_video",
+      label: `分段视频 ${scene.index + 1} · ${scene.title}`,
+      status: "ready",
+      path: generatedSceneVideo.videoPath,
+      createdAt,
+    },
+    {
+      id: `${input.taskId}_subtitles`,
+      taskId: input.taskId,
+      assetType: "subtitles",
+      label: "英文字幕",
+      status: "ready",
+      path: subtitlesPath,
+      createdAt,
+    },
+    {
+      id: `${input.taskId}_audio`,
+      taskId: input.taskId,
+      assetType: "audio",
+      label: runtimeLabels.audio,
+      status: "ready",
+      path: narrationPath,
+      createdAt,
+    },
+    {
+      id: `${input.taskId}_video`,
+      taskId: input.taskId,
+      assetType: "video_bundle",
+      label: buildWorkerRuntimeLabels(runtime, {
+        sceneCount: input.detail.scenes.length,
+        targetDurationSec: input.detail.taskRunConfig.targetDurationSec,
+        keyframeCount: keyframeFrameCount,
+      }).video,
+      status: "ready",
+      path: finalVideo.outputPath,
+      createdAt,
+    },
+  )
+
+  return {
+    phase: "completed" as const,
+    sceneId: scene.id,
+    keyframeManifestPath,
+    assets,
+    actualDurationSec: finalVideo.actualDurationSec,
+  }
+}
+
 export async function synthesizeNarration(detail: TaskDetail) {
   const dir = ensureTaskDir(detail.taskId)
   const runtime = resolveRuntimeGenerationConfig(detail)
@@ -2769,7 +2952,7 @@ export async function createVideoFromPrompt(input: {
         timeout: 300000,
         signal: input.signal,
       })
-      await fs.writeFile(targetPath, Buffer.from(download.data))
+      await writeFileAtomic(targetPath, Buffer.from(download.data))
       return { videoPath: targetPath, remoteTaskId: taskId }
     }
 
@@ -2785,6 +2968,7 @@ export async function createSceneVideoBundle(input: {
   taskId: string
   detail: TaskDetail
   model: string
+  sceneIds?: string[]
   blueprintRecord?: TaskBlueprintRecord | null
   onSceneStart?: (scene: StoryboardScene, totalScenes: number) => Promise<void> | void
   signal?: AbortSignal
@@ -2795,12 +2979,19 @@ export async function createSceneVideoBundle(input: {
     detail: input.detail,
     blueprintRecord: input.blueprintRecord ?? null,
   })
+  const requestedSceneIds = input.sceneIds?.length ? new Set(input.sceneIds) : null
+  const targetSceneInputs = requestedSceneIds
+    ? sceneInputs.filter((sceneInput) => requestedSceneIds.has(sceneInput.scene.id))
+    : sceneInputs
+  if (requestedSceneIds && targetSceneInputs.length !== requestedSceneIds.size) {
+    throw new Error(`Scene video retry target not found: ${[...requestedSceneIds].join(", ")}`)
+  }
   const createSceneVideo = deps.createVideoFromPrompt ?? createVideoFromPrompt
   const videos = await mapWithConcurrencyLimit(
-    sceneInputs,
+    targetSceneInputs,
     resolveSceneVideoConcurrency(),
     async (sceneInput) => {
-      await input.onSceneStart?.(sceneInput.scene, input.detail.scenes.length)
+      await input.onSceneStart?.(sceneInput.scene, targetSceneInputs.length)
 
       let timeout: ReturnType<typeof setTimeout> | null = null
       const video = await Promise.race([
@@ -2839,6 +3030,7 @@ export async function createKeyframeBundle(input: {
   taskId: string
   detail: TaskDetail
   model: string
+  sceneIds?: string[]
   signal?: AbortSignal
   onSceneStart?: (scene: StoryboardScene, totalScenes: number) => Promise<void> | void
 }, deps: {
@@ -2852,24 +3044,60 @@ export async function createKeyframeBundle(input: {
 
   const createdAt = new Date().toISOString()
   const aspectRatio = input.detail.taskRunConfig.aspectRatio
+  const requestedSceneIds = input.sceneIds?.length ? new Set(input.sceneIds) : null
+  const targetScenes = requestedSceneIds
+    ? input.detail.scenes.filter((scene) => requestedSceneIds.has(scene.id))
+    : input.detail.scenes
+  if (requestedSceneIds && targetScenes.length !== requestedSceneIds.size) {
+    throw new Error(`Keyframe retry target not found: ${[...requestedSceneIds].join(", ")}`)
+  }
+  const manifestPath = path.join(keyframeDir, "manifest.json")
+  const existingFrames: Array<{
+    sceneId?: string
+    sceneIndex?: number
+    title?: string
+    prompt?: string
+    fileName?: string
+    filePath?: string
+    model?: string
+    remoteTaskId?: string | null
+  }> = requestedSceneIds
+    ? await fs.readFile(manifestPath, "utf8")
+        .then((rawManifest) => {
+          const manifest = JSON.parse(rawManifest) as {
+            frames?: Array<{
+              sceneId?: string
+              sceneIndex?: number
+              title?: string
+              prompt?: string
+              fileName?: string
+              filePath?: string
+              model?: string
+              remoteTaskId?: string | null
+            }>
+          }
+          return Array.isArray(manifest.frames) ? manifest.frames : []
+        })
+        .catch(() => [])
+    : []
   const frames: Array<{
     sceneId: string
     sceneIndex: number
     title: string
-    prompt: string
+    prompt?: string
     fileName: string
     filePath: string
-    model: string
-    remoteTaskId: string | null
+    model?: string
+    remoteTaskId?: string | null
   }> = []
   const imageRuntime = await resolveImageGenerationRuntime(input.detail, input.model)
   const createGeminiArtifact = deps.createGeminiNativeImageArtifact ?? createGeminiNativeImageArtifact
   const createGatewayArtifact = deps.createGatewayImageArtifact ?? createGatewayImageArtifact
   const createOpenAIImagesArtifact = deps.createOpenAIImagesGenerationArtifact ?? createOpenAIImagesGenerationArtifact
   const createdFrames = await Promise.all(
-    input.detail.scenes.map(async (scene) => {
+    targetScenes.map(async (scene) => {
       throwIfTaskCanceled(input.signal)
-      await input.onSceneStart?.(scene, input.detail.scenes.length)
+      await input.onSceneStart?.(scene, targetScenes.length)
       const prompt = buildKeyframePrompt(scene, aspectRatio)
       const generated =
         imageRuntime.kind === "gemini-native"
@@ -2907,9 +3135,14 @@ export async function createKeyframeBundle(input: {
               signal: input.signal,
             })
 
-      const fileName = `scene-${String(scene.index + 1).padStart(2, "0")}.${generated.extension}`
+      const existingFrame = existingFrames.find((frame) => frame.sceneId === scene.id || frame.sceneIndex === scene.index)
+      const existingFileName = existingFrame?.fileName?.trim()
+      const existingExtension = existingFileName ? path.extname(existingFileName).replace(/^\./, "").toLowerCase() : ""
+      const fileName = existingFileName && existingExtension === generated.extension.toLowerCase()
+        ? existingFileName
+        : `scene-${String(scene.index + 1).padStart(2, "0")}.${generated.extension}`
       const filePath = path.join(keyframeDir, fileName)
-      await fs.writeFile(filePath, generated.bytes)
+      await writeFileAtomic(filePath, generated.bytes)
       return {
         sceneId: scene.id,
         sceneIndex: scene.index,
@@ -2922,9 +3155,23 @@ export async function createKeyframeBundle(input: {
       }
     }),
   )
-  frames.push(...createdFrames)
+  const replacedKeys = new Set(createdFrames.map((frame) => `${frame.sceneId}:${frame.sceneIndex}`))
+  const preservedFrames = existingFrames
+    .filter((frame) => !replacedKeys.has(`${frame.sceneId ?? ""}:${frame.sceneIndex ?? -1}`))
+    .filter((frame): frame is typeof frame & { sceneId: string; sceneIndex: number; fileName: string; filePath: string } =>
+      typeof frame.sceneId === "string" &&
+      typeof frame.sceneIndex === "number" &&
+      typeof frame.fileName === "string" &&
+      typeof frame.filePath === "string"
+    )
+    .map((frame) => ({
+      ...frame,
+      title: typeof frame.title === "string"
+        ? frame.title
+        : input.detail.scenes.find((scene) => scene.id === frame.sceneId || scene.index === frame.sceneIndex)?.title ?? frame.sceneId,
+    }))
+  frames.push(...[...preservedFrames, ...createdFrames].sort((left, right) => left.sceneIndex - right.sceneIndex))
 
-  const manifestPath = path.join(keyframeDir, "manifest.json")
   const manifest = {
     taskId: input.taskId,
     createdAt,
@@ -2936,7 +3183,7 @@ export async function createKeyframeBundle(input: {
     sceneCount: frames.length,
     frames,
   }
-  writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), "utf8")
+  await writeFileAtomic(manifestPath, JSON.stringify(manifest, null, 2))
 
   return {
     keyframeDir,

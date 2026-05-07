@@ -245,7 +245,14 @@ function normalizeNullableNonNegativeInteger(value: unknown) {
 }
 
 function normalizeRetryRequestScope(value: unknown): RetryRequestScope {
-  return value === "scene" ? "scene" : "task"
+  switch (value) {
+    case "scene":
+    case "keyframe":
+    case "video":
+      return value
+    default:
+      return "task"
+  }
 }
 
 function normalizeRetryRequestStatus(value: unknown): RetryRequestStatus {
@@ -299,14 +306,15 @@ function normalizeRetryRequestRecord(
 ): RetryRequest {
   const createdAt = normalizeNullableString(record.createdAt) ?? now()
   const scope = normalizeRetryRequestScope(record.scope)
-  const sceneId = scope === "scene" ? normalizeNullableString(record.sceneId) : null
+  const sceneScoped = scope === "scene" || scope === "keyframe" || scope === "video"
+  const sceneId = sceneScoped ? normalizeNullableString(record.sceneId) : null
   return {
     id: normalizeNullableString(record.id) ?? `${taskId}_retry_${fallbackSequence}`,
     taskId,
     scope,
     sceneId,
-    sceneIndex: scope === "scene" ? normalizeNullableNonNegativeInteger(record.sceneIndex) : null,
-    sceneTitle: scope === "scene" ? normalizeNullableString(record.sceneTitle) : null,
+    sceneIndex: sceneScoped ? normalizeNullableNonNegativeInteger(record.sceneIndex) : null,
+    sceneTitle: sceneScoped ? normalizeNullableString(record.sceneTitle) : null,
     reason: normalizeNullableString(record.reason),
     status: normalizeRetryRequestStatus(record.status),
     statusDetail: normalizeNullableString(record.statusDetail),

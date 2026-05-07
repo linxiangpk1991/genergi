@@ -472,6 +472,7 @@ export type AssetRecord = {
     | "audio"
     | "keyframe_bundle"
     | "keyframe_image"
+    | "scene_video"
     | "video_bundle"
   label: string
   status: "ready" | "pending"

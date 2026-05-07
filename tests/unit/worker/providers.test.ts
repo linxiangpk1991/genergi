@@ -580,6 +580,83 @@ A few notes to make it hit:
     expect(videos.map((video) => video.sceneIndex)).toEqual([0, 1, 2])
   })
 
+  it("generates only the requested scene video during a narrow retry", async () => {
+    const providers = await import("../../../apps/worker/src/lib/providers")
+
+    const detail = createTaskDetail({
+      scenes: [
+        {
+          id: "scene_1",
+          index: 0,
+          title: "Scene 1",
+          sceneGoal: "Scene 1",
+          voiceoverScript: "Scene 1 narration.",
+          startFrameDescription: "Scene 1 frame",
+          script: "Scene 1 narration.",
+          imagePrompt: "Scene 1 image prompt.",
+          videoPrompt: "Scene 1 video prompt.",
+          startFrameIntent: "Scene 1 start",
+          endFrameIntent: "Scene 1 end",
+          durationSec: 8,
+          startLabel: "00:00",
+          endLabel: "00:08",
+          reviewStatus: "approved",
+          keyframeStatus: "approved",
+          continuityConstraints: [],
+          reviewNote: null,
+          reviewedAt: null,
+          keyframeReviewNote: null,
+          keyframeReviewedAt: null,
+        },
+        {
+          id: "scene_2",
+          index: 1,
+          title: "Scene 2",
+          sceneGoal: "Scene 2",
+          voiceoverScript: "Scene 2 narration.",
+          startFrameDescription: "Scene 2 frame",
+          script: "Scene 2 narration.",
+          imagePrompt: "Scene 2 image prompt.",
+          videoPrompt: "Scene 2 video prompt.",
+          startFrameIntent: "Scene 2 start",
+          endFrameIntent: "Scene 2 end",
+          durationSec: 8,
+          startLabel: "00:08",
+          endLabel: "00:16",
+          reviewStatus: "approved",
+          keyframeStatus: "approved",
+          continuityConstraints: [],
+          reviewNote: null,
+          reviewedAt: null,
+          keyframeReviewNote: null,
+          keyframeReviewedAt: null,
+        },
+      ],
+    })
+
+    const startedScenes: string[] = []
+    const videos = await providers.createSceneVideoBundle(
+      {
+        taskId: detail.taskId,
+        detail,
+        model: "veo3.1",
+        sceneIds: ["scene_2"],
+      },
+      {
+        createVideoFromPrompt: async ({ scene }: { scene: { id: string; index: number } }) => {
+          startedScenes.push(scene.id)
+          return {
+            videoPath: `/tmp/scene-${scene.index + 1}.mp4`,
+            remoteTaskId: `remote-${scene.index + 1}`,
+          }
+        },
+      } as any,
+    )
+
+    expect(startedScenes).toEqual(["scene_2"])
+    expect(videos.map((video) => video.sceneId)).toEqual(["scene_2"])
+  })
+
   it("uses a production-safe scene video timeout instead of the shorter legacy guard", async () => {
     const providers = await import("../../../apps/worker/src/lib/providers")
 
@@ -1469,6 +1546,276 @@ Here's the thing. In Chinese destiny analysis, there's a pattern called "late bl
 
     const bundle = await bundlePromise
     expect(bundle.frameCount).toBe(2)
+  })
+
+  it("replaces only the requested keyframe and preserves the rest of the manifest during a narrow retry", async () => {
+    const providers = await import("../../../apps/worker/src/lib/providers")
+
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "genergi-keyframe-narrow-retry-"))
+    process.env.GENERGI_DATA_DIR = tempDir
+
+    const detail = createTaskDetail({
+      taskId: "task_keyframe_narrow_retry",
+      scenes: [
+        {
+          id: "scene_1",
+          index: 0,
+          title: "Scene 1",
+          sceneGoal: "Scene 1",
+          voiceoverScript: "Scene one narration.",
+          startFrameDescription: "Scene one frame",
+          script: "Scene one narration.",
+          imagePrompt: "Scene one final image prompt.",
+          videoPrompt: "Scene one video prompt.",
+          startFrameIntent: "Start one",
+          endFrameIntent: "End one",
+          durationSec: 8,
+          startLabel: "00:00",
+          endLabel: "00:08",
+          reviewStatus: "approved",
+          keyframeStatus: "approved",
+          continuityConstraints: [],
+          reviewNote: null,
+          reviewedAt: null,
+          keyframeReviewNote: null,
+          keyframeReviewedAt: null,
+        },
+        {
+          id: "scene_2",
+          index: 1,
+          title: "Scene 2",
+          sceneGoal: "Scene 2",
+          voiceoverScript: "Scene two narration.",
+          startFrameDescription: "Scene two frame",
+          script: "Scene two narration.",
+          imagePrompt: "Scene two final image prompt.",
+          videoPrompt: "Scene two video prompt.",
+          startFrameIntent: "Start two",
+          endFrameIntent: "End two",
+          durationSec: 8,
+          startLabel: "00:08",
+          endLabel: "00:16",
+          reviewStatus: "approved",
+          keyframeStatus: "approved",
+          continuityConstraints: [],
+          reviewNote: null,
+          reviewedAt: null,
+          keyframeReviewNote: null,
+          keyframeReviewedAt: null,
+        },
+      ],
+    })
+    const keyframeDir = path.join(tempDir, "exports", detail.taskId, "keyframes")
+    await mkdir(keyframeDir, { recursive: true })
+    const sceneOnePath = path.join(keyframeDir, "scene-01.png")
+    const sceneTwoPath = path.join(keyframeDir, "scene-02.png")
+    await writeFile(sceneOnePath, "old scene one", "utf8")
+    await writeFile(sceneTwoPath, "old scene two", "utf8")
+    await writeFile(
+      path.join(keyframeDir, "manifest.json"),
+      JSON.stringify({
+        taskId: detail.taskId,
+        sceneCount: 2,
+        frames: [
+          { sceneId: "scene_1", sceneIndex: 0, title: "Scene 1", fileName: "scene-01.png", filePath: sceneOnePath },
+          { sceneId: "scene_2", sceneIndex: 1, title: "Scene 2", fileName: "scene-02.png", filePath: sceneTwoPath },
+        ],
+      }),
+      "utf8",
+    )
+
+    const bundle = await providers.createKeyframeBundle(
+      {
+        taskId: detail.taskId,
+        detail,
+        model: detail.taskRunConfig.imageModel.id,
+        sceneIds: ["scene_2"],
+      },
+      {
+        createGatewayImageArtifact: async () => ({
+          bytes: Buffer.from("new scene two", "utf8"),
+          extension: "png",
+          generationId: "remote-scene-two",
+        }),
+      },
+    )
+
+    const manifest = JSON.parse(await readFile(bundle.manifestPath, "utf8")) as {
+      sceneCount: number
+      frames: Array<{ sceneId: string; filePath: string; remoteTaskId?: string | null }>
+    }
+    expect(bundle.frameCount).toBe(2)
+    expect(manifest.sceneCount).toBe(2)
+    expect(manifest.frames.map((frame) => frame.sceneId)).toEqual(["scene_1", "scene_2"])
+    expect(await readFile(sceneOnePath, "utf8")).toBe("old scene one")
+    expect(await readFile(sceneTwoPath, "utf8")).toBe("new scene two")
+    expect(manifest.frames.find((frame) => frame.sceneId === "scene_2")?.remoteTaskId).toBe("remote-scene-two")
+  })
+
+  it("rebuilds the final video from existing scene files after a narrow scene video retry", async () => {
+    const providers = await import("../../../apps/worker/src/lib/providers")
+
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "genergi-video-narrow-retry-"))
+    process.env.GENERGI_DATA_DIR = tempDir
+
+    const detail = createTaskDetail({
+      taskId: "task_video_narrow_retry",
+      scenes: [
+        {
+          id: "scene_1",
+          index: 0,
+          title: "Scene 1",
+          sceneGoal: "Scene 1",
+          voiceoverScript: "Scene one narration.",
+          startFrameDescription: "Scene one frame",
+          script: "Scene one narration.",
+          imagePrompt: "Scene one image prompt.",
+          videoPrompt: "Scene one video prompt.",
+          startFrameIntent: "Start one",
+          endFrameIntent: "End one",
+          durationSec: 8,
+          startLabel: "00:00",
+          endLabel: "00:08",
+          reviewStatus: "approved",
+          keyframeStatus: "approved",
+          continuityConstraints: [],
+          reviewNote: null,
+          reviewedAt: null,
+          keyframeReviewNote: null,
+          keyframeReviewedAt: null,
+        },
+        {
+          id: "scene_2",
+          index: 1,
+          title: "Scene 2",
+          sceneGoal: "Scene 2",
+          voiceoverScript: "Scene two narration.",
+          startFrameDescription: "Scene two frame",
+          script: "Scene two narration.",
+          imagePrompt: "Scene two image prompt.",
+          videoPrompt: "Scene two video prompt.",
+          startFrameIntent: "Start two",
+          endFrameIntent: "End two",
+          durationSec: 8,
+          startLabel: "00:08",
+          endLabel: "00:16",
+          reviewStatus: "approved",
+          keyframeStatus: "approved",
+          continuityConstraints: [],
+          reviewNote: null,
+          reviewedAt: null,
+          keyframeReviewNote: null,
+          keyframeReviewedAt: null,
+        },
+      ],
+    })
+    const taskDir = path.join(tempDir, "exports", detail.taskId)
+    const videoDir = path.join(taskDir, "video")
+    const keyframeDir = path.join(taskDir, "keyframes")
+    await mkdir(videoDir, { recursive: true })
+    await mkdir(keyframeDir, { recursive: true })
+    const sceneOneVideo = path.join(videoDir, "scene-1.mp4")
+    const sceneTwoVideo = path.join(videoDir, "scene-2.mp4")
+    await writeFile(sceneOneVideo, "old scene one video", "utf8")
+    await writeFile(sceneTwoVideo, "old scene two video", "utf8")
+    await writeFile(path.join(taskDir, "narration.mp3"), "existing audio", "utf8")
+    await writeFile(path.join(taskDir, "subtitles.srt"), "existing subtitles", "utf8")
+    const manifestPath = path.join(keyframeDir, "manifest.json")
+    await writeFile(
+      manifestPath,
+      JSON.stringify({
+        taskId: detail.taskId,
+        sceneCount: 2,
+        frames: [
+          { sceneId: "scene_1", sceneIndex: 0, title: "Scene 1", fileName: "scene-01.png", filePath: path.join(keyframeDir, "scene-01.png") },
+          { sceneId: "scene_2", sceneIndex: 1, title: "Scene 2", fileName: "scene-02.png", filePath: path.join(keyframeDir, "scene-02.png") },
+        ],
+      }),
+      "utf8",
+    )
+
+    const startedSceneIds: string[] = []
+    const finalVideoInputs: string[][] = []
+    const result = await providers.retryPartialTaskAssets(
+      {
+        taskId: detail.taskId,
+        detail,
+        scope: "video",
+        sceneId: "scene_2",
+        imageModel: detail.taskRunConfig.imageModel.id,
+        videoModel: detail.taskRunConfig.videoModel.id,
+        blueprintRecord: {
+          taskId: detail.taskId,
+          version: 1,
+          status: "queued_for_video",
+          createdAt: "2026-04-20T00:00:00.000Z",
+          updatedAt: "2026-04-20T00:00:00.000Z",
+          blueprint: {
+            taskId: detail.taskId,
+            projectId: detail.projectId,
+            version: 1,
+            createdAt: "2026-04-20T00:00:00.000Z",
+            executionMode: detail.taskRunConfig.executionMode,
+            renderSpec: detail.taskRunConfig.renderSpecJson,
+            globalTheme: detail.title,
+            visualStyleGuide: "Reviewed style.",
+            subjectProfile: "Subject",
+            productProfile: "Product",
+            backgroundConstraints: [],
+            negativeConstraints: [],
+            totalVoiceoverScript: detail.script,
+            sceneContracts: detail.scenes.map((scene) => ({
+              id: scene.id,
+              index: scene.index,
+              sceneGoal: scene.sceneGoal ?? scene.title,
+              voiceoverScript: scene.voiceoverScript ?? scene.script,
+              startFrameDescription: scene.startFrameDescription ?? scene.title,
+              imagePrompt: scene.imagePrompt,
+              videoPrompt: scene.videoPrompt,
+              startFrameIntent: scene.startFrameIntent ?? scene.title,
+              endFrameIntent: scene.endFrameIntent ?? scene.title,
+              durationSec: scene.durationSec,
+              transitionHint: "cut",
+              continuityConstraints: scene.continuityConstraints ?? [],
+            })),
+          },
+          keyframeManifestPath: manifestPath,
+        },
+      },
+      {
+        createSceneVideoBundle: async (input) => {
+          startedSceneIds.push(...(input.sceneIds ?? []))
+          await writeFile(sceneTwoVideo, "new scene two video", "utf8")
+          return [{
+            sceneId: "scene_2",
+            sceneIndex: 1,
+            durationSec: 8,
+            inputStrategy: "keyframe_plus_prompt",
+            keyframePath: path.join(keyframeDir, "scene-02.png"),
+            videoPath: sceneTwoVideo,
+            remoteTaskId: "remote-scene-two-video",
+          }]
+        },
+        buildFinalVideoWithNarration: async (input) => {
+          finalVideoInputs.push(input.sourceVideoPaths)
+          const outputPath = path.join(videoDir, "final-with-audio.mp4")
+          await writeFile(outputPath, "rebuilt final video", "utf8")
+          return { outputPath, actualDurationSec: 16 }
+        },
+      },
+    )
+
+    expect(startedSceneIds).toEqual(["scene_2"])
+    expect(finalVideoInputs).toEqual([[sceneOneVideo, sceneTwoVideo]])
+    expect(await readFile(sceneTwoVideo, "utf8")).toBe("new scene two video")
+    expect(result.phase).toBe("completed")
+    expect(result.actualDurationSec).toBe(16)
+    expect(result.assets).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ assetType: "scene_video", path: sceneTwoVideo }),
+        expect.objectContaining({ assetType: "video_bundle", path: path.join(videoDir, "final-with-audio.mp4") }),
+      ]),
+    )
   })
 
   it("writes planning trace files and exposes them as supporting assets", async () => {

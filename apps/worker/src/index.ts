@@ -3,6 +3,7 @@ import { Redis } from "ioredis"
 import {
   TASK_QUEUE_NAME,
   mergeSceneReviewMetadata,
+  readTaskAssets,
   readTaskDetail,
   updateRuntimeStatus,
   updateTaskSummary,
@@ -20,7 +21,9 @@ import {
   createKeyframeBundle,
   createSceneVideoBundle,
   describeRuntimeGenerationConfig,
+  getCurrentTaskBlueprintRecord,
   prepareExecutionSource,
+  retryPartialTaskAssets,
   resolveKeyframeGenerationTimeoutPolicy,
   resolveRuntimeGenerationConfig,
   synthesizeNarration,
@@ -42,6 +45,43 @@ const queue = new Queue(TASK_QUEUE_NAME, { connection })
 const workerInstanceId = `${process.pid}@${process.env.COMPUTERNAME ?? process.env.HOSTNAME ?? "worker"}`
 const activeTaskIds = new Set<string>()
 let shutdownRequested = false
+
+type PartialRetryJob = {
+  scope: "scene" | "keyframe" | "video"
+  sceneId: string
+}
+
+function resolvePartialRetryJob(data: {
+  stage?: string | null
+  resumeFrom?: string | null
+}): PartialRetryJob | null {
+  const sceneId = data.resumeFrom?.trim()
+  if (!sceneId || !/^scene_\d+$/i.test(sceneId)) {
+    return null
+  }
+
+  switch (data.stage) {
+    case "retry_scene":
+      return { scope: "scene", sceneId }
+    case "retry_keyframe":
+      return { scope: "keyframe", sceneId }
+    case "retry_video":
+      return { scope: "video", sceneId }
+    default:
+      return null
+  }
+}
+
+function mergeAssetRecords(existing: AssetRecord[], next: AssetRecord[]) {
+  const merged = new Map<string, AssetRecord>()
+  for (const asset of existing) {
+    merged.set(asset.id, asset)
+  }
+  for (const asset of next) {
+    merged.set(asset.id, asset)
+  }
+  return [...merged.values()]
+}
 
 function isTaskCanceledError(error: unknown) {
   if (error instanceof Error) {
@@ -648,11 +688,97 @@ const worker = new Worker(
         throw new Error(TASK_CANCELED_BY_OPERATOR)
       }
 
-      console.log(`[worker] ${taskId} => generate media assets`)
-      const result = await writeTaskArtifacts(taskId, {
-        continueExecution: job.data.continueExecution ?? false,
-        signal: taskAbortController.signal,
-      })
+      const partialRetry = resolvePartialRetryJob(job.data)
+      console.log(`[worker] ${taskId} => generate media assets${partialRetry ? ` (${partialRetry.scope} ${partialRetry.sceneId})` : ""}`)
+      const result = partialRetry
+        ? await (async () => {
+            const detail = await readTaskDetail(taskId)
+            if (!detail) {
+              throw new Error(`Task detail not found for ${taskId}`)
+            }
+            const runtime = resolveRuntimeGenerationConfig(detail)
+            const blueprintRecord = await getCurrentTaskBlueprintRecord(taskId)
+
+            await updateTaskLifecycleState(taskId, {
+              status: "running",
+              progressPct: partialRetry.scope === "keyframe" ? 45 : 70,
+              failureReason: null,
+              statusDetail:
+                partialRetry.scope === "keyframe"
+                  ? `正在重试 ${partialRetry.sceneId} 关键帧`
+                  : partialRetry.scope === "video"
+                    ? `正在重试 ${partialRetry.sceneId} 视频段`
+                    : `正在重试 ${partialRetry.sceneId} 关键帧和视频段`,
+              currentStage: `partial_retry_${partialRetry.scope}`,
+              currentStageLabel:
+                partialRetry.scope === "keyframe"
+                  ? "局部关键帧重试"
+                  : partialRetry.scope === "video"
+                    ? "局部视频段重试"
+                    : "局部分镜重试",
+              currentSceneIndex: detail.scenes.find((scene) => scene.id === partialRetry.sceneId)?.index ?? null,
+              currentSceneTotal: detail.scenes.length,
+              stageStartedAt: new Date().toISOString(),
+            })
+
+            const partialResult = await retryPartialTaskAssets({
+              taskId,
+              detail,
+              scope: partialRetry.scope,
+              sceneId: partialRetry.sceneId,
+              imageModel: runtime.imageModelId,
+              videoModel: runtime.videoModelId,
+              blueprintRecord,
+              signal: taskAbortController.signal,
+            })
+            await throwIfTaskCanceled(taskId, taskAbortController.signal)
+            await upsertTaskAssets(taskId, mergeAssetRecords(await readTaskAssets(taskId), partialResult.assets))
+
+            if (blueprintRecord && partialResult.keyframeManifestPath) {
+              const nextBlueprintRecord = await upsertTaskBlueprintSnapshot({
+                detail,
+                blueprint: blueprintRecord.blueprint,
+                status: partialResult.phase === "review_ready" ? "ready_for_review" : partialResult.phase === "completed" ? "completed" : blueprintRecord.status,
+                keyframeManifestPath: partialResult.keyframeManifestPath,
+              })
+              await upsertTaskDetail({
+                ...detail,
+                actualDurationSec: partialResult.actualDurationSec ?? detail.actualDurationSec,
+                blueprintStatus: nextBlueprintRecord.status,
+                taskRunConfig: {
+                  ...detail.taskRunConfig,
+                  blueprintStatus: nextBlueprintRecord.status,
+                },
+                updatedAt: new Date().toISOString(),
+              })
+              await updateTaskSummary(taskId, (task: TaskSummary) => ({
+                ...task,
+                actualDurationSec: partialResult.actualDurationSec ?? task.actualDurationSec,
+                blueprintStatus: nextBlueprintRecord.status,
+                updatedAt: new Date().toISOString(),
+              }))
+            }
+
+            if (partialResult.phase === "review_ready") {
+              await updateTaskLifecycleState(taskId, {
+                status: "waiting_review",
+                progressPct: 45,
+                failureReason: null,
+                statusDetail: "局部关键帧已替换，等待审核确认",
+                currentStage: "waiting_review",
+                currentStageLabel: "等待审核",
+                currentSceneIndex: null,
+                currentSceneTotal: detail.scenes.length,
+                activeJobId: null,
+              })
+            }
+
+            return partialResult
+          })()
+        : await writeTaskArtifacts(taskId, {
+            continueExecution: job.data.continueExecution ?? false,
+            signal: taskAbortController.signal,
+          })
 
       if (result.phase === "review_ready") {
         console.log(`[worker] ${taskId} => waiting for blueprint review`)

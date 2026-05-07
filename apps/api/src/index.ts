@@ -403,6 +403,7 @@ async function buildTaskDelivery(
   const keyframeAssets = readyAssets.filter((asset) =>
     asset.assetType === "keyframe_bundle" || asset.assetType === "keyframe_image"
   )
+  const sceneVideoAssets = readyAssets.filter((asset) => asset.assetType === "scene_video")
   const keyframeBundle = readyAssets.find((asset) => asset.assetType === "keyframe_bundle") ?? null
   const coverAsset = readyAssets.find((asset) => asset.assetType === "keyframe_image") ?? keyframeBundle
   const title = `${task.title} | ${task.channelId}`
@@ -479,6 +480,12 @@ async function buildTaskDelivery(
     const sceneKeyframe =
       keyframeAssets.find((asset) => asset.id.includes(scene.id) || asset.label.includes(String(scene.index + 1))) ??
       (keyframeBundle ? keyframeBundle : null)
+    const sceneVideo = sceneVideoAssets.find((asset) =>
+      asset.id.includes(scene.id) ||
+      asset.id.includes(`scene_${scene.index + 1}`) ||
+      asset.label.includes(String(scene.index + 1)) ||
+      asset.fileName?.includes(`scene-${scene.index + 1}.`)
+    ) ?? null
     const sceneMayBeFailed =
       task.status === "failed" &&
       (failedSceneIndex === scene.index ||
@@ -497,9 +504,9 @@ async function buildTaskDelivery(
         message: sceneKeyframe ? sceneKeyframe.fileName : scene.keyframeReviewNote ?? "",
       },
       video: {
-        status: finalVideo ? "ready" : sceneMayBeFailed ? "failed" : task.status === "running" ? "pending" : "unknown",
-        label: finalVideo ? "视频已合成" : sceneMayBeFailed ? "该段疑似失败" : task.status === "running" ? "生成中" : "待确认",
-        message: sceneMayBeFailed ? task.failureReason ?? detail.failureReason ?? "查看 timeline 定位失败段" : "",
+        status: finalVideo || sceneVideo ? "ready" : sceneMayBeFailed ? "failed" : task.status === "running" ? "pending" : "unknown",
+        label: finalVideo ? "视频已合成" : sceneVideo ? "分段视频就绪" : sceneMayBeFailed ? "该段疑似失败" : task.status === "running" ? "生成中" : "待确认",
+        message: sceneVideo ? sceneVideo.fileName : sceneMayBeFailed ? task.failureReason ?? detail.failureReason ?? "查看 timeline 定位失败段" : "",
       },
       review: {
         status: scene.reviewStatus === "approved" ? "ready" : scene.reviewStatus === "rejected" ? "failed" : "needs_check",

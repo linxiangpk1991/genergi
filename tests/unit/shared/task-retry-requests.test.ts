@@ -64,4 +64,62 @@ describe("task retry request persistence", () => {
     ) as Record<string, unknown[]>
     expect(persisted.task_retry_001).toHaveLength(1)
   })
+
+  it("preserves narrow keyframe and video retry scopes for worker execution", async () => {
+    dataDir = await mkdtemp(path.join(os.tmpdir(), "genergi-task-retry-narrow-scopes-"))
+    process.env.GENERGI_DATA_DIR = dataDir
+
+    const shared = await import("../../../packages/shared/src/index")
+    const createdAt = "2026-04-21T02:03:04.000Z"
+
+    const keyframeRequest = await shared.appendTaskRetryRequest("task_retry_scope", {
+      scope: "keyframe",
+      sceneId: "scene_2",
+      sceneIndex: 1,
+      sceneTitle: "Product reveal",
+      reason: "Replace only scene 2 keyframe",
+      status: "accepted",
+      statusDetail: "等待 worker 局部重试",
+      taskStatusAtRequest: "failed",
+      queue: {
+        queued: true,
+        jobId: "job_retry_keyframe",
+        reason: "retry_failed_keyframe",
+        continueExecution: true,
+        blueprintVersion: 1,
+        stage: "retry_keyframe",
+        resumeFrom: "scene_2",
+      },
+      createdAt,
+      updatedAt: createdAt,
+    })
+    const videoRequest = await shared.appendTaskRetryRequest("task_retry_scope", {
+      scope: "video",
+      sceneId: "scene_2",
+      sceneIndex: 1,
+      sceneTitle: "Product reveal",
+      reason: "Replace only scene 2 video",
+      status: "accepted",
+      statusDetail: "等待 worker 局部重试",
+      taskStatusAtRequest: "failed",
+      queue: {
+        queued: true,
+        jobId: "job_retry_video",
+        reason: "retry_failed_video",
+        continueExecution: true,
+        blueprintVersion: 1,
+        stage: "retry_video",
+        resumeFrom: "scene_2",
+      },
+      createdAt,
+      updatedAt: createdAt,
+    })
+
+    expect(keyframeRequest.scope).toBe("keyframe")
+    expect(videoRequest.scope).toBe("video")
+
+    const requests = await shared.readTaskRetryRequests("task_retry_scope")
+    expect(requests.map((request) => request.scope)).toEqual(["keyframe", "video"])
+    expect(requests.map((request) => request.sceneId)).toEqual(["scene_2", "scene_2"])
+  })
 })

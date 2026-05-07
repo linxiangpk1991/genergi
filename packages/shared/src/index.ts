@@ -303,6 +303,7 @@ export const assetRecordSchema = z.object({
     "audio",
     "keyframe_bundle",
     "keyframe_image",
+    "scene_video",
     "video_bundle",
   ]),
   label: z.string(),

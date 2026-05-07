@@ -237,6 +237,7 @@ function getPreviewKind(assetType: string, extension: string | null, isDirectory
   if (
     assetType === "audio" ||
     assetType === "video_bundle" ||
+    assetType === "scene_video" ||
     assetType === "keyframe_image" ||
     [".mp4", ".mp3", ".wav", ".m4a", ".aac", ".webm", ".png", ".jpg", ".jpeg", ".webp"].includes(extension ?? "")
   ) {
@@ -347,6 +348,23 @@ async function inferExportedAssets(taskId: string): Promise<AssetRecord[]> {
   await pushIfExists({ id: `${taskId}_subtitles`, assetType: "subtitles", label: "英文字幕", relativePath: "subtitles.srt" })
   await pushIfExists({ id: `${taskId}_audio`, assetType: "audio", label: "英文配音", relativePath: "narration.mp3" })
   await pushIfExists({ id: `${taskId}_video`, assetType: "video_bundle", label: "最终视频", relativePath: path.join("video", "final-with-audio.mp4") })
+  const videoDir = path.join(exportDir, "video")
+  const videoEntries = await fs
+    .readdir(videoDir, { withFileTypes: true })
+    .catch(() => [])
+  for (const entry of videoEntries) {
+    if (!entry.isFile() || !/^scene-\d+\.mp4$/i.test(entry.name)) {
+      continue
+    }
+    const sceneMatch = entry.name.match(/^scene-(\d+)\.mp4$/i)
+    const sceneNumber = sceneMatch?.[1] ? Number.parseInt(sceneMatch[1], 10) : null
+    await pushIfExists({
+      id: `${taskId}_scene_video_scene_${sceneNumber ?? entry.name}`,
+      assetType: "scene_video",
+      label: sceneNumber ? `分段视频 ${sceneNumber}` : `分段视频 ${entry.name}`,
+      relativePath: path.join("video", entry.name),
+    })
+  }
 
   const manifestPath = path.join(exportDir, "keyframes", "manifest.json")
   const manifestExists = await fs

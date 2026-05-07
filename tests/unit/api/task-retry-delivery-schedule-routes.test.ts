@@ -167,6 +167,59 @@ describe("API retry, delivery, and production schedule routes", () => {
     expect(requests[0]?.sceneId).toBe("scene_2")
   })
 
+  it("records a video retry request with narrow worker queue metadata", async () => {
+    const { app, shared, taskId, cookie } = await createAuthenticatedFailedTask()
+    enqueueTaskMock.mockResolvedValueOnce({
+      queued: true,
+      jobId: "job_retry_video_1",
+      reason: "retry_failed_video",
+      continueExecution: true,
+      blueprintVersion: 1,
+      stage: "retry_video",
+      resumeFrom: "scene_2",
+    })
+
+    const response = await app.request(`http://localhost/api/tasks/${taskId}/retry`, {
+      method: "POST",
+      headers: {
+        Cookie: cookie,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        scope: "video",
+        sceneId: "scene_2",
+        reason: "Regenerate only the timed-out video file",
+      }),
+    })
+
+    expect(response.status).toBe(202)
+    const payload = (await response.json()) as {
+      retryRequest: { scope: string; sceneId: string | null; status: string; queue?: { reason: string; stage: string; resumeFrom: string } | null }
+    }
+
+    expect(payload.retryRequest).toMatchObject({
+      scope: "video",
+      sceneId: "scene_2",
+      status: "accepted",
+      queue: {
+        reason: "retry_failed_video",
+        stage: "retry_video",
+        resumeFrom: "scene_2",
+      },
+    })
+    expect(enqueueTaskMock).toHaveBeenCalledWith(taskId, {
+      reason: "retry_failed_video",
+      continueExecution: true,
+      blueprintVersion: 1,
+      stage: "retry_video",
+      resumeFrom: "scene_2",
+    })
+
+    const requests = await shared.readTaskRetryRequests(taskId)
+    expect(requests[0]?.scope).toBe("video")
+    expect(requests[0]?.sceneId).toBe("scene_2")
+  })
+
   it("returns an explicit scene validation error without enqueueing", async () => {
     const { app, taskId, cookie } = await createAuthenticatedFailedTask()
 

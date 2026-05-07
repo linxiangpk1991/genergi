@@ -684,6 +684,7 @@ function sortAssetsForDelivery(assets: AssetRecord[]) {
     storyboard: 8,
     keyframe_bundle: 9,
     keyframe_image: 10,
+    scene_video: 11,
   }
 
   return [...assets].sort((left, right) => {
