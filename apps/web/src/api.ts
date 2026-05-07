@@ -412,6 +412,52 @@ export type TaskAudioStrategyResponse = {
   detail: TaskDetail
 }
 
+export type RetryRequestScope = "task" | "scene" | "keyframe" | "video"
+export type RetryRequestStatus = "pending" | "accepted" | "enqueue_failed" | "rejected"
+
+export type RetryRequest = {
+  id: string
+  taskId: string
+  scope: RetryRequestScope
+  sceneId: string | null
+  sceneIndex: number | null
+  sceneTitle: string | null
+  reason: string | null
+  status: RetryRequestStatus
+  statusDetail: string | null
+  taskStatusAtRequest: string
+  queue: {
+    queued: boolean
+    jobId: string | null
+    reason: string
+    continueExecution: boolean
+    blueprintVersion: number | null
+    stage: string | null
+    resumeFrom: string | null
+  } | null
+  createdAt: string
+  updatedAt: string
+}
+
+export type TaskRetryResponse = {
+  retryRequest: RetryRequest | null
+  task: TaskSummary
+  detail: TaskDetail
+  queue: TaskResumeResponse["queue"]
+}
+
+export type TaskDeliveryResponse = {
+  delivery: Record<string, unknown>
+}
+
+export type ProductionScheduleResponse = {
+  schedule: {
+    generatedAt: string
+    lanes: Record<string, number>
+    items: Array<Record<string, unknown>>
+  }
+}
+
 export type AssetRecord = {
   id: string
   taskId: string
@@ -522,6 +568,10 @@ export function buildAssetPreviewUrl(taskId: string, assetId: string) {
 
 export function buildKeyframePreviewUrl(taskId: string, sceneId: string) {
   return `${API_BASE_URL}/api/tasks/${taskId}/keyframes/${sceneId}/preview`
+}
+
+export function buildDeliveryManifestUrl(taskId: string) {
+  return `${API_BASE_URL}/api/tasks/${taskId}/delivery/manifest`
 }
 
 export function buildBatchDashboardUrl(taskId?: string) {
@@ -734,6 +784,16 @@ export const api = {
     request<{ diagnostics: TaskDiagnostics }>(`/api/tasks/${taskId}/diagnostics`),
   getTaskTimeline: (taskId: string) =>
     request<{ timeline: TaskTimelineEvent[] }>(`/api/tasks/${taskId}/timeline`),
+  getTaskRetryRequests: (taskId: string) =>
+    request<{ retryRequests: RetryRequest[] }>(`/api/tasks/${taskId}/retry-requests`),
+  getTaskDelivery: (taskId: string) =>
+    request<TaskDeliveryResponse>(`/api/tasks/${taskId}/delivery`),
+  retryTask: (taskId: string, payload: { scope?: RetryRequestScope; sceneId?: string; reason?: string }) =>
+    request<TaskRetryResponse>(`/api/tasks/${taskId}/retry`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  getProductionSchedule: () => request<ProductionScheduleResponse>("/api/production/schedule"),
   createTaskBlueprint: (taskId: string, payload: {
     blueprint: PlannedExecutionBlueprint
     keyframeManifestPath?: string

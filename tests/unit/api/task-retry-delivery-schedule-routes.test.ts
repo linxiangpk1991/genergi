@@ -225,9 +225,16 @@ describe("API retry, delivery, and production schedule routes", () => {
     const { app, taskId, cookie } = await createAuthenticatedFailedTask("Delivery task")
     const exportDir = path.join(dataDir, "exports", taskId)
     await mkdir(path.join(exportDir, "video"), { recursive: true })
+    await mkdir(path.join(exportDir, "keyframes"), { recursive: true })
     await writeFile(path.join(exportDir, "script.txt"), "final narration", "utf8")
     await writeFile(path.join(exportDir, "subtitles.srt"), "1\n00:00:00,000 --> 00:00:01,000\nHello", "utf8")
     await writeFile(path.join(exportDir, "video", "final-with-audio.mp4"), "fake video", "utf8")
+    await writeFile(path.join(exportDir, "keyframes", "scene-1.png"), "fake image", "utf8")
+    await writeFile(
+      path.join(exportDir, "keyframes", "manifest.json"),
+      JSON.stringify({ frames: [{ sceneId: "scene_1", sceneIndex: 0, fileName: "scene-1.png" }] }),
+      "utf8",
+    )
 
     const deliveryResponse = await app.request(`http://localhost/api/tasks/${taskId}/delivery`, {
       headers: { Cookie: cookie },
@@ -239,14 +246,47 @@ describe("API retry, delivery, and production schedule routes", () => {
         taskId: string
         ready: boolean
         finalVideoAssetId: string | null
+        manifestUrl: string
+        checks: Array<{ key: string; status: string; assetId: string | null }>
+        sceneMatrix: Array<{ sceneId: string; keyframe: { status: string }; video: { status: string } }>
+        recommendedActions: Array<{ id: string; label: string }>
+        publishCopy: { title: string; description: string; channelId: string }
         assetSummary: { readyCount: number; expectedTypes: string[]; missingTypes: string[] }
       }
     }
     expect(deliveryPayload.delivery.taskId).toBe(taskId)
     expect(deliveryPayload.delivery.ready).toBe(true)
     expect(deliveryPayload.delivery.finalVideoAssetId).toBe(`${taskId}_video`)
+    expect(deliveryPayload.delivery.manifestUrl).toBe(`/api/tasks/${taskId}/delivery/manifest`)
+    expect(deliveryPayload.delivery.checks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ key: "finalVideo", status: "ready", assetId: `${taskId}_video` }),
+        expect.objectContaining({ key: "cover", status: "ready" }),
+        expect.objectContaining({ key: "manifest", status: "ready", assetId: `${taskId}_keyframes` }),
+      ]),
+    )
+    expect(deliveryPayload.delivery.sceneMatrix[0]).toEqual(
+      expect.objectContaining({
+        sceneId: "scene_1",
+        keyframe: expect.objectContaining({ status: "ready" }),
+        video: expect.objectContaining({ status: "ready" }),
+      }),
+    )
+    expect(deliveryPayload.delivery.recommendedActions).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: "publish_ready" })]),
+    )
+    expect(deliveryPayload.delivery.publishCopy.title).toContain("Delivery task")
     expect(deliveryPayload.delivery.assetSummary.readyCount).toBeGreaterThanOrEqual(3)
     expect(deliveryPayload.delivery.assetSummary.missingTypes).not.toContain("video_bundle")
+
+    const manifestResponse = await app.request(`http://localhost/api/tasks/${taskId}/delivery/manifest`, {
+      headers: { Cookie: cookie },
+    })
+
+    expect(manifestResponse.status).toBe(200)
+    expect(manifestResponse.headers.get("content-disposition")).toContain(`${taskId}-delivery-manifest.json`)
+    const manifestPayload = (await manifestResponse.json()) as { delivery: { taskId: string; ready: boolean } }
+    expect(manifestPayload.delivery).toMatchObject({ taskId, ready: true })
 
     const scheduleResponse = await app.request("http://localhost/api/production/schedule", {
       headers: { Cookie: cookie },

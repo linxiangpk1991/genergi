@@ -1886,6 +1886,42 @@ select.input {
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
+.delivery-command-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  border-radius: 12px;
+  border: 1px solid rgba(0, 71, 171, 0.08);
+  background: #ffffff;
+  padding: 12px;
+}
+
+.delivery-command-bar > div:first-child {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.delivery-command-bar strong {
+  color: var(--genergi-primary-deep);
+}
+
+.delivery-command-bar span {
+  color: var(--genergi-muted);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.delivery-command-bar__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .delivery-check__header {
   display: flex;
   align-items: flex-start;
@@ -2605,6 +2641,7 @@ select.input {
 
   .asset-item-header,
   .asset-item-footer,
+  .delivery-command-bar,
   .delivery-check__header {
     flex-direction: column;
     align-items: stretch;

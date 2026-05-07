@@ -393,15 +393,152 @@ async function buildTaskDelivery(
   ])
   const readyAssets = assets.filter((asset) => asset.exists && asset.status === "ready")
   const readyTypes = new Set(readyAssets.map((asset) => asset.assetType))
-  const expectedTypes = ["video_bundle", "subtitles", "script"] as const
-  const missingTypes = expectedTypes.filter((assetType) => !readyTypes.has(assetType))
+  const expectedTypes = ["video_bundle", "subtitles", "script", "cover", "manifest"] as const
   const finalVideo = readyAssets.find((asset) => asset.assetType === "video_bundle") ?? null
   const subtitleAsset = readyAssets.find((asset) => asset.assetType === "subtitles") ?? null
-  const scriptAsset = readyAssets.find((asset) => asset.assetType === "script") ?? null
+  const scriptAsset =
+    readyAssets.find((asset) => asset.assetType === "script") ??
+    readyAssets.find((asset) => asset.assetType === "source_script") ??
+    null
   const keyframeAssets = readyAssets.filter((asset) =>
     asset.assetType === "keyframe_bundle" || asset.assetType === "keyframe_image"
   )
-  const ready = Boolean(finalVideo) && missingTypes.length === 0
+  const keyframeBundle = readyAssets.find((asset) => asset.assetType === "keyframe_bundle") ?? null
+  const coverAsset = readyAssets.find((asset) => asset.assetType === "keyframe_image") ?? keyframeBundle
+  const title = `${task.title} | ${task.channelId}`
+  const description = detail.ctaLine?.trim()
+    ? `${detail.script}\n\n${detail.ctaLine.trim()}`
+    : detail.script
+  const missingTypes = expectedTypes.filter((assetType) => {
+    if (assetType === "cover") {
+      return !coverAsset
+    }
+    if (assetType === "manifest") {
+      return !keyframeBundle
+    }
+    if (assetType === "script") {
+      return !scriptAsset
+    }
+    return !readyTypes.has(assetType)
+  })
+  const checks = [
+    {
+      key: "finalVideo",
+      label: "final video / 成片",
+      status: finalVideo ? "ready" : task.status === "failed" ? "failed" : "missing",
+      message: finalVideo ? finalVideo.fileName : "缺少最终成片 video/final-with-audio.mp4",
+      assetId: finalVideo?.id ?? null,
+    },
+    {
+      key: "subtitles",
+      label: "subtitles / 字幕",
+      status: subtitleAsset ? "ready" : task.status === "failed" ? "failed" : "missing",
+      message: subtitleAsset ? subtitleAsset.fileName : "缺少英文字幕文件 subtitles.srt",
+      assetId: subtitleAsset?.id ?? null,
+    },
+    {
+      key: "script",
+      label: "script / 脚本",
+      status: scriptAsset ? "ready" : "missing",
+      message: scriptAsset ? scriptAsset.fileName : "缺少最终脚本或任务母本",
+      assetId: scriptAsset?.id ?? null,
+    },
+    {
+      key: "cover",
+      label: "cover / 封面",
+      status: coverAsset ? "ready" : keyframeAssets.length ? "needs_check" : "missing",
+      message: coverAsset ? coverAsset.fileName : "需要从关键帧中确认发布封面",
+      assetId: coverAsset?.id ?? null,
+    },
+    {
+      key: "title",
+      label: "title / 标题",
+      status: title.trim() ? "ready" : "needs_check",
+      message: title,
+      assetId: null,
+    },
+    {
+      key: "description",
+      label: "description / 描述",
+      status: description.trim() ? "ready" : "needs_check",
+      message: description.trim() ? description.slice(0, 180) : "需要运营补充发布描述",
+      assetId: null,
+    },
+    {
+      key: "manifest",
+      label: "manifest / 清单",
+      status: keyframeBundle ? "ready" : "missing",
+      message: keyframeBundle ? keyframeBundle.fileName : "缺少 keyframes/manifest.json",
+      assetId: keyframeBundle?.id ?? null,
+    },
+  ]
+  const ready = missingTypes.length === 0 && checks.every((check) => check.status === "ready")
+  const failedSceneIndex = detail.currentSceneIndex ?? task.currentSceneIndex ?? null
+  const failureText = `${task.failureReason ?? detail.failureReason ?? ""} ${task.statusDetail ?? detail.statusDetail ?? ""}`.toLowerCase()
+  const sceneMatrix = detail.scenes.map((scene) => {
+    const sceneKeyframe =
+      keyframeAssets.find((asset) => asset.id.includes(scene.id) || asset.label.includes(String(scene.index + 1))) ??
+      (keyframeBundle ? keyframeBundle : null)
+    const sceneMayBeFailed =
+      task.status === "failed" &&
+      (failedSceneIndex === scene.index ||
+        failureText.includes(scene.id.toLowerCase()) ||
+        failureText.includes(`scene ${scene.index + 1}`) ||
+        failureText.includes(`scene_${scene.index + 1}`))
+
+    return {
+      sceneId: scene.id,
+      index: scene.index,
+      title: scene.title,
+      durationSec: scene.durationSec,
+      keyframe: {
+        status: scene.keyframeStatus === "approved" || sceneKeyframe ? "ready" : scene.keyframeStatus === "rejected" ? "failed" : "pending",
+        label: scene.keyframeStatus === "approved" || sceneKeyframe ? "关键帧就绪" : scene.keyframeStatus === "rejected" ? "关键帧驳回" : "关键帧待确认",
+        message: sceneKeyframe ? sceneKeyframe.fileName : scene.keyframeReviewNote ?? "",
+      },
+      video: {
+        status: finalVideo ? "ready" : sceneMayBeFailed ? "failed" : task.status === "running" ? "pending" : "unknown",
+        label: finalVideo ? "视频已合成" : sceneMayBeFailed ? "该段疑似失败" : task.status === "running" ? "生成中" : "待确认",
+        message: sceneMayBeFailed ? task.failureReason ?? detail.failureReason ?? "查看 timeline 定位失败段" : "",
+      },
+      review: {
+        status: scene.reviewStatus === "approved" ? "ready" : scene.reviewStatus === "rejected" ? "failed" : "needs_check",
+        label: scene.reviewStatus === "approved" ? "蓝图已审" : scene.reviewStatus === "rejected" ? "蓝图驳回" : "待审核",
+        message: scene.reviewNote ?? "",
+      },
+    }
+  })
+  const recommendedActions = [
+    ...(task.status === "failed"
+      ? [
+          {
+            id: "retry_failed_scene",
+            label: "发起局部重试",
+            description: failedSceneIndex == null ? "任务失败但未定位 scene，先从 timeline 判断 keyframe/video/scene 范围。" : `优先处理 scene ${failedSceneIndex + 1} 的失败段。`,
+            retryKind: "scene",
+            sceneId: failedSceneIndex == null ? undefined : detail.scenes[failedSceneIndex]?.id,
+          },
+        ]
+      : []),
+    ...(missingTypes.length
+      ? [
+          {
+            id: "inspect_missing_assets",
+            label: "补齐缺失交付物",
+            description: `缺少 ${missingTypes.join(", ")}，先确认资产路径是否存在，再决定恢复或重试。`,
+          },
+        ]
+      : []),
+    ...(ready
+      ? [
+          {
+            id: "publish_ready",
+            label: "进入发布复核",
+            description: "交付物齐全，复制标题/描述并下载交付清单后可交给运营发布。",
+          },
+        ]
+      : []),
+  ]
 
   return {
     taskId: task.id,
@@ -414,6 +551,22 @@ async function buildTaskDelivery(
     renderSpecJson: detail.taskRunConfig.renderSpecJson,
     ready,
     readiness: ready ? "ready" : task.status === "failed" ? "blocked" : "pending",
+    checks,
+    sceneMatrix,
+    recommendedActions,
+    publishCopy: {
+      title,
+      description,
+      channelId: task.channelId,
+    },
+    operatorMessage: ready
+      ? "交付物已齐全，建议下载交付清单并做最终发布复核。"
+      : task.status === "failed"
+        ? diagnostics.operatorMessage
+        : missingTypes.length
+          ? `仍缺少 ${missingTypes.join(", ")}。`
+          : "仍有待检查项，请确认发布字段和 scene 矩阵。",
+    manifestUrl: `/api/tasks/${task.id}/delivery/manifest`,
     finalVideoAssetId: finalVideo?.id ?? null,
     subtitleAssetId: subtitleAsset?.id ?? null,
     scriptAssetId: scriptAsset?.id ?? null,
@@ -1945,6 +2098,24 @@ app.get("/api/tasks/:taskId/delivery", async (c) => {
   }
 
   return c.json({ delivery: await buildTaskDelivery(task, detail) })
+})
+
+app.get("/api/tasks/:taskId/delivery/manifest", async (c) => {
+  const taskId = c.req.param("taskId")
+  const [tasks, detail] = await Promise.all([listTasks(), getTaskDetail(taskId)])
+  const task = tasks.find((entry) => entry.id === taskId) ?? null
+  if (!task || !detail) {
+    return c.json({ message: "TASK_NOT_FOUND" }, 404)
+  }
+
+  const delivery = await buildTaskDelivery(task, detail)
+  const manifest = {
+    generatedAt: new Date().toISOString(),
+    delivery,
+  }
+  c.header("Content-Type", "application/json; charset=utf-8")
+  c.header("Content-Disposition", `attachment; filename="${taskId}-delivery-manifest.json"`)
+  return c.body(JSON.stringify(manifest, null, 2))
 })
 
 app.post(

@@ -88,6 +88,12 @@ describe("AssetsPage delivery helpers", () => {
         },
       ],
       recommendedActions: [{ label: "Retry scene 1" }],
+      publishCopy: {
+        title: "Launch title",
+        description: "Launch description",
+        channelId: "tiktok",
+      },
+      manifestUrl: "/api/tasks/task_1/delivery/manifest",
     })
 
     expect(delivery.checks).toEqual(
@@ -106,6 +112,8 @@ describe("AssetsPage delivery helpers", () => {
       }),
     )
     expect(delivery.recommendedActions[0]?.label).toBe("Retry scene 1")
+    expect(delivery.publishCopy).toMatchObject({ title: "Launch title", channelId: "tiktok" })
+    expect(delivery.manifestUrl).toBe("/api/tasks/task_1/delivery/manifest")
   })
 
   it("marks a completed task with missing deliverables as missing assets", () => {

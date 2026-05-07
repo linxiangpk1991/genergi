@@ -6,6 +6,7 @@ import {
   buildAssetDownloadUrl,
   buildAssetPreviewUrl,
   buildBatchDashboardUrl,
+  buildDeliveryManifestUrl,
   buildTaskReviewUrl,
   getAudioStrategyLabel,
   type AssetRecord,
@@ -169,6 +170,12 @@ type DeliveryWorkbench = {
   scenes: DeliverySceneRow[]
   recommendedActions: DeliveryRecommendation[]
   retryEndpoints: Partial<Record<DeliveryRetryKind, string>>
+  publishCopy: {
+    title: string
+    description: string
+    channelId: string
+  }
+  manifestUrl?: string
   message: string
   updatedAt?: string
 }
@@ -391,6 +398,22 @@ function normalizeRecommendedActions(value: unknown): DeliveryRecommendation[] {
   })
 }
 
+function normalizePublishCopy(value: unknown): DeliveryWorkbench["publishCopy"] {
+  if (!isRecord(value)) {
+    return {
+      title: "",
+      description: "",
+      channelId: "",
+    }
+  }
+
+  return {
+    title: readString(value.title),
+    description: readString(value.description),
+    channelId: readString(value.channelId),
+  }
+}
+
 function normalizeSceneRows(value: unknown): DeliverySceneRow[] {
   if (!Array.isArray(value)) {
     return []
@@ -454,6 +477,8 @@ export function normalizeDeliveryWorkbench(payload: unknown): DeliveryWorkbench 
     scenes: normalizeSceneRows(record.sceneMatrix ?? record.scenes),
     recommendedActions: normalizeRecommendedActions(record.recommendedActions ?? record.actions),
     retryEndpoints: normalizeRetryEndpoints(record.retryEndpoints),
+    publishCopy: normalizePublishCopy(record.publishCopy),
+    manifestUrl: readString(record.manifestUrl) || undefined,
     message: readString(record.operatorMessage) || readString(record.message),
     updatedAt: readString(record.updatedAt) || undefined,
   }
@@ -563,6 +588,11 @@ export function buildFallbackDeliveryWorkbench(input: {
         ]
       : [],
     retryEndpoints: {},
+    publishCopy: {
+      title: input.task?.title ?? "",
+      description: input.task?.planning?.planningSummary ?? "",
+      channelId: input.task?.channelId ?? "",
+    },
     message: "交付接口暂未接入，当前根据资产、诊断和 timeline 保守推断。",
   }
 }
@@ -597,16 +627,7 @@ function resolveApiUrl(pathOrUrl: string) {
 }
 
 async function fetchTaskDeliveryWorkbench(taskId: string) {
-  const response = await fetch(resolveApiUrl(`/api/tasks/${encodeURIComponent(taskId)}/delivery`), {
-    credentials: "include",
-  })
-  const content = await response.text()
-
-  if (!response.ok) {
-    throw new Error(content || `交付检查加载失败 (${response.status})`)
-  }
-
-  return normalizeDeliveryWorkbench(content ? JSON.parse(content) : {})
+  return normalizeDeliveryWorkbench(await api.getTaskDelivery(taskId))
 }
 
 async function postDeliveryRetry(input: {
@@ -618,18 +639,22 @@ async function postDeliveryRetry(input: {
   const endpoint =
     input.workbench?.retryEndpoints[input.kind] ??
     `/api/tasks/${encodeURIComponent(input.taskId)}/retry`
+  const payload = {
+    scope: input.kind,
+    sceneId: input.sceneId,
+    reason: `${input.kind}${input.sceneId ? `:${input.sceneId}` : ""}`,
+  }
+  if (endpoint === `/api/tasks/${encodeURIComponent(input.taskId)}/retry`) {
+    return api.retryTask(input.taskId, payload)
+  }
+
   const response = await fetch(resolveApiUrl(endpoint), {
     method: "POST",
     credentials: "include",
     headers: {
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({
-      scope: input.kind,
-      sceneId: input.sceneId,
-      reason: `${input.kind}${input.sceneId ? `:${input.sceneId}` : ""}`,
-      source: "asset_center_delivery_workbench",
-    }),
+    body: JSON.stringify(payload),
   })
   const content = await response.text()
 
@@ -941,6 +966,22 @@ export function AssetsPage() {
     }
   }
 
+  async function handleCopyDeliveryText(label: string, text: string) {
+    if (!text.trim()) {
+      setActionError(`${label} 暂无可复制内容`)
+      return
+    }
+
+    setActionError("")
+    setActionSuccess("")
+    try {
+      await navigator.clipboard.writeText(text)
+      setActionSuccess(`已复制${label}`)
+    } catch {
+      setActionError(`复制${label}失败，请手动选中文本复制。`)
+    }
+  }
+
   const selectedTask = useMemo(
     () => tasks.find((task) => task.id === selectedTaskId) ?? null,
     [tasks, selectedTaskId],
@@ -982,6 +1023,11 @@ export function AssetsPage() {
     [deliveryWorkbench],
   )
   const deliveryScenes = deliveryWorkbench?.scenes ?? []
+  const deliveryManifestUrl = selectedTaskId
+    ? deliveryWorkbench?.manifestUrl
+      ? resolveApiUrl(deliveryWorkbench.manifestUrl)
+      : buildDeliveryManifestUrl(selectedTaskId)
+    : ""
   const recentTimeline = useMemo(() => [...timeline].slice(-6).reverse(), [timeline])
   const heartbeatAgeLabel = useMemo(() => {
     const ageMs = diagnostics?.stale.ageMs
@@ -1272,6 +1318,38 @@ export function AssetsPage() {
                   <span>{item.description}</span>
                 </div>
               ))}
+            </div>
+
+            <div className="delivery-command-bar">
+              <div>
+                <strong>发布交接</strong>
+                <span>
+                  {deliveryWorkbench?.publishCopy.channelId
+                    ? `渠道 ${deliveryWorkbench.publishCopy.channelId}`
+                    : "复制发布字段并下载交付清单，交给运营复核。"}
+                </span>
+              </div>
+              <div className="delivery-command-bar__actions">
+                <button
+                  className="ghost-button ghost-button--compact"
+                  onClick={() => void handleCopyDeliveryText("标题", deliveryWorkbench?.publishCopy.title ?? "")}
+                  type="button"
+                >
+                  复制标题
+                </button>
+                <button
+                  className="ghost-button ghost-button--compact"
+                  onClick={() => void handleCopyDeliveryText("描述", deliveryWorkbench?.publishCopy.description ?? "")}
+                  type="button"
+                >
+                  复制描述
+                </button>
+                {deliveryManifestUrl ? (
+                  <a className="ghost-button ghost-button--compact" href={deliveryManifestUrl}>
+                    下载清单
+                  </a>
+                ) : null}
+              </div>
             </div>
 
             <div className="delivery-check-grid">
