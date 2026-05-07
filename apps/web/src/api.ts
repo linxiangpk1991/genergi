@@ -585,12 +585,7 @@ export function buildAssetCenterUrl(taskId?: string) {
 export function buildTaskReviewUrl(
   task: Pick<TaskSummary, "id" | "executionMode" | "blueprintStatus">,
 ) {
-  if (
-    task.executionMode === "review_required" &&
-    (task.blueprintStatus === "ready_for_review" ||
-      task.blueprintStatus === "approved" ||
-      task.blueprintStatus === "rejected")
-  ) {
+  if (task.executionMode === "review_required") {
     return buildWorkspaceUrl("/task-review", { taskId: task.id })
   }
 

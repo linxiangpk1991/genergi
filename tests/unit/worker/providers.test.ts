@@ -58,6 +58,7 @@ describe("worker provider helpers", () => {
 
   afterEach(async () => {
     vi.restoreAllMocks()
+    delete process.env.GENERGI_VIDEO_SCENE_TIMEOUT_MS
     if (tempDir) {
       await rm(tempDir, { recursive: true, force: true })
       tempDir = ""
@@ -577,6 +578,15 @@ A few notes to make it hit:
     const videos = await bundlePromise
 
     expect(videos.map((video) => video.sceneIndex)).toEqual([0, 1, 2])
+  })
+
+  it("uses a production-safe scene video timeout instead of the shorter legacy guard", async () => {
+    const providers = await import("../../../apps/worker/src/lib/providers")
+
+    expect(providers.resolveSceneVideoTimeoutMs()).toBe(20 * 60 * 1000)
+
+    process.env.GENERGI_VIDEO_SCENE_TIMEOUT_MS = "900000"
+    expect(providers.resolveSceneVideoTimeoutMs()).toBe(900000)
   })
 
   it("uses the approved blueprint directly for continueExecution instead of rebuilding planning", async () => {

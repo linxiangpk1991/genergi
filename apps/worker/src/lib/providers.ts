@@ -36,6 +36,7 @@ const gatewayImageGenerationPaths = ["/v1/images/generations", "/v1/image/genera
 const IMAGE_GATEWAY_REQUEST_TIMEOUT_MS = 240000
 const REVIEW_REQUIRED_KEYFRAME_TIMEOUT_MS = 240000
 const DEGRADABLE_KEYFRAME_TIMEOUT_MS = 240000
+const DEFAULT_VIDEO_SCENE_TIMEOUT_MS = 20 * 60 * 1000
 export const TASK_CANCELED_BY_OPERATOR = "TASK_CANCELED_BY_OPERATOR"
 
 type PlanningTraceArtifact = {
@@ -235,6 +236,15 @@ function resolveSceneVideoConcurrency() {
   }
 
   return Math.min(raw, 6)
+}
+
+export function resolveSceneVideoTimeoutMs() {
+  const raw = Number.parseInt(process.env.GENERGI_VIDEO_SCENE_TIMEOUT_MS ?? "", 10)
+  if (!Number.isFinite(raw) || raw <= 0) {
+    return DEFAULT_VIDEO_SCENE_TIMEOUT_MS
+  }
+
+  return Math.min(Math.max(raw, 60 * 1000), 60 * 60 * 1000)
 }
 
 function normalizeImageModel(model: string) {
@@ -2792,6 +2802,7 @@ export async function createSceneVideoBundle(input: {
     async (sceneInput) => {
       await input.onSceneStart?.(sceneInput.scene, input.detail.scenes.length)
 
+      let timeout: ReturnType<typeof setTimeout> | null = null
       const video = await Promise.race([
         createSceneVideo({
           taskId: input.taskId,
@@ -2800,13 +2811,17 @@ export async function createSceneVideoBundle(input: {
           keyframePath: sceneInput.keyframePath,
           signal: input.signal,
         }),
-        new Promise<never>((_, reject) =>
-          setTimeout(
+        new Promise<never>((_, reject) => {
+          timeout = setTimeout(
             () => reject(new Error(`Scene ${sceneInput.scene.index + 1} video generation timeout`)),
-            8 * 60 * 1000,
-          ),
-        ),
-      ])
+            resolveSceneVideoTimeoutMs(),
+          )
+        }),
+      ]).finally(() => {
+        if (timeout) {
+          clearTimeout(timeout)
+        }
+      })
       return {
         ...video,
         sceneId: sceneInput.scene.id,

@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   api,
   buildAssetCenterUrl,
   buildBatchDashboardUrl,
+  buildTaskReviewUrl,
   getSubtitleStrategyLabel,
   type BootstrapResponse,
   type ProjectRecord,
@@ -11,18 +12,34 @@ import {
   type TerminalPresetId,
   type TaskSummary,
 } from "../api";
-
-function formatCurrency(value: number) {
-  return `¥${value.toFixed(2)}`;
-}
+import {
+  estimateLaunchProduction,
+  findSimilarLaunchTasks,
+  getLaunchReadiness,
+} from "./homePageLaunchGuards";
 
 function getCreateTaskNotice(task: TaskSummary) {
-  return `任务“${task.title}”已提交到渲染队列。关键画面生成完成后，会进入任务审核队列。`;
+  return `任务“${task.title}”已提交到审核优先队列。系统会先生成蓝图和关键画面，进入待审核后再继续完整成片。`;
 }
 
 type FloatingToastState = {
   tone: "success" | "error"
   message: string
+}
+
+type FieldErrors = {
+  title?: string
+  script?: string
+}
+
+type DraftPayload = {
+  title: string
+  script: string
+  projectId: string
+  terminalPresetId: TerminalPresetId
+  targetDurationSec: number
+  audioStrategy: "tts_only" | "native_plus_tts_ducked"
+  subtitleStrategy: SubtitleStrategy
 }
 
 const TERMINAL_PRESET_OPTIONS: Array<{
@@ -121,25 +138,98 @@ const SUBTITLE_STRATEGY_OPTIONS: Array<{
   },
 ]
 
+const LAUNCH_DRAFT_STORAGE_KEY = "genergi.task-launch.draft.v1"
+
+const SCRIPT_TEMPLATES = [
+  {
+    id: "product-seeding",
+    label: "新品种草",
+    body:
+      "目标人群：\n产品/主题：\n核心卖点：\n使用场景：\n情绪语气：可信、轻松、有画面感\nCTA：引导用户了解或购买\n禁止改动项：品牌名、产品名、核心卖点不要改写",
+  },
+  {
+    id: "feature-demo",
+    label: "功能演示",
+    body:
+      "目标人群：\n痛点：\n功能亮点：\n演示场景：\n结果对比：\nCTA：引导用户尝试或咨询\n禁止改动项：功能边界和使用步骤不要夸大",
+  },
+  {
+    id: "promo",
+    label: "优惠活动",
+    body:
+      "目标人群：\n活动内容：\n核心利益点：\n适用场景：\n紧迫感：\nCTA：引导用户立即行动\n禁止改动项：优惠条件、时间和限制不要改写",
+  },
+]
+
+function getStoredLaunchDraft(): Partial<DraftPayload> | null {
+  try {
+    const raw = window.localStorage.getItem(LAUNCH_DRAFT_STORAGE_KEY)
+    return raw ? (JSON.parse(raw) as Partial<DraftPayload>) : null
+  } catch {
+    return null
+  }
+}
+
+function getTaskStatusLabel(task: TaskSummary) {
+  if (task.status === "waiting_review" || task.blueprintStatus === "ready_for_review") {
+    return "待审核"
+  }
+  if (task.status === "running" || task.status === "queued") {
+    return "运行中"
+  }
+  if (task.status === "failed") {
+    return "异常"
+  }
+  if (task.status === "completed") {
+    return "已完成"
+  }
+  if (task.status === "canceling" || task.status === "canceled") {
+    return "已取消"
+  }
+  return "待处理"
+}
+
+function getChannelLabel(channelIds: string[]) {
+  const primaryChannel = channelIds[0] ?? "tiktok"
+  const labels: Record<string, string> = {
+    tiktok: "TikTok",
+    reels: "Instagram Reels",
+    youtube_shorts: "YouTube Shorts",
+    shorts: "YouTube Shorts",
+  }
+  return labels[primaryChannel] ?? primaryChannel
+}
+
 export function HomePage() {
   const [bootstrap, setBootstrap] = useState<BootstrapResponse | null>(null);
   const [projects, setProjects] = useState<ProjectRecord[]>([]);
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
-  const [title, setTitle] = useState("");
-  const [script, setScript] = useState("");
-  const [projectId, setProjectId] = useState("project_default");
+  const storedDraft = useMemo(() => getStoredLaunchDraft(), []);
+  const [title, setTitle] = useState(storedDraft?.title ?? "");
+  const [script, setScript] = useState(storedDraft?.script ?? "");
+  const [projectId, setProjectId] = useState(storedDraft?.projectId ?? "project_default");
   const [terminalPresetId, setTerminalPresetId] =
-    useState<TerminalPresetId>("phone_portrait");
-  const [targetDurationSec, setTargetDurationSec] = useState(30);
-  const [audioStrategy, setAudioStrategy] = useState<"tts_only" | "native_plus_tts_ducked">("tts_only");
-  const [subtitleStrategy, setSubtitleStrategy] = useState<SubtitleStrategy>("tts_aligned");
+    useState<TerminalPresetId>(storedDraft?.terminalPresetId ?? "phone_portrait");
+  const [targetDurationSec, setTargetDurationSec] = useState(storedDraft?.targetDurationSec ?? 30);
+  const [audioStrategy, setAudioStrategy] = useState<"tts_only" | "native_plus_tts_ducked">(
+    storedDraft?.audioStrategy ?? "tts_only",
+  );
+  const [subtitleStrategy, setSubtitleStrategy] = useState<SubtitleStrategy>(
+    storedDraft?.subtitleStrategy ?? "tts_aligned",
+  );
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+  const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [notice, setNotice] = useState("");
   const [createdTask, setCreatedTask] = useState<TaskSummary | null>(null);
   const [tasksUpdatedAt, setTasksUpdatedAt] = useState<string>("");
   const [floatingToast, setFloatingToast] = useState<FloatingToastState | null>(null);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [draftRestored, setDraftRestored] = useState(Boolean(storedDraft?.title || storedDraft?.script));
+  const titleInputRef = useRef<HTMLInputElement | null>(null);
+  const scriptInputRef = useRef<HTMLTextAreaElement | null>(null);
 
   useEffect(() => {
     async function load() {
@@ -152,15 +242,17 @@ export function HomePage() {
         setBootstrap(bootstrapRes);
         setTasks(taskRes.tasks);
         setProjects(projectRes.projects);
-        if (projectRes.projects[0]?.id) {
+        if (!storedDraft?.projectId && projectRes.projects[0]?.id) {
           setProjectId(projectRes.projects[0].id);
         }
         setTasksUpdatedAt(new Date().toLocaleTimeString("zh-CN"));
-        setTargetDurationSec(
-          bootstrapRes.durationOptions[1] ??
-            bootstrapRes.durationOptions[0] ??
-            30,
-        );
+        if (!storedDraft?.targetDurationSec) {
+          setTargetDurationSec(
+            bootstrapRes.durationOptions[1] ??
+              bootstrapRes.durationOptions[0] ??
+              30,
+          );
+        }
       } catch (err) {
         setError(err instanceof Error ? err.message : "加载失败");
       } finally {
@@ -181,7 +273,7 @@ export function HomePage() {
     }, 5000);
 
     return () => window.clearInterval(timer);
-  }, []);
+  }, [storedDraft?.projectId, storedDraft?.targetDurationSec]);
 
   useEffect(() => {
     if (!floatingToast) {
@@ -194,6 +286,42 @@ export function HomePage() {
 
     return () => window.clearTimeout(timer);
   }, [floatingToast]);
+
+  useEffect(() => {
+    const hasDraft = Boolean(title.trim() || script.trim())
+    try {
+      if (hasDraft) {
+        window.localStorage.setItem(
+          LAUNCH_DRAFT_STORAGE_KEY,
+          JSON.stringify({
+            title,
+            script,
+            projectId,
+            terminalPresetId,
+            targetDurationSec,
+            audioStrategy,
+            subtitleStrategy,
+          } satisfies DraftPayload),
+        )
+      } else {
+        window.localStorage.removeItem(LAUNCH_DRAFT_STORAGE_KEY)
+      }
+    } catch {}
+  }, [audioStrategy, projectId, script, subtitleStrategy, targetDurationSec, terminalPresetId, title])
+
+  useEffect(() => {
+    const hasDraft = Boolean(title.trim() || script.trim())
+    function handleBeforeUnload(event: BeforeUnloadEvent) {
+      if (!hasDraft || submitting) {
+        return
+      }
+      event.preventDefault()
+      event.returnValue = ""
+    }
+
+    window.addEventListener("beforeunload", handleBeforeUnload)
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload)
+  }, [script, submitting, title])
 
   const selectedProject = useMemo(
     () => projects.find((project) => project.id === projectId) ?? null,
@@ -233,17 +361,93 @@ export function HomePage() {
         .slice(0, 3),
     [tasks],
   );
+  const launchReadiness = useMemo(
+    () => getLaunchReadiness({ title, script, outputLanguage: "English" }),
+    [script, title],
+  )
+  const productionEstimate = useMemo(
+    () => estimateLaunchProduction(targetDurationSec),
+    [targetDurationSec],
+  )
+  const similarTasks = useMemo(
+    () =>
+      findSimilarLaunchTasks({
+        title,
+        script,
+        projectId,
+        targetDurationSec,
+        tasks,
+      }),
+    [projectId, script, targetDurationSec, tasks, title],
+  )
+  const channelLabel = getChannelLabel(selectedProject?.defaultChannelIds ?? ["tiktok"])
+  const readyCheckCount = launchReadiness.checks.filter((check) => check.status === "ready").length
+  const riskyCheckCount = launchReadiness.checks.filter((check) => check.status === "risk").length
+  const suggestionCheckCount = launchReadiness.checks.filter((check) => check.status === "suggestion").length
 
-  async function handleCreateTask() {
-    if (!title.trim() || !script.trim()) {
-      setNotice("");
-      setCreatedTask(null);
-      setError("请先填写任务名称和内容母本");
+  function focusFirstInvalidField(nextErrors: FieldErrors) {
+    window.setTimeout(() => {
+      if (nextErrors.title) {
+        titleInputRef.current?.focus()
+        return
+      }
+      if (nextErrors.script) {
+        scriptInputRef.current?.focus()
+      }
+    }, 0)
+  }
+
+  function validateRequiredFields() {
+    const nextErrors: FieldErrors = {}
+    if (!title.trim()) {
+      nextErrors.title = "请填写任务名称"
+    }
+    if (!script.trim()) {
+      nextErrors.script = "请填写内容母本"
+    }
+    setFieldErrors(nextErrors)
+    if (nextErrors.title || nextErrors.script) {
+      setNotice("")
+      setCreatedTask(null)
+      setError("请先补齐必填字段")
       setFloatingToast({
         tone: "error",
-        message: "请先填写任务名称和内容母本",
-      });
-      return;
+        message: "请先补齐任务名称和内容母本",
+      })
+      focusFirstInvalidField(nextErrors)
+      return false
+    }
+    return true
+  }
+
+  function handleSubmitRequest(event?: FormEvent) {
+    event?.preventDefault()
+    if (!validateRequiredFields()) {
+      return
+    }
+    setError("")
+    setConfirmOpen(true)
+  }
+
+  function handleClearDraft() {
+    if ((title.trim() || script.trim()) && !window.confirm("确认清空当前草稿？")) {
+      return
+    }
+    setTitle("")
+    setScript("")
+    setFieldErrors({})
+    setDraftRestored(false)
+  }
+
+  function applyScriptTemplate(templateBody: string) {
+    setScript((current) => (current.trim() ? `${current.trim()}\n\n${templateBody}` : templateBody))
+    setFieldErrors((current) => ({ ...current, script: undefined }))
+  }
+
+  async function handleCreateTask() {
+    if (!validateRequiredFields()) {
+      setConfirmOpen(false)
+      return
     }
 
     setSubmitting(true);
@@ -270,12 +474,23 @@ export function HomePage() {
       });
       setTitle("");
       setScript("");
+      setFieldErrors({});
+      setConfirmOpen(false);
+      setDraftRestored(false);
+      try {
+        window.localStorage.removeItem(LAUNCH_DRAFT_STORAGE_KEY)
+      } catch {}
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : "创建任务失败";
-      setError(errorMessage);
+      const infrastructureError = /queue|redis|worker/i.test(errorMessage) || errorMessage.includes("队列")
+      const friendlyMessage =
+        infrastructureError
+          ? "队列暂不可用，请先去生产看板检查 worker / redis 后再提交。"
+          : errorMessage
+      setError(friendlyMessage);
       setFloatingToast({
         tone: "error",
-        message: errorMessage,
+        message: friendlyMessage,
       });
     } finally {
       setSubmitting(false);
@@ -288,339 +503,388 @@ export function HomePage() {
 
   return (
     <>
-      <header className="topbar">
+      <header className="topbar launch-topbar">
         <div>
           <div className="eyebrow">GENERGI Command Center</div>
           <h1>新建生产任务</h1>
           <p>
-            先把内容母本写清楚，再只用时长和尺寸约束系统。平台会按保真优先的单一路径生成蓝图、关键画面和成片。
+            按 3 步完成发车：先确认项目与输出，再写清内容母本，最后做启动前确认。提交后先进入审核优先队列。
           </p>
         </div>
         <div className="topbar-actions">
+          <span className="pill">English Output</span>
           <span className="pill">单一路径</span>
+          <span className="pill">TikTok 默认</span>
           <span className="pill pill--accent">审核优先</span>
         </div>
       </header>
 
       {error ? <div className="alert">{error}</div> : null}
+      {draftRestored ? (
+        <section className="planning-summary-card launch-draft-card">
+          <strong>已恢复未提交草稿</strong>
+          <span>标题、内容母本和输出设置已从本机草稿恢复。提交成功后会自动清理草稿。</span>
+          <button className="ghost-button ghost-button--compact" onClick={() => setDraftRestored(false)} type="button">
+            知道了
+          </button>
+        </section>
+      ) : null}
       {notice && createdTask ? (
-        <section className="planning-summary-card">
-          <strong>提交成功</strong>
+        <section className="planning-summary-card launch-success-card">
+          <strong>审核优先路径</strong>
           <span>{notice}</span>
+          <div className="launch-path">
+            <span>已入队</span>
+            <span>蓝图/关键画面生成中</span>
+            <span>进入任务审核</span>
+            <span>审核通过后继续成片</span>
+          </div>
           <div className="planning-summary-tags">
-            <a className="ghost-button" href={buildBatchDashboardUrl(createdTask.id)}>
-              查看生产看板
+            <a className="primary-button" href={buildBatchDashboardUrl(createdTask.id)}>
+              生产看板跟进
+            </a>
+            <a className="ghost-button" href={buildTaskReviewUrl(createdTask)}>
+              进入任务审核
             </a>
             <a className="ghost-button" href={buildAssetCenterUrl(createdTask.id)}>
               打开任务资产
             </a>
           </div>
+          <span>项目、时长、音频和字幕策略已保留，方便继续创建同类任务。</span>
         </section>
       ) : null}
 
-      <div className="workspace-grid">
-        <section className="card card--main">
-          <h2>内容母本配置</h2>
-          <p className="section-note">
-            你只需要描述这条视频想讲什么。系统只负责结构化拆分和镜头化表达，不会主动改题材、换人物或替你重写内容方向。
-          </p>
+      <div className="workspace-grid launch-grid">
+        <form className="card card--main launch-form" id="launch-form" onSubmit={handleSubmitRequest}>
+          <section className="launch-step">
+            <div className="launch-step__header">
+              <span className="launch-step__index">1</span>
+              <div>
+                <h2>项目与输出</h2>
+                <p className="section-note">先确认这条任务属于哪个项目、默认渠道和最终画幅，避免后续蓝图归错项目。</p>
+              </div>
+            </div>
 
-          <label className="field-label">任务名称</label>
-          <input
-            className="input"
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            placeholder="例如：夏季新品种草短视频"
-          />
+            <label className="field-label" htmlFor="launch-project">所属项目</label>
+            <select
+              autoComplete="off"
+              className="input"
+              id="launch-project"
+              name="projectId"
+              value={projectId}
+              onChange={(event) => setProjectId(event.target.value)}
+            >
+              {projects.map((project) => (
+                <option key={project.id} value={project.id}>
+                  {project.name}
+                </option>
+              ))}
+            </select>
+            <div className="launch-project-preview">
+              <strong>{selectedProject?.name ?? "未选择项目"}</strong>
+              <span>默认渠道：{channelLabel} · 输出语言：English · 模式：high_quality</span>
+              <span>{selectedProject?.brandDirection ?? "暂无品牌方向"} · {(selectedProject?.reusableStyleConstraints ?? []).join(" / ") || "暂无复用约束"}</span>
+            </div>
 
-          <label className="field-label">内容母本</label>
-          <textarea
-            className="textarea"
-            value={script}
-            onChange={(e) => setScript(e.target.value)}
-            placeholder="直接写你要表达的内容、卖点、情绪和转化目标，不需要手动写技术提示词。"
-          />
+            <label className="field-label" htmlFor="launch-terminal">终端预设</label>
+            <select
+              autoComplete="off"
+              className="input"
+              id="launch-terminal"
+              name="terminalPresetId"
+              value={terminalPresetId}
+              onChange={(event) =>
+                setTerminalPresetId(event.target.value as TerminalPresetId)
+              }
+            >
+              {TERMINAL_PRESET_OPTIONS.map((preset) => (
+                <option key={preset.id} value={preset.id}>
+                  {preset.label} · {preset.renderSpec.width} × {preset.renderSpec.height}
+                </option>
+              ))}
+            </select>
 
-          <label className="field-label">正片总时长</label>
-          <div className="mode-grid" role="radiogroup">
-            {bootstrap?.durationOptions.map((duration) => (
-              <button
-                key={duration}
-                className={
-                  duration === targetDurationSec
-                    ? "mode-card mode-card--active"
-                    : "mode-card"
-                }
-                onClick={() => setTargetDurationSec(duration)}
-                type="button"
-                role="radio"
-                aria-checked={duration === targetDurationSec}
-              >
-                <div className="mode-title">{duration}s</div>
-                <div className="mode-description">
-                  用于控制最终成片节奏与信息密度
-                </div>
-              </button>
-            ))}
-          </div>
-
-          <label className="field-label">所属项目</label>
-          <select
-            className="input"
-            value={projectId}
-            onChange={(event) => setProjectId(event.target.value)}
-          >
-            {projects.map((project) => (
-              <option key={project.id} value={project.id}>
-                {project.name}
-              </option>
-            ))}
-          </select>
-
-          <label className="field-label">终端预设</label>
-          <select
-            className="input"
-            value={terminalPresetId}
-            onChange={(event) =>
-              setTerminalPresetId(event.target.value as TerminalPresetId)
-            }
-          >
-            {TERMINAL_PRESET_OPTIONS.map((preset) => (
-              <option key={preset.id} value={preset.id}>
-                {preset.label} · {preset.renderSpec.width} × {preset.renderSpec.height}
-              </option>
-            ))}
-          </select>
-
-          <label className="field-label">音频策略</label>
-          <div className="mode-grid" role="radiogroup" aria-label="音频策略">
-            {AUDIO_STRATEGY_OPTIONS.map((option) => (
-              <button
-                key={option.id}
-                className={
-                  option.id === audioStrategy
-                    ? "mode-card mode-card--active"
-                    : "mode-card"
-                }
-                onClick={() => setAudioStrategy(option.id)}
-                type="button"
-                role="radio"
-                aria-checked={option.id === audioStrategy}
-              >
-                <div className="mode-title">{option.label}</div>
-                <div className="mode-description">{option.description}</div>
-              </button>
-            ))}
-          </div>
-
-          <label className="field-label">字幕策略</label>
-          <div className="mode-grid" role="radiogroup" aria-label="字幕策略">
-            {SUBTITLE_STRATEGY_OPTIONS.map((option) => (
-              <button
-                key={option.id}
-                className={
-                  option.id === subtitleStrategy
-                    ? "mode-card mode-card--active"
-                    : "mode-card"
-                }
-                onClick={() => setSubtitleStrategy(option.id)}
-                type="button"
-                role="radio"
-                aria-checked={option.id === subtitleStrategy}
-              >
-                <div className="mode-title">{option.label}</div>
-                <div className="mode-description">{option.description}</div>
-              </button>
-            ))}
-          </div>
-
-          <div className="planning-strip">
-            <div className="planning-chip">
-              <span className="planning-chip__label">成片组织方式</span>
-              <strong>{routePreview}</strong>
-              <span>{routePreviewDetail}</span>
-            </div>
-            <div className="planning-chip">
-              <span className="planning-chip__label">文本规划原则</span>
-              <strong>保真优先</strong>
-              <span>{planningSummary}</span>
-            </div>
-            <div className="planning-chip">
-              <span className="planning-chip__label">执行方式</span>
-              <strong>{selectedExecutionModeLabel}</strong>
-              <span>
-                {selectedExecutionMode === "review_required"
-                  ? "关键画面与提示词审核通过后，才继续完整视频生成。"
-                  : "关键画面完成后会自动继续生成视频。"}
-              </span>
-            </div>
-            <div className="planning-chip">
-              <span className="planning-chip__label">音频策略</span>
-              <strong>{selectedAudioStrategy.label}</strong>
-              <span>{selectedAudioStrategy.description}</span>
-            </div>
-            <div className="planning-chip">
-              <span className="planning-chip__label">字幕策略</span>
-              <strong>{selectedSubtitleStrategy.label}</strong>
-              <span>{selectedSubtitleStrategy.description}</span>
-            </div>
-            <div className="planning-chip">
-              <span className="planning-chip__label">终端规格</span>
-              <strong>{renderSpec.width} × {renderSpec.height}</strong>
-              <span>{renderSpec.aspectRatio} · {renderSpec.compositionGuideline}</span>
-            </div>
-          </div>
-        </section>
-
-        <aside className="side-panel">
-          <section className="card card--compact">
-            <h3>本次任务摘要</h3>
-            <div className="metric-row">
-              <span>所属项目</span>
-              <strong>{selectedProject?.name ?? "未选择"}</strong>
-            </div>
-            <div className="metric-row">
-              <span>任务路径</span>
-              <strong>单一路径</strong>
-            </div>
-            <div className="metric-row">
-              <span>执行方式</span>
-              <strong>{selectedExecutionModeLabel}</strong>
-            </div>
-            <div className="metric-row">
-              <span>目标正片长度</span>
-              <strong>{targetDurationSec}s</strong>
-            </div>
-            <div className="metric-row">
-              <span>文本规划原则</span>
-              <strong>保真优先</strong>
-            </div>
-            <div className="metric-row">
-              <span>成片组织</span>
-              <strong>{routePreview}</strong>
-            </div>
-            <div className="metric-row">
-              <span>音频策略</span>
-              <strong>{selectedAudioStrategy.label}</strong>
-            </div>
-            <div className="metric-row">
-              <span>字幕策略</span>
-              <strong>{getSubtitleStrategyLabel(subtitleStrategy)}</strong>
-            </div>
-            <div className="metric-row">
-              <span>终端预设</span>
-              <strong>
-                {TERMINAL_PRESET_OPTIONS.find((item) => item.id === terminalPresetId)?.label ?? terminalPresetId}
-              </strong>
-            </div>
-            <div className="metric-row">
-              <span>输出规格</span>
-              <strong>{renderSpec.width} × {renderSpec.height}</strong>
-            </div>
-            <div className="metric-row">
-              <span>画面比例</span>
-              <strong>{renderSpec.aspectRatio}</strong>
-            </div>
-            <div className="metric-row">
-              <span>默认执行链</span>
-              <strong>关键画面审核后继续完整生成</strong>
-            </div>
-            <div className="muted">{planningSummary}</div>
+            <fieldset className="launch-fieldset">
+              <legend className="field-label">正片总时长</legend>
+              <div className="segmented-control" role="radiogroup" aria-label="正片总时长">
+                {bootstrap?.durationOptions.map((duration) => (
+                  <button
+                    key={duration}
+                    className={duration === targetDurationSec ? "segment segment--active" : "segment"}
+                    onClick={() => setTargetDurationSec(duration)}
+                    type="button"
+                    role="radio"
+                    aria-checked={duration === targetDurationSec}
+                  >
+                    {duration}s
+                  </button>
+                ))}
+              </div>
+            </fieldset>
           </section>
 
-          <section className="card card--compact">
-            <h3>系统约束</h3>
-            <div className="task-list compact-list">
-              <div className="task-item">
-                <strong>内容保真优先</strong>
-                <span>
-                  系统只允许按母本做结构化拆分，不会主动增强钩子、改写 CTA 或切换内容题材。
-                </span>
-              </div>
-              <div className="task-item">
-                <strong>尺寸和时长仍然生效</strong>
-                <span>
-                  系统会基于目标时长和当前模型单段上限决定单条成片或多分镜编排，但不会改变内容主题。
-                </span>
-              </div>
-              <div className="task-item">
-                <strong>创建后冻结</strong>
-                <span>
-                  任务创建后会冻结到统一的审核优先链路，后续不会因为默认值变化而回写历史任务。
-                </span>
+          <section className="launch-step">
+            <div className="launch-step__header">
+              <span className="launch-step__index">2</span>
+              <div>
+                <h2>内容母本</h2>
+                <p className="section-note" id="launch-script-help">
+                  写业务内容、卖点、目标人群、场景和 CTA，不需要手动写技术提示词。
+                </p>
               </div>
             </div>
-          </section>
 
-          <section className="card card--compact">
-            <h3>最近活动</h3>
-            <div className="planning-summary-tags" style={{ marginBottom: 10 }}>
-              <span className="pill pill--sm">
-                运行中 {taskStatusSummary.runningCount}
-              </span>
-              <span className="pill pill--sm">
-                已完成 {taskStatusSummary.completedCount}
-              </span>
-              {taskStatusSummary.failedCount ? (
-                <span className="pill pill--sm">
-                  异常 {taskStatusSummary.failedCount}
-                </span>
-              ) : null}
+            <label className="field-label" htmlFor="launch-title">任务名称</label>
+            <input
+              aria-describedby={fieldErrors.title ? "launch-title-error" : undefined}
+              aria-invalid={Boolean(fieldErrors.title)}
+              autoComplete="off"
+              className={fieldErrors.title ? "input input--invalid" : "input"}
+              id="launch-title"
+              name="title"
+              ref={titleInputRef}
+              value={title}
+              onChange={(event) => {
+                setTitle(event.target.value)
+                setFieldErrors((current) => ({ ...current, title: undefined }))
+              }}
+              placeholder="例如：夏季新品种草短视频"
+            />
+            {fieldErrors.title ? <div className="field-error" id="launch-title-error">{fieldErrors.title}</div> : null}
+
+            <div className="template-row" aria-label="内容母本模板">
+              {SCRIPT_TEMPLATES.map((template) => (
+                <button className="ghost-button ghost-button--compact" key={template.id} onClick={() => applyScriptTemplate(template.body)} type="button">
+                  套用{template.label}
+                </button>
+              ))}
             </div>
-            <div className="muted" style={{ marginBottom: 10 }}>
-              最近刷新：{tasksUpdatedAt || "刚刚进入页面"}
+
+            <label className="field-label" htmlFor="launch-script">内容母本</label>
+            <textarea
+              aria-describedby={fieldErrors.script ? "launch-script-error launch-script-help" : "launch-script-help"}
+              aria-invalid={Boolean(fieldErrors.script)}
+              autoComplete="off"
+              className={fieldErrors.script ? "textarea input--invalid" : "textarea"}
+              id="launch-script"
+              name="script"
+              ref={scriptInputRef}
+              value={script}
+              onChange={(event) => {
+                setScript(event.target.value)
+                setFieldErrors((current) => ({ ...current, script: undefined }))
+              }}
+              placeholder="直接写你要表达的内容、卖点、情绪和转化目标，不需要手动写技术提示词。"
+            />
+            {fieldErrors.script ? <div className="field-error" id="launch-script-error">{fieldErrors.script}</div> : null}
+
+            <div className={`launch-preflight launch-preflight--${launchReadiness.level}`}>
+              <div>
+                <strong>内容母本预检</strong>
+                <span>{launchReadiness.summary}</span>
+              </div>
+              <span className="pill pill--sm">{readyCheckCount}/{launchReadiness.checks.length} 已通过</span>
             </div>
-            <div className="task-list compact-list">
-              {recentTasks.map((task) => (
-                <div
-                  key={task.id}
-                  className={
-                    task.status === "running"
-                      ? "task-item task-item--running"
-                      : "task-item"
-                  }
-                >
-                  <strong>
-                    {task.status === "running" && (
-                      <span className="status-dot status-dot--running" />
-                    )}{" "}
-                    {task.title}
-                  </strong>
-                  <span>
-                    {task.targetDurationSec}s · {task.status} ·{" "}
-                    {task.actualDurationSec
-                      ? `实际 ${task.actualDurationSec.toFixed(1)}s`
-                      : "生成中"}
-                  </span>
+            <div className="launch-check-grid">
+              {launchReadiness.checks.map((check) => (
+                <div className={`launch-check launch-check--${check.status}`} key={check.key}>
+                  <strong>{check.label}</strong>
+                  <span>{check.detail}</span>
                 </div>
               ))}
+            </div>
+          </section>
+
+          <section className="launch-step">
+            <div className="launch-step__header">
+              <span className="launch-step__index">3</span>
+              <div>
+                <h2>启动前确认</h2>
+                <p className="section-note">确认冻结配置、预算粗估、相似任务和审核优先路径，再提交到队列。</p>
+              </div>
+            </div>
+
+            <div className="planning-strip launch-confirm-strip">
+              <div className="planning-chip">
+                <span className="planning-chip__label">成片组织</span>
+                <strong>{productionEstimate.routeLabel}</strong>
+                <span>{routePreviewDetail}</span>
+              </div>
+              <div className="planning-chip">
+                <span className="planning-chip__label">场景与预算粗估</span>
+                <strong>{productionEstimate.budgetLabel}</strong>
+                <span>目标 {targetDurationSec}s · 审核优先 · 预算仅用于提交前判断。</span>
+              </div>
+              <div className="planning-chip">
+                <span className="planning-chip__label">默认渠道</span>
+                <strong>{channelLabel}</strong>
+                <span>输出 English，交付文案会按默认渠道进入资产验收。</span>
+              </div>
+              <div className="planning-chip">
+                <span className="planning-chip__label">审核节点</span>
+                <strong>{selectedExecutionModeLabel}</strong>
+                <span>{planningSummary}</span>
+              </div>
+            </div>
+
+            {similarTasks.matches.length ? (
+              <div className="alert alert--warning">
+                <strong>{similarTasks.summary}</strong>
+                {similarTasks.matches.map((match) => (
+                  <span key={match.task.id}>
+                    {match.task.title} · {getTaskStatusLabel(match.task)} · {match.reason}
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <div className="launch-preflight launch-preflight--ready">
+                <strong>重复任务检查</strong>
+                <span>{similarTasks.summary}</span>
+              </div>
+            )}
+
+            <details className="advanced-settings" open={advancedOpen} onToggle={(event) => setAdvancedOpen(event.currentTarget.open)}>
+              <summary>高级设置：音频、字幕和冻结配置</summary>
+              <div className="mode-grid" role="radiogroup" aria-label="音频策略">
+                {AUDIO_STRATEGY_OPTIONS.map((option) => (
+                  <button
+                    key={option.id}
+                    className={option.id === audioStrategy ? "mode-card mode-card--active" : "mode-card"}
+                    onClick={() => setAudioStrategy(option.id)}
+                    type="button"
+                    role="radio"
+                    aria-checked={option.id === audioStrategy}
+                  >
+                    <div className="mode-title">{option.label}</div>
+                    <span className={option.id === "tts_only" ? "status-text--success" : "status-text--warning"}>
+                      {option.id === "tts_only" ? "稳定推荐" : "实验链路"}
+                    </span>
+                    <div className="mode-description">{option.description}</div>
+                  </button>
+                ))}
+              </div>
+              <div className="mode-grid" role="radiogroup" aria-label="字幕策略">
+                {SUBTITLE_STRATEGY_OPTIONS.map((option) => (
+                  <button
+                    key={option.id}
+                    className={option.id === subtitleStrategy ? "mode-card mode-card--active" : "mode-card"}
+                    onClick={() => setSubtitleStrategy(option.id)}
+                    type="button"
+                    role="radio"
+                    aria-checked={option.id === subtitleStrategy}
+                  >
+                    <div className="mode-title">{option.label}</div>
+                    <span className={option.id === "tts_aligned" ? "status-text--success" : "status-text--warning"}>
+                      {option.id === "tts_aligned" ? "稳定推荐" : "适合非 TTS 音轨"}
+                    </span>
+                    <div className="mode-description">{option.description}</div>
+                  </button>
+                ))}
+              </div>
+            </details>
+          </section>
+        </form>
+
+        <aside className="side-panel launch-side-panel">
+          <section className="card card--compact launch-check-panel">
+            <h3>启动前检查</h3>
+            <div className={`launch-ready-badge launch-ready-badge--${launchReadiness.level}`}>
+              {launchReadiness.level === "risk"
+                ? "不可提交"
+                : launchReadiness.level === "suggestion"
+                  ? "建议补充后提交"
+                  : "可提交"}
+            </div>
+            <div className="metric-row"><span>项目</span><strong>{selectedProject?.name ?? "未选择"}</strong></div>
+            <div className="metric-row"><span>默认渠道</span><strong>{channelLabel}</strong></div>
+            <div className="metric-row"><span>目标时长</span><strong>{targetDurationSec}s</strong></div>
+            <div className="metric-row"><span>输出规格</span><strong>{renderSpec.width} × {renderSpec.height}</strong></div>
+            <div className="metric-row"><span>画面比例</span><strong>{renderSpec.aspectRatio}</strong></div>
+            <div className="metric-row"><span>成片组织</span><strong>{productionEstimate.routeLabel}</strong></div>
+            <div className="metric-row"><span>预计预算</span><strong>¥{productionEstimate.estimatedBudgetCny.toFixed(2)}</strong></div>
+            <div className="metric-row"><span>音频/字幕</span><strong>{selectedAudioStrategy.label} / {getSubtitleStrategyLabel(subtitleStrategy)}</strong></div>
+            <div className="metric-row"><span>审核链路</span><strong>蓝图与关键画面先审</strong></div>
+            <div className="launch-risk-summary">
+              <span>风险 {riskyCheckCount}</span>
+              <span>建议 {suggestionCheckCount}</span>
+              <span>相似任务 {similarTasks.matches.length}</span>
+            </div>
+          </section>
+
+          <section className="card card--compact">
+            <h3>我的最近任务</h3>
+            <div className="planning-summary-tags compact-list">
+              <span className="pill pill--sm">运行中 {taskStatusSummary.runningCount}</span>
+              <span className="pill pill--sm">已完成 {taskStatusSummary.completedCount}</span>
+              {taskStatusSummary.failedCount ? <span className="pill pill--sm pill--danger">异常 {taskStatusSummary.failedCount}</span> : null}
+            </div>
+            {taskStatusSummary.failedCount ? (
+              <div className="alert alert--warning">
+                <strong>当前有异常任务</strong>
+                <span>建议先去生产看板处理失败或卡住的任务，再追加同类内容，避免重复占用队列。</span>
+              </div>
+            ) : null}
+            <div className="muted">最近刷新：{tasksUpdatedAt || "刚刚进入页面"}</div>
+            <div className="task-list compact-list">
+              {recentTasks.length ? (
+                recentTasks.map((task) => (
+                  <div key={task.id} className={task.status === "running" ? "task-item task-item--running" : task.status === "failed" ? "task-item task-item--blocked" : "task-item"}>
+                    <strong>{task.status === "running" ? <span className="status-dot status-dot--running" /> : null}{task.title}</strong>
+                    <span>{task.targetDurationSec}s · {getTaskStatusLabel(task)} · {task.actualDurationSec ? `实际 ${task.actualDurationSec.toFixed(1)}s` : "等待成片"}</span>
+                    <div className="task-item__actions">
+                      <a className="ghost-button ghost-button--compact" href={buildBatchDashboardUrl(task.id)}>看生产看板</a>
+                      <a className="ghost-button ghost-button--compact" href={buildTaskReviewUrl(task)}>去审核</a>
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <div className="task-item"><strong>暂无最近任务</strong><span>提交后会在这里显示进度。</span></div>
+              )}
             </div>
           </section>
         </aside>
       </div>
 
       <div className="sticky-action-bar">
-        <button
-          className="ghost-button"
-          onClick={() => {
-            setTitle("");
-            setScript("");
-          }}
-          type="button"
-        >
-          清空输入
+        <button className="ghost-button" onClick={handleClearDraft} type="button">
+          清空草稿
         </button>
-        <button
-          className="primary-button"
-          disabled={submitting}
-          onClick={handleCreateTask}
-          type="button"
-        >
-          {submitting
-            ? "创建中..."
-            : "启动渲染队列"}
+        <button className="primary-button" disabled={submitting} form="launch-form" type="submit">
+          {submitting ? "正在启动…" : "提交并生成审核蓝图"}
         </button>
       </div>
+
+      {confirmOpen ? (
+        <div className="modal-backdrop" role="presentation">
+          <section aria-labelledby="launch-confirm-title" className="modal-card launch-confirm-modal" role="dialog" aria-modal="true">
+            <div className="section-header">
+              <div>
+                <div className="eyebrow">Launch Preflight</div>
+                <h2 id="launch-confirm-title">确认入队并冻结配置</h2>
+              </div>
+              <button className="ghost-button ghost-button--compact" onClick={() => setConfirmOpen(false)} type="button">关闭</button>
+            </div>
+            <div className="launch-confirm-grid">
+              <div className="metric-row"><span>任务名称</span><strong>{title}</strong></div>
+              <div className="metric-row"><span>项目 / 渠道</span><strong>{selectedProject?.name ?? "未选择"} / {channelLabel}</strong></div>
+              <div className="metric-row"><span>时长 / 画幅</span><strong>{targetDurationSec}s / {renderSpec.aspectRatio}</strong></div>
+              <div className="metric-row"><span>场景 / 预算</span><strong>{productionEstimate.sceneCount} 个 scene / ¥{productionEstimate.estimatedBudgetCny.toFixed(2)}</strong></div>
+              <div className="metric-row"><span>执行方式</span><strong>审核优先</strong></div>
+              <div className="metric-row"><span>相似任务</span><strong>{similarTasks.matches.length ? `${similarTasks.matches.length} 条需确认` : "未发现明显重复"}</strong></div>
+            </div>
+            <div className={`launch-preflight launch-preflight--${launchReadiness.level}`}>
+              <strong>{launchReadiness.summary}</strong>
+              <span>提交后会冻结当前项目、时长、终端、音频和字幕策略。</span>
+            </div>
+            <div className="action-row">
+              <button className="ghost-button" onClick={() => setConfirmOpen(false)} type="button">返回修改</button>
+              <button className="primary-button" disabled={submitting} onClick={() => void handleCreateTask()} type="button">
+                {submitting ? "正在启动…" : "确认入队并冻结配置"}
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
 
       {floatingToast ? (
         <div
@@ -632,7 +896,7 @@ export function HomePage() {
           }
           role={floatingToast.tone === "success" ? "status" : "alert"}
         >
-          <strong>{floatingToast.tone === "success" ? "已提交到渲染队列" : "提交失败"}</strong>
+          <strong>{floatingToast.tone === "success" ? "已提交到审核优先队列" : "提交失败"}</strong>
           <span>{floatingToast.message}</span>
         </div>
       ) : null}

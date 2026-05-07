@@ -94,6 +94,7 @@ describe("HomePage project and terminal preset flow", () => {
   let root: Root
 
   beforeEach(() => {
+    window.localStorage.clear()
     ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
     container = document.createElement("div")
     document.body.appendChild(container)
@@ -208,12 +209,19 @@ describe("HomePage project and terminal preset flow", () => {
     })
 
     const submitButton = Array.from(container.querySelectorAll("button")).find((button) =>
-      button.textContent?.includes("启动渲染队列"),
+      /提交并生成审核蓝图/.test(button.textContent ?? ""),
     )
     expect(submitButton).toBeTruthy()
 
     await act(async () => {
       submitButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }))
+    })
+
+    const confirmButton = findHomeButton(container, /确认入队并冻结配置/)
+    expect(confirmButton).toBeTruthy()
+
+    await act(async () => {
+      confirmButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }))
     })
 
     await waitFor(() => {
@@ -222,15 +230,15 @@ describe("HomePage project and terminal preset flow", () => {
 
     await waitFor(() => {
       const text = container.textContent ?? ""
-      expect(text).toContain("提交成功")
-      expect(text).toContain("任务“Campaign launch”已提交到渲染队列。关键画面生成完成后，会进入任务审核队列。")
-      expect(text).toContain("查看生产看板")
+      expect(text).toContain("审核优先路径")
+      expect(text).toContain("任务“Campaign launch”已提交到审核优先队列。")
+      expect(text).toContain("生产看板跟进")
       expect(text).toContain("打开任务资产")
     })
 
     await waitFor(() => {
       const toast = container.querySelector('[role="status"]')
-      expect(toast?.textContent ?? "").toContain("任务“Campaign launch”已提交到渲染队列。关键画面生成完成后，会进入任务审核队列。")
+      expect(toast?.textContent ?? "").toContain("任务“Campaign launch”已提交到审核优先队列。")
     })
 
     const payload = vi.mocked(api.createTask).mock.calls[0]?.[0] as Record<string, unknown>
@@ -250,7 +258,7 @@ describe("HomePage project and terminal preset flow", () => {
   })
 
   it("shows a floating error toast when queue submission fails", async () => {
-    vi.mocked(api.createTask).mockRejectedValueOnce(new Error("队列提交失败"))
+    vi.mocked(api.createTask).mockRejectedValueOnce(new Error("REDIS_URL missing"))
 
     await act(async () => {
       root.render(createElement(HomePage))
@@ -271,7 +279,132 @@ describe("HomePage project and terminal preset flow", () => {
     })
 
     const submitButton = Array.from(container.querySelectorAll("button")).find((button) =>
-      button.textContent?.includes("启动渲染队列"),
+      /提交并生成审核蓝图/.test(button.textContent ?? ""),
+    )
+    expect(submitButton).toBeTruthy()
+
+    await act(async () => {
+      submitButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }))
+    })
+
+    const confirmButton = Array.from(container.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("确认入队并冻结配置"),
+    )
+    expect(confirmButton).toBeTruthy()
+
+    await act(async () => {
+      confirmButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }))
+    })
+
+    await waitFor(() => {
+      const toast = container.querySelector('[role="alert"]')
+      expect(toast?.textContent ?? "").toContain("队列暂不可用")
+    })
+  })
+})
+
+function createRecentHomeTask(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "task_recent",
+    projectId: "project_default",
+    title: "Recent launch",
+    modeId: "high_quality",
+    executionMode: "review_required",
+    channelId: "tiktok",
+    terminalPresetId: "phone_portrait",
+    renderSpecJson: {
+      terminalPresetId: "phone_portrait",
+      width: 1080,
+      height: 1920,
+      aspectRatio: "9:16",
+      safeArea: { topPct: 8, rightPct: 6, bottomPct: 10, leftPct: 6 },
+      compositionGuideline: "主体保持在竖屏中心安全区",
+      motionGuideline: "优先轻推拉",
+    },
+    targetDurationSec: 30,
+    generationMode: "user_locked",
+    audioStrategy: "tts_only",
+    subtitleStrategy: "tts_aligned",
+    generationRoute: "multi_scene",
+    routeReason: "target duration exceeds single-shot limit",
+    planningVersion: "v1",
+    blueprintVersion: 1,
+    blueprintStatus: "pending_generation",
+    actualDurationSec: null,
+    status: "running",
+    progressPct: 40,
+    retryCount: 0,
+    estimatedCostCny: 5,
+    createdAt: "2026-04-20T00:00:00.000Z",
+    updatedAt: "2026-04-20T00:00:00.000Z",
+    ...overrides,
+  }
+}
+
+function findHomeButton(container: HTMLElement, pattern: RegExp) {
+  return Array.from(container.querySelectorAll("button")).find((button) =>
+    pattern.test(button.textContent ?? ""),
+  )
+}
+
+describe("HomePage P0-P2 launch console behavior", () => {
+  let container: HTMLDivElement
+  let root: Root
+
+  beforeEach(() => {
+    window.localStorage.clear()
+    ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+    container = document.createElement("div")
+    document.body.appendChild(container)
+    root = createRoot(container)
+
+    vi.mocked(api.bootstrap).mockResolvedValue(createBootstrapResponse())
+    vi.mocked(api.listTasks).mockResolvedValue({ tasks: [] })
+    vi.mocked(api.listProjects).mockResolvedValue({ projects: createProjects() })
+    vi.mocked(api.createTask).mockResolvedValue({
+      task: createRecentHomeTask({
+        id: "task_created",
+        title: "Campaign launch",
+        status: "running",
+        blueprintStatus: "pending_generation",
+      }),
+    } as any)
+  })
+
+  afterEach(async () => {
+    await act(async () => {
+      root.unmount()
+    })
+    container.remove()
+    vi.clearAllMocks()
+  })
+
+  async function renderHomePage() {
+    await act(async () => {
+      root.render(createElement(HomePage))
+    })
+
+    await waitFor(() => {
+      expect(vi.mocked(api.listProjects)).toHaveBeenCalledTimes(1)
+    })
+  }
+
+  it("shows the three-step launch flow and preflight check copy", async () => {
+    await renderHomePage()
+
+    const text = container.textContent ?? ""
+    expect(text).toContain("项目与输出")
+    expect(text).toContain("内容母本")
+    expect(text).toContain("启动前确认")
+    expect(text).toMatch(/启动前检查|启动前确认|预检/)
+  })
+
+  it("shows field-level errors and review-blueprint submit copy for empty title and source content", async () => {
+    await renderHomePage()
+
+    const submitButton = findHomeButton(
+      container,
+      /提交并生成审核蓝图|确认流程/,
     )
     expect(submitButton).toBeTruthy()
 
@@ -280,8 +413,96 @@ describe("HomePage project and terminal preset flow", () => {
     })
 
     await waitFor(() => {
-      const toast = container.querySelector('[role="alert"]')
-      expect(toast?.textContent ?? "").toContain("队列提交失败")
+      const text = container.textContent ?? ""
+      expect(text).toMatch(/提交并生成审核蓝图|确认流程/)
+      expect(text).toMatch(/任务名称.*(必填|不能为空|请填写任务名称)/)
+      expect(text).toMatch(/(内容母本|母本).*(必填|不能为空|请填写内容母本)/)
+    })
+    expect(vi.mocked(api.createTask)).not.toHaveBeenCalled()
+  })
+
+  it("shows a preflight warning when source content is too short", async () => {
+    await renderHomePage()
+
+    const titleInput = container.querySelector('input[placeholder*="夏季新品种草短视频"]') as HTMLInputElement | null
+    const scriptInput = container.querySelector('textarea[placeholder*="直接写你要表达的内容"]') as HTMLTextAreaElement | null
+    expect(titleInput).toBeTruthy()
+    expect(scriptInput).toBeTruthy()
+
+    await act(async () => {
+      setInputValue(titleInput!, "Short source check")
+      setInputValue(scriptInput!, "Buy now.")
+    })
+
+    await waitFor(() => {
+      expect(container.textContent ?? "").toMatch(/母本偏短|建议补充|内容母本.*偏短/)
+    })
+  })
+
+  it("shows a review-first next-step card after the task launch succeeds", async () => {
+    await renderHomePage()
+
+    const titleInput = container.querySelector('input[placeholder*="夏季新品种草短视频"]') as HTMLInputElement | null
+    const scriptInput = container.querySelector('textarea[placeholder*="直接写你要表达的内容"]') as HTMLTextAreaElement | null
+    expect(titleInput).toBeTruthy()
+    expect(scriptInput).toBeTruthy()
+
+    await act(async () => {
+      setInputValue(titleInput!, "Campaign launch")
+      setInputValue(
+        scriptInput!,
+        "Lead with the customer problem, show the product in context, explain the benefit, and close with a direct CTA.",
+      )
+    })
+
+    const submitButton = findHomeButton(
+      container,
+      /提交并生成审核蓝图|确认流程/,
+    )
+    expect(submitButton).toBeTruthy()
+
+    await act(async () => {
+      submitButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }))
+    })
+
+    const confirmButton = Array.from(container.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("确认入队并冻结配置"),
+    )
+    expect(confirmButton).toBeTruthy()
+
+    await act(async () => {
+      confirmButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }))
+    })
+
+    await waitFor(() => {
+      expect(vi.mocked(api.createTask)).toHaveBeenCalledTimes(1)
+    })
+
+    await waitFor(() => {
+      const text = container.textContent ?? ""
+      expect(text).toContain("审核优先路径")
+      expect(text).toMatch(/蓝图\/关键画面生成中|蓝图生成中|关键画面生成中/)
+      expect(text).toMatch(/进入任务审核|生产看板跟进/)
+    })
+  })
+
+  it("renders recent task status in Chinese instead of raw status ids", async () => {
+    vi.mocked(api.listTasks).mockResolvedValue({
+      tasks: [
+        createRecentHomeTask({ id: "task_running", title: "Running task", status: "running" }),
+        createRecentHomeTask({ id: "task_failed", title: "Failed task", status: "failed" }),
+        createRecentHomeTask({ id: "task_completed", title: "Completed task", status: "completed" }),
+      ],
+    } as any)
+
+    await renderHomePage()
+
+    await waitFor(() => {
+      const text = container.textContent ?? ""
+      expect(text).toContain("运行中")
+      expect(text).toContain("异常")
+      expect(text).toContain("已完成")
+      expect(text).not.toMatch(/\b(running|failed|completed)\b/)
     })
   })
 })
