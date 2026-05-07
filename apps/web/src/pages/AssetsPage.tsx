@@ -1177,7 +1177,7 @@ export function AssetsPage() {
                     </span>
                   </div>
                 </div>
-                <div style={{ textAlign: "right" }}>
+                <div className="asset-item-size">
                   <strong>{asset.sizeLabel}</strong>
                   <div className="muted">{asset.modifiedAt ? new Date(asset.modifiedAt).toLocaleString("zh-CN") : new Date(asset.createdAt).toLocaleString("zh-CN")}</div>
                 </div>
@@ -1216,7 +1216,7 @@ export function AssetsPage() {
                       预览
                     </button>
                   ) : (
-                    <span className="ghost-button" aria-disabled="true">
+                    <span className="ghost-button ghost-button--disabled" aria-disabled="true">
                       预览不可用
                     </span>
                   )}

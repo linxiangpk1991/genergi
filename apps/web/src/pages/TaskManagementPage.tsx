@@ -23,6 +23,18 @@ const viewOptions: Array<{ id: TaskView; label: string }> = [
   { id: "all", label: "全部任务" },
 ]
 
+const taskTimeFormatter = new Intl.DateTimeFormat("zh-CN", {
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+})
+
+const cnyFormatter = new Intl.NumberFormat("zh-CN", {
+  style: "currency",
+  currency: "CNY",
+})
+
 function getStatusLabel(status: string) {
   switch (status) {
     case "queued":
@@ -94,7 +106,11 @@ function formatUpdatedAt(value: string) {
   if (Number.isNaN(date.getTime())) {
     return "时间未知"
   }
-  return date.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })
+  return taskTimeFormatter.format(date)
+}
+
+function formatCny(value: number) {
+  return cnyFormatter.format(value)
 }
 
 function getConfirmationText(operation: TaskBulkOperation, count: number) {
@@ -364,12 +380,19 @@ export function TaskManagementPage() {
         {error ? <div className="review-inline-note review-inline-note--danger">{error}</div> : null}
         <div className="task-control-toolbar">
           <input
+            aria-label="搜索任务"
             className="input"
             onChange={(event) => setSearchQuery(event.target.value)}
             placeholder="搜索任务名 / ID / 负责人"
+            type="search"
             value={searchQuery}
           />
-          <select className="input" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
+          <select
+            aria-label="按任务状态筛选"
+            className="input"
+            value={statusFilter}
+            onChange={(event) => setStatusFilter(event.target.value)}
+          >
             <option value="all">全部状态</option>
             <option value="queued">排队中</option>
             <option value="running">生产中</option>
@@ -387,7 +410,7 @@ export function TaskManagementPage() {
         </div>
 
         {selectedTaskIds.length ? (
-          <div className="bulk-action-bar bulk-action-bar--active">
+          <div className="bulk-action-bar bulk-action-bar--active" aria-live="polite">
             <div className="bulk-action-bar__meta">
               <strong>已选择 {selectedTasks.length} 条</strong>
               <span>{getSelectedBulkHint(selectedTasks)}</span>
@@ -443,13 +466,13 @@ export function TaskManagementPage() {
             </div>
           </div>
         ) : (
-          <div className="selection-hint">
+          <div className="selection-hint" role="status">
             勾选任务后显示批量操作；删除和清空素材都会先预检影响范围。
           </div>
         )}
 
         {preview ? (
-          <div className="bulk-preview-panel">
+          <div className="bulk-preview-panel" aria-live="polite" role="region" aria-label="批量操作预检结果">
             <div className="section-header">
               <div>
                 <strong>批量操作预检</strong>
@@ -463,6 +486,7 @@ export function TaskManagementPage() {
               <label>
                 <span className="field-label">输入确认文本：{requiredConfirmation}</span>
                 <input
+                  aria-label={`输入确认文本：${requiredConfirmation}`}
                   className="input"
                   value={confirmationText}
                   onChange={(event) => setConfirmationText(event.target.value)}
@@ -485,7 +509,7 @@ export function TaskManagementPage() {
         ) : null}
 
         {result ? (
-          <div className="bulk-preview-panel">
+          <div className="bulk-preview-panel" aria-live="polite" role="status">
             <strong>操作完成：成功 {result.summary.success}，跳过 {result.summary.skipped}，失败 {result.summary.failed}</strong>
             <div className="bulk-preview-list">
               {result.items.map((item) => (
@@ -505,7 +529,7 @@ export function TaskManagementPage() {
             <table className="user-table task-management-table">
               <thead>
                 <tr>
-                  <th><input checked={allVisibleSelected} onChange={toggleVisibleTasks} type="checkbox" /></th>
+                  <th><input aria-label="选择当前列表全部任务" checked={allVisibleSelected} onChange={toggleVisibleTasks} type="checkbox" /></th>
                   <th>任务</th>
                   <th>状态</th>
                   <th>下一步</th>
@@ -522,7 +546,7 @@ export function TaskManagementPage() {
 
                   return (
                     <tr key={task.id}>
-                      <td><input checked={selectedTaskIds.includes(task.id)} onChange={() => toggleTask(task.id)} type="checkbox" /></td>
+                      <td><input aria-label={`选择任务：${task.title}`} checked={selectedTaskIds.includes(task.id)} onChange={() => toggleTask(task.id)} type="checkbox" /></td>
                       <td>
                         <strong>{task.title}</strong>
                         <div className="mono">{task.id}</div>
@@ -547,7 +571,7 @@ export function TaskManagementPage() {
                         <div className="muted">{getReviewLabel(task)}</div>
                       </td>
                       <td>{task.progressPct}%</td>
-                      <td>¥{task.estimatedCostCny.toFixed(2)}</td>
+                      <td>{formatCny(task.estimatedCostCny)}</td>
                       <td>{formatUpdatedAt(task.updatedAt)}</td>
                       <td>
                         <MoreActionsMenu

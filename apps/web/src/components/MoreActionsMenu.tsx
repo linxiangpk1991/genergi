@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useId, useRef, useState } from "react"
 
 export type MoreActionItem = {
   label: string
@@ -23,6 +23,7 @@ export function MoreActionsMenu({
   items,
 }: MoreActionsMenuProps) {
   const [open, setOpen] = useState(false)
+  const menuId = useId()
   const rootRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
@@ -61,17 +62,24 @@ export function MoreActionsMenu({
   return (
     <div className="more-actions" ref={rootRef}>
       <button
+        aria-controls={open ? menuId : undefined}
         aria-expanded={open}
         aria-haspopup="menu"
         aria-label={ariaLabel ?? label}
         className="ghost-button ghost-button--compact more-actions__trigger"
+        onKeyDown={(event) => {
+          if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+            event.preventDefault()
+            setOpen(true)
+          }
+        }}
         onClick={() => setOpen((current) => !current)}
         type="button"
       >
         {label}
       </button>
       {open ? (
-        <div className={`more-actions__menu more-actions__menu--${align}`} role="menu">
+        <div className={`more-actions__menu more-actions__menu--${align}`} id={menuId} role="menu">
           {items.map((item) => {
             const className = item.tone === "danger" ? "more-actions__item more-actions__item--danger" : "more-actions__item"
             const content = (

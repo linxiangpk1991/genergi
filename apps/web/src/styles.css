@@ -414,6 +414,16 @@ select.input:focus {
   box-shadow: 0 0 0 2px rgba(0, 71, 171, 0.12);
 }
 
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+.task-next-step:focus-visible {
+  outline: 3px solid rgba(0, 71, 171, 0.28);
+  outline-offset: 2px;
+}
+
 select.input {
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23667085' d='M2.5 4.5L6 8l3.5-3.5'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
@@ -1000,6 +1010,7 @@ select.input {
   align-items: center;
   justify-content: center;
   text-decoration: none;
+  touch-action: manipulation;
 }
 
 .primary-button {
@@ -1050,6 +1061,12 @@ select.input {
   opacity: 0.45;
   cursor: not-allowed;
   transform: none;
+}
+
+.ghost-button--disabled {
+  background: rgba(15, 23, 42, 0.05);
+  color: var(--genergi-muted);
+  pointer-events: none;
 }
 
 .empty-state,
@@ -1168,6 +1185,13 @@ select.input {
 
 .user-table td {
   color: var(--genergi-text);
+}
+
+.task-management-table td:nth-child(6),
+.task-management-table td:nth-child(7),
+.task-management-table td:nth-child(8) {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .mono {
@@ -1429,6 +1453,7 @@ select.input {
   text-align: left;
   text-decoration: none;
   cursor: pointer;
+  font: inherit;
 }
 
 .more-actions__item:hover:not(:disabled) {
@@ -2671,6 +2696,8 @@ select.input {
   border-radius: 14px;
   border: 1px solid rgba(0, 71, 171, 0.08);
   background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+  content-visibility: auto;
+  contain-intrinsic-size: 180px;
 }
 
 .asset-item-header {
@@ -2685,6 +2712,11 @@ select.input {
   font-size: 16px;
   color: var(--genergi-primary-deep);
   font-weight: 700;
+}
+
+.asset-item-size {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 
 .asset-item-tags {
