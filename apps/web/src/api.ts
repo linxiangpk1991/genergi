@@ -203,6 +203,19 @@ export type RuntimeStatusResponse = {
   }
 }
 
+export type TaskModelRef = {
+  id: string
+  label: string
+  provider: string
+}
+
+export type TaskModelUsage = {
+  textModel?: TaskModelRef | null
+  imageModel?: TaskModelRef | null
+  videoModel?: TaskModelRef | null
+  ttsProvider?: string | null
+}
+
 export type TaskSummary = {
   id: string
   projectId: string
@@ -242,6 +255,7 @@ export type TaskSummary = {
   lastHeartbeatAt?: string | null
   workerId?: string | null
   activeJobId?: string | null
+  modelUsage?: TaskModelUsage | null
   planning?: TaskPlanningSnapshot
   archivedAt?: string | null
   archivedBy?: string | null

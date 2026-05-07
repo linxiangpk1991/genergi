@@ -214,7 +214,23 @@ function buildPlanningSnapshot(
   }
 }
 
-function enrichSummary(task: Awaited<ReturnType<typeof listTasks>>[number]) {
+function buildTaskModelUsage(
+  taskRunConfig: NonNullable<Awaited<ReturnType<typeof getTaskDetail>>>["taskRunConfig"] | null | undefined,
+) {
+  if (!taskRunConfig) {
+    return null
+  }
+
+  return {
+    textModel: taskRunConfig.textModel ?? null,
+    imageModel: taskRunConfig.imageModel ?? null,
+    videoModel: taskRunConfig.videoModel ?? null,
+    ttsProvider: taskRunConfig.ttsProvider ?? null,
+  }
+}
+
+async function enrichSummary(task: Awaited<ReturnType<typeof listTasks>>[number]) {
+  const detail = await getTaskDetail(task.id)
   const cached = taskPlanningState.get(task.id)
   const planning =
     cached ??
@@ -225,7 +241,7 @@ function enrichSummary(task: Awaited<ReturnType<typeof listTasks>>[number]) {
       task.generationRoute,
       task.routeReason,
     )
-  return { ...task, planning }
+  return { ...task, planning, modelUsage: buildTaskModelUsage(detail?.taskRunConfig) }
 }
 
 function enrichDetail(detail: NonNullable<Awaited<ReturnType<typeof getTaskDetail>>>) {
@@ -2072,7 +2088,7 @@ requireAuthNamespace("/api/tasks")
 app.get("/api/tasks", async (c) => {
   const includeArchived = c.req.query("includeArchived") === "1" || c.req.query("includeArchived") === "true"
   const tasks = await listTasks({ includeArchived })
-  return c.json({ tasks: tasks.map(enrichSummary) })
+  return c.json({ tasks: await Promise.all(tasks.map(enrichSummary)) })
 })
 
 app.post(
@@ -3072,7 +3088,11 @@ app.post("/api/tasks", async (c) => {
   )
   taskPlanningState.set(result.task.id, planning)
 
-  return c.json({ ...result, task: { ...result.task, planning }, queue }, 201)
+  return c.json({
+    ...result,
+    task: { ...result.task, planning, modelUsage: buildTaskModelUsage(createdDetail?.taskRunConfig) },
+    queue,
+  }, 201)
 })
 
 const port = Number(process.env.PORT || 8787)

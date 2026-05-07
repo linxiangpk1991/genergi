@@ -78,6 +78,12 @@ function createTask(overrides: Record<string, unknown> = {}) {
     progressPct: 100,
     retryCount: 0,
     estimatedCostCny: 2.4,
+    modelUsage: {
+      textModel: { id: "text.default", label: "Claude Opus 4.6", provider: "anthropic-compatible" },
+      imageModel: { id: "gemini-3-pro-image-preview-2k", label: "Gemini 3 Pro Image Preview 2k", provider: "openai-compatible" },
+      videoModel: { id: "veo3.1", label: "Veo 3.1 Portrait HD", provider: "openai-compatible" },
+      ttsProvider: "edge-tts",
+    },
     createdAt: "2026-05-07T00:00:00.000Z",
     updatedAt: "2026-05-07T00:00:00.000Z",
     ...overrides,
@@ -208,6 +214,25 @@ describe("TaskManagementPage", () => {
         reason: "运营任务管理台批量操作",
         confirmationText: "删除 1 个任务",
       })
+    })
+  })
+
+  it("shows the frozen model snapshot in the task list", async () => {
+    await act(async () => {
+      root.render(createElement(MemoryRouter, null, createElement(TaskManagementPage)))
+    })
+
+    const allTasksTab = Array.from(container.querySelectorAll("button")).find((button) => button.textContent?.includes("全部任务"))
+    await act(async () => {
+      allTasksTab?.click()
+    })
+
+    await waitFor(() => {
+      expect(container.textContent).toContain("Completed task")
+      expect(container.textContent).toContain("文案模型")
+      expect(container.textContent).toContain("Claude Opus 4.6")
+      expect(container.textContent).toContain("Gemini 3 Pro Image Preview 2k")
+      expect(container.textContent).toContain("Veo 3.1 Portrait HD")
     })
   })
 })

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react"
+import { ModelUsageSummary } from "../components/ModelUsageSummary"
 import { MoreActionsMenu } from "../components/MoreActionsMenu"
 import {
   api,
@@ -562,6 +563,7 @@ export function TaskManagementPage() {
                       <td>
                         <strong>{task.title}</strong>
                         <div className="mono">{task.id}</div>
+                        <ModelUsageSummary compact source={task.modelUsage} />
                         {task.archivedAt ? <span className="status-pill status-pill--disabled">已归档</span> : null}
                       </td>
                       <td><span className={getTaskStatusPillClass(task)}>{getStatusLabel(task.status)}</span></td>

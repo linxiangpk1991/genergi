@@ -479,6 +479,11 @@ describe("TaskReviewPage", () => {
     expect(text).toContain("Original source script.")
     expect(text).toContain("一致性要求")
     expect(text).toContain("主体：Single hero product")
+    expect(text).toContain("本次使用的模型")
+    expect(text).toContain("Claude Opus 4.6")
+    expect(text).toContain("Gemini 3 Pro Image Preview")
+    expect(text).toContain("Veo 3.1 Portrait")
+    expect(text).toContain("edge-tts")
   })
 
   it("prefers actionable review tasks even when the blueprint is already approved", async () => {

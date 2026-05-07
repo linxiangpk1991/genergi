@@ -85,6 +85,12 @@ describe("AssetsPage inline preview", () => {
           progressPct: 100,
           retryCount: 0,
           estimatedCostCny: 4.2,
+          modelUsage: {
+            textModel: { id: "text.default", label: "Claude Opus 4.6", provider: "anthropic-compatible" },
+            imageModel: { id: "gemini-3-pro-image-preview-2k", label: "Gemini 3 Pro Image Preview 2k", provider: "openai-compatible" },
+            videoModel: { id: "veo3.1", label: "Veo 3.1 Portrait HD", provider: "openai-compatible" },
+            ttsProvider: "edge-tts",
+          },
           createdAt: "2026-04-20T00:00:00.000Z",
           updatedAt: "2026-04-20T00:00:00.000Z",
         },
@@ -177,6 +183,10 @@ describe("AssetsPage inline preview", () => {
       expect(vi.mocked(api.getTaskAssets)).toHaveBeenCalledWith("task_assets")
       expect(container.textContent ?? "").toContain("任务时间线")
       expect(container.textContent ?? "").toContain("关键画面生成中 3/4")
+      expect(container.textContent ?? "").toContain("本次使用的模型")
+      expect(container.textContent ?? "").toContain("Claude Opus 4.6")
+      expect(container.textContent ?? "").toContain("Gemini 3 Pro Image Preview 2k")
+      expect(container.textContent ?? "").toContain("Veo 3.1 Portrait HD")
     })
 
     const previewButton = Array.from(container.querySelectorAll("button")).find((button) =>

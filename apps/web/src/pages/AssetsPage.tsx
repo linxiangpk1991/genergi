@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react"
 import { Link, useSearchParams } from "react-router-dom"
+import { ModelUsageSummary } from "../components/ModelUsageSummary"
 import { MoreActionsMenu } from "../components/MoreActionsMenu"
 import {
   API_BASE_URL,
@@ -1337,6 +1338,8 @@ export function AssetsPage() {
               ) : null}
             </div>
           </div>
+
+          <ModelUsageSummary source={selectedTask?.modelUsage} />
 
           <div className="route-context-card">
             <strong>当前任务已写入链接</strong>

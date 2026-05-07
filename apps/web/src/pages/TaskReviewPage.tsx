@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react"
 import { Link, useSearchParams } from "react-router-dom"
+import { ModelUsageSummary } from "../components/ModelUsageSummary"
 import {
   api,
   buildAssetCenterUrl,
@@ -490,6 +491,8 @@ export function TaskReviewPage() {
               </span>
             </div>
           </div>
+
+          <ModelUsageSummary source={detail?.taskRunConfig} />
 
           <section className="planning-summary-card">
             <strong>原始文案</strong>
