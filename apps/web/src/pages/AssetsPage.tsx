@@ -112,7 +112,7 @@ function canResumeTask(task: TaskSummary | null, diagnostics: TaskDiagnostics | 
 }
 
 function canDeleteTaskAssets(task: TaskSummary | null) {
-  return task?.status === "failed" || task?.status === "completed" || task?.status === "canceled"
+  return task?.status === "failed" || task?.status === "completed" || task?.status === "canceled" || task?.status === "waiting_review"
 }
 
 function getAssetDeleteLockLabel(task: TaskSummary | null) {
@@ -1559,7 +1559,7 @@ export function AssetsPage() {
           ) : null}
           {assetDeleteLocked ? (
             <div className="asset-missing-notice">
-              {assetDeleteLockLabel}。只有任务失败、完成或终止后，才能清理该任务的素材文件。
+              {assetDeleteLockLabel}。只有任务待审阅、失败、完成或终止后，才能清理该任务的素材文件。
             </div>
           ) : null}
           {selectedTask ? (

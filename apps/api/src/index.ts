@@ -2162,23 +2162,27 @@ app.post(
       }
 
       let queue
-      try {
-        queue = await cancelTaskJobs(item.taskId)
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "TASK_QUEUE_UNAVAILABLE"
-        await appendTaskOperationAuditRecord({
-          operationId,
-          operationType: "bulk_cancel",
-          actorId,
-          resourceId: item.taskId,
-          before: before as Record<string, unknown> | null,
-          after: before as Record<string, unknown> | null,
-          result: "failed",
-          reason: "TASK_QUEUE_UNAVAILABLE",
-          message,
-        })
-        items.push({ ...item, result: "failed", message })
-        continue
+      if (before?.status === "waiting_review") {
+        queue = { removedJobIds: [], hadActiveJob: false }
+      } else {
+        try {
+          queue = await cancelTaskJobs(item.taskId)
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "TASK_QUEUE_UNAVAILABLE"
+          await appendTaskOperationAuditRecord({
+            operationId,
+            operationType: "bulk_cancel",
+            actorId,
+            resourceId: item.taskId,
+            before: before as Record<string, unknown> | null,
+            after: before as Record<string, unknown> | null,
+            result: "failed",
+            reason: "TASK_QUEUE_UNAVAILABLE",
+            message,
+          })
+          items.push({ ...item, result: "failed", message })
+          continue
+        }
       }
 
       const canceled = await cancelTask(item.taskId, queue)
@@ -2729,11 +2733,16 @@ app.get("/api/tasks/:taskId/assets/:assetId/preview", async (c) => {
 
 app.post("/api/tasks/:taskId/cancel", async (c) => {
   const taskId = c.req.param("taskId")
+  const task = (await listTasks({ includeArchived: true })).find((entry) => entry.id === taskId) ?? null
   let queue
-  try {
-    queue = await cancelTaskJobs(taskId)
-  } catch (error) {
-    return toQueueUnavailableResponse(c, error)
+  if (task?.status === "waiting_review") {
+    queue = { removedJobIds: [], hadActiveJob: false }
+  } else {
+    try {
+      queue = await cancelTaskJobs(taskId)
+    } catch (error) {
+      return toQueueUnavailableResponse(c, error)
+    }
   }
 
   const canceled = await cancelTask(taskId, queue)

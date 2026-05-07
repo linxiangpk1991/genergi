@@ -479,7 +479,7 @@ async function getTaskAssetDeletionLock(taskId: string) {
     return { locked: true as const, reason: "TASK_NOT_FOUND" as const }
   }
 
-  if (!terminalTaskStatuses.has(task.status)) {
+  if (!terminalTaskStatuses.has(task.status) && task.status !== "waiting_review") {
     return {
       locked: true as const,
       reason: "TASK_ASSETS_LOCKED" as const,
@@ -1278,9 +1278,9 @@ function getTaskBulkEligibility(task: TaskSummary | null, operation: TaskBulkOpe
   }
 
   if (operation === "cancel") {
-    return task.status === "queued" || task.status === "running"
+    return task.status === "queued" || task.status === "running" || task.status === "waiting_review"
       ? { allowed: true, code: "ALLOWED", reason: getBulkAllowedReason(operation) }
-      : { allowed: false, code: "TASK_CANCEL_LOCKED", reason: "只有排队中或生成中的任务可以取消" }
+      : { allowed: false, code: "TASK_CANCEL_LOCKED", reason: "只有排队中、生成中或待审阅的任务可以取消" }
   }
 
   if (operation === "resume") {
@@ -1296,9 +1296,9 @@ function getTaskBulkEligibility(task: TaskSummary | null, operation: TaskBulkOpe
   }
 
   if (operation === "delete_task_with_assets" || operation === "delete_assets_only") {
-    return terminalTaskStatuses.has(task.status)
+    return terminalTaskStatuses.has(task.status) || task.status === "waiting_review"
       ? { allowed: true, code: "ALLOWED", reason: getBulkAllowedReason(operation) }
-      : { allowed: false, code: "TASK_ASSETS_LOCKED", reason: "任务还在生产或审核中，不能删除任务或素材" }
+      : { allowed: false, code: "TASK_ASSETS_LOCKED", reason: "任务还在生产中，不能删除任务或素材；可先取消任务" }
   }
 
   return { allowed: false, code: "UNKNOWN_OPERATION", reason: "不支持的批量操作" }

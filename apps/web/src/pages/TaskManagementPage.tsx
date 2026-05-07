@@ -191,14 +191,14 @@ function getTaskNextStep(task: TaskSummary) {
 
 function getSelectedBulkHint(selectedTasks: TaskSummary[]) {
   const lockedCount = selectedTasks.filter(
-    (task) => task.status === "queued" || task.status === "running" || task.status === "waiting_review",
+    (task) => task.status === "queued" || task.status === "running",
   ).length
 
   if (lockedCount) {
-    return `已选任务里有 ${lockedCount} 条仍在生产或审核，危险操作会在预检中跳过。`
+    return `已选任务里有 ${lockedCount} 条仍在生产，删除会在预检中跳过；待审阅任务可直接取消或删除。`
   }
 
-  return "只处理当前已选任务；删除和清空素材会要求二次确认。"
+  return "只处理当前已选任务；待审阅、失败、完成或已取消任务都可删除，删除和清空素材会要求二次确认。"
 }
 
 export function TaskManagementPage() {

@@ -147,4 +147,67 @@ describe("API task cancel route", () => {
     expect(payload.queue.hadActiveJob).toBe(true)
     expect(payload.task.cancelRequestedAt).toEqual(expect.any(String))
   })
+
+  it("cancels a waiting-review task without requiring a queue job lookup", async () => {
+    const { app, store, taskId, cookie } = await createAuthenticatedTask()
+    const shared = await import("../../../packages/shared/src/index")
+    cancelTaskJobsMock.mockRejectedValueOnce(new Error("REDIS_URL missing"))
+
+    await shared.updateTaskSummary(taskId, (task: any) => ({
+      ...task,
+      status: "waiting_review",
+      blueprintStatus: "rejected",
+      statusDetail: "审阅退回",
+    }))
+
+    const detail = await store.getTaskDetail(taskId)
+    await shared.upsertTaskDetail({
+      ...detail!,
+      statusDetail: "审阅退回",
+    })
+
+    const response = await app.request(`http://localhost/api/tasks/${taskId}/cancel`, {
+      method: "POST",
+      headers: { Cookie: cookie },
+    })
+
+    expect(response.status).toBe(200)
+    const payload = (await response.json()) as {
+      task: { status: string; statusDetail?: string | null }
+      queue: { removedJobIds: string[]; hadActiveJob: boolean }
+    }
+
+    expect(payload.task.status).toBe("canceled")
+    expect(payload.task.statusDetail).toBe("任务已终止")
+    expect(payload.queue).toEqual({ removedJobIds: [], hadActiveJob: false })
+    expect(cancelTaskJobsMock).not.toHaveBeenCalled()
+  })
+
+  it("bulk-cancels a waiting-review task without requiring a queue job lookup", async () => {
+    const { app, taskId, cookie } = await createAuthenticatedTask()
+    const shared = await import("../../../packages/shared/src/index")
+    cancelTaskJobsMock.mockRejectedValueOnce(new Error("REDIS_URL missing"))
+
+    await shared.updateTaskSummary(taskId, (task: any) => ({
+      ...task,
+      status: "waiting_review",
+      blueprintStatus: "rejected",
+      statusDetail: "审阅退回",
+    }))
+
+    const response = await app.request("http://localhost/api/tasks/bulk/cancel", {
+      method: "POST",
+      headers: { Cookie: cookie, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        taskIds: [taskId],
+        reason: "运营取消待审阅任务",
+      }),
+    })
+
+    expect(response.status).toBe(200)
+    const payload = await response.json()
+    expect(payload.summary).toEqual({ total: 1, success: 1, skipped: 0, failed: 0 })
+    expect(payload.items[0].task.status).toBe("canceled")
+    expect(cancelTaskJobsMock).not.toHaveBeenCalled()
+  })
 })
