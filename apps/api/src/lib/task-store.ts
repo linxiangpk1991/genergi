@@ -2,6 +2,7 @@ import fs from "node:fs/promises"
 import path from "node:path"
 import { buildDefaultTaskRunConfig, estimateCost, resolveVideoModelCapability } from "@genergi/config"
 import {
+  appendTaskOperationAuditRecord,
   buildStoryboardScenes,
   createDefaultReviewSummary,
   deleteTaskAssets as deletePersistedTaskAssets,
@@ -14,6 +15,7 @@ import {
   readTaskBlueprintRecords,
   readTaskDetail,
   readTaskDetails,
+  readTaskOperationAuditRecords,
   readTaskSummaries,
   upsertTaskAssets,
   upsertTaskDetail,
@@ -27,6 +29,8 @@ import type {
   ReviewSummary,
   StoryboardScene,
   TaskDetail,
+  TaskOperationAuditRecord,
+  TaskOperationType,
   TaskRunConfig,
   TaskSummary,
   TaskStatus,
@@ -469,7 +473,7 @@ async function getTaskAssetDeletionLock(taskId: string) {
     return { locked: true as const, reason: "TASK_ASSET_TASK_ID_FORBIDDEN" as const }
   }
 
-  const tasks = await listTasks()
+  const tasks = await listTasks({ includeArchived: true })
   const task = tasks.find((entry) => entry.id === taskId) ?? null
   if (!task) {
     return { locked: true as const, reason: "TASK_NOT_FOUND" as const }
@@ -1015,13 +1019,18 @@ async function syncTaskSummaryFromDetail(
   return nextSummary
 }
 
-export async function listTasks(): Promise<TaskSummary[]> {
-  return readTaskSummariesWithRepair()
+export async function listTasks(options: { includeArchived?: boolean } = {}): Promise<TaskSummary[]> {
+  const tasks = await readTaskSummariesWithRepair()
+  if (options.includeArchived) {
+    return tasks
+  }
+
+  return tasks.filter((task) => !task.archivedAt)
 }
 
 export async function getTaskDetail(taskId: string) {
   const existing = await readTaskDetail(taskId)
-  const tasks = await listTasks()
+  const tasks = await listTasks({ includeArchived: true })
   const task = tasks.find((item) => item.id === taskId)
   if (!task) {
     return null
@@ -1186,6 +1195,368 @@ export async function deleteTaskWithAssets(taskId: string) {
 
   await deleteTask(taskId)
   return { deleted: true as const }
+}
+
+export type TaskBulkOperation = "archive" | "restore" | "delete_task_with_assets" | "delete_assets_only" | "cancel" | "resume"
+
+export type TaskBulkPreviewItem = {
+  taskId: string
+  title: string
+  status: string
+  archived: boolean
+  allowed: boolean
+  reason: string
+  code: string
+  assetSummary: {
+    assetCount: number
+    hasFinalVideo: boolean
+    hasSubtitles: boolean
+    hasScript: boolean
+  }
+}
+
+export type TaskBulkResultItem = TaskBulkPreviewItem & {
+  result: "success" | "skipped" | "failed"
+  message: string
+  task?: TaskSummary | null
+}
+
+function toTaskOperationType(operation: TaskBulkOperation): TaskOperationType {
+  switch (operation) {
+    case "restore":
+      return "bulk_restore"
+    case "delete_task_with_assets":
+      return "bulk_delete_task_with_assets"
+    case "delete_assets_only":
+      return "bulk_delete_assets_only"
+    case "cancel":
+      return "bulk_cancel"
+    case "resume":
+      return "bulk_resume"
+    default:
+      return "bulk_archive"
+  }
+}
+
+function getTaskBulkOperationId(operation: TaskBulkOperation) {
+  return `bulk_${operation}_${Date.now()}`
+}
+
+function getBulkAllowedReason(operation: TaskBulkOperation) {
+  switch (operation) {
+    case "archive":
+      return "可归档"
+    case "restore":
+      return "可恢复归档"
+    case "delete_task_with_assets":
+      return "可删除任务和素材"
+    case "delete_assets_only":
+      return "可清空素材"
+    case "cancel":
+      return "可取消"
+    case "resume":
+      return "可恢复"
+    default:
+      return "可操作"
+  }
+}
+
+function getTaskBulkEligibility(task: TaskSummary | null, operation: TaskBulkOperation) {
+  if (!task) {
+    return { allowed: false, code: "TASK_NOT_FOUND", reason: "任务不存在" }
+  }
+
+  const archived = Boolean(task.archivedAt)
+  if (operation === "restore") {
+    return archived
+      ? { allowed: true, code: "ALLOWED", reason: getBulkAllowedReason(operation) }
+      : { allowed: false, code: "TASK_NOT_ARCHIVED", reason: "任务没有归档，不需要恢复" }
+  }
+
+  if (archived && operation !== "delete_task_with_assets" && operation !== "delete_assets_only") {
+    return { allowed: false, code: "TASK_ARCHIVED", reason: "任务已归档，先恢复后再处理" }
+  }
+
+  if (operation === "cancel") {
+    return task.status === "queued" || task.status === "running"
+      ? { allowed: true, code: "ALLOWED", reason: getBulkAllowedReason(operation) }
+      : { allowed: false, code: "TASK_CANCEL_LOCKED", reason: "只有排队中或生成中的任务可以取消" }
+  }
+
+  if (operation === "resume") {
+    return task.status === "failed"
+      ? { allowed: true, code: "ALLOWED", reason: getBulkAllowedReason(operation) }
+      : { allowed: false, code: "TASK_RESUME_LOCKED", reason: "只有失败任务可以批量恢复" }
+  }
+
+  if (operation === "archive") {
+    return terminalTaskStatuses.has(task.status)
+      ? { allowed: true, code: "ALLOWED", reason: getBulkAllowedReason(operation) }
+      : { allowed: false, code: "TASK_ARCHIVE_LOCKED", reason: "任务还在生产或审核中，暂时不能归档" }
+  }
+
+  if (operation === "delete_task_with_assets" || operation === "delete_assets_only") {
+    return terminalTaskStatuses.has(task.status)
+      ? { allowed: true, code: "ALLOWED", reason: getBulkAllowedReason(operation) }
+      : { allowed: false, code: "TASK_ASSETS_LOCKED", reason: "任务还在生产或审核中，不能删除任务或素材" }
+  }
+
+  return { allowed: false, code: "UNKNOWN_OPERATION", reason: "不支持的批量操作" }
+}
+
+async function getBulkAssetSummary(taskId: string): Promise<TaskBulkPreviewItem["assetSummary"]> {
+  const assets = await readMergedTaskAssets(taskId)
+  return {
+    assetCount: assets.length,
+    hasFinalVideo: assets.some((asset) => asset.assetType === "video_bundle"),
+    hasSubtitles: assets.some((asset) => asset.assetType === "subtitles"),
+    hasScript: assets.some((asset) => asset.assetType === "script" || asset.assetType === "source_script"),
+  }
+}
+
+export async function previewTaskBulkOperation(input: {
+  taskIds: string[]
+  operation: TaskBulkOperation
+}) {
+  const tasks = await listTasks({ includeArchived: true })
+  const byId = new Map(tasks.map((task) => [task.id, task]))
+  const uniqueTaskIds = [...new Set(input.taskIds.map((taskId) => taskId.trim()).filter(Boolean))]
+
+  const items = await Promise.all(uniqueTaskIds.map(async (taskId) => {
+    const task = byId.get(taskId) ?? null
+    const eligibility = getTaskBulkEligibility(task, input.operation)
+    return {
+      taskId,
+      title: task?.title ?? taskId,
+      status: task?.status ?? "missing",
+      archived: Boolean(task?.archivedAt),
+      ...eligibility,
+      assetSummary: task ? await getBulkAssetSummary(task.id) : {
+        assetCount: 0,
+        hasFinalVideo: false,
+        hasSubtitles: false,
+        hasScript: false,
+      },
+    } satisfies TaskBulkPreviewItem
+  }))
+
+  return {
+    operation: input.operation,
+    summary: {
+      total: items.length,
+      allowed: items.filter((item) => item.allowed).length,
+      blocked: items.filter((item) => !item.allowed).length,
+    },
+    items,
+  }
+}
+
+async function recordTaskBulkAudit(input: {
+  operationId: string
+  operation: TaskBulkOperation
+  actorId: string
+  taskId: string
+  before: TaskSummary | null
+  after: TaskSummary | null
+  result: "success" | "skipped" | "failed"
+  reason?: string | null
+  message?: string | null
+}) {
+  return appendTaskOperationAuditRecord({
+    operationId: input.operationId,
+    operationType: toTaskOperationType(input.operation),
+    actorId: input.actorId,
+    resourceId: input.taskId,
+    before: input.before as unknown as Record<string, unknown> | null,
+    after: input.after as unknown as Record<string, unknown> | null,
+    result: input.result,
+    reason: input.reason ?? null,
+    message: input.message ?? null,
+  })
+}
+
+async function applyArchiveState(taskId: string, archive: {
+  archivedAt: string | null
+  archivedBy: string | null
+  archiveReason: string | null
+  archiveOperationId: string | null
+}) {
+  const tasks = await listTasks({ includeArchived: true })
+  let updatedTask: TaskSummary | null = null
+  const nextTasks = tasks.map((task) => {
+    if (task.id !== taskId) {
+      return task
+    }
+
+    updatedTask = normalizeTaskSummaryRecord({
+      ...task,
+      ...archive,
+      updatedAt: now(),
+    })
+    return updatedTask
+  })
+  await writeTaskSummaries(nextTasks)
+
+  const detail = await readTaskDetail(taskId)
+  if (detail) {
+    await upsertTaskDetail(normalizeTaskDetailRecord({
+      ...detail,
+      ...archive,
+      updatedAt: now(),
+    }))
+  }
+
+  return updatedTask
+}
+
+export async function executeTaskBulkArchive(input: {
+  taskIds: string[]
+  actorId: string
+  reason?: string | null
+  restore?: boolean
+  operationId?: string
+}) {
+  const operation: TaskBulkOperation = input.restore ? "restore" : "archive"
+  const operationId = input.operationId ?? getTaskBulkOperationId(operation)
+  const preview = await previewTaskBulkOperation({ taskIds: input.taskIds, operation })
+  const results: TaskBulkResultItem[] = []
+
+  for (const item of preview.items) {
+    const before = (await listTasks({ includeArchived: true })).find((task) => task.id === item.taskId) ?? null
+    if (!item.allowed || !before) {
+      await recordTaskBulkAudit({
+        operationId,
+        operation,
+        actorId: input.actorId,
+        taskId: item.taskId,
+        before,
+        after: before,
+        result: "skipped",
+        reason: item.code,
+        message: item.reason,
+      })
+      results.push({ ...item, result: "skipped", message: item.reason, task: before })
+      continue
+    }
+
+    const nextTask = await applyArchiveState(item.taskId, input.restore
+      ? { archivedAt: null, archivedBy: null, archiveReason: null, archiveOperationId: null }
+      : {
+          archivedAt: now(),
+          archivedBy: input.actorId,
+          archiveReason: input.reason ?? "运营批量归档",
+          archiveOperationId: operationId,
+        })
+    await recordTaskBulkAudit({
+      operationId,
+      operation,
+      actorId: input.actorId,
+      taskId: item.taskId,
+      before,
+      after: nextTask,
+      result: "success",
+      reason: input.reason ?? null,
+      message: input.restore ? "已恢复归档任务" : "已归档任务",
+    })
+    results.push({ ...item, result: "success", message: input.restore ? "已恢复归档任务" : "已归档任务", task: nextTask })
+  }
+
+  return buildTaskBulkResult(operationId, operation, results)
+}
+
+export async function executeTaskBulkDeletion(input: {
+  taskIds: string[]
+  actorId: string
+  operation: "delete_task_with_assets" | "delete_assets_only"
+  reason?: string | null
+  operationId?: string
+}) {
+  const operationId = input.operationId ?? getTaskBulkOperationId(input.operation)
+  const preview = await previewTaskBulkOperation({ taskIds: input.taskIds, operation: input.operation })
+  const results: TaskBulkResultItem[] = []
+
+  for (const item of preview.items) {
+    const before = (await listTasks({ includeArchived: true })).find((task) => task.id === item.taskId) ?? null
+    if (!item.allowed || !before) {
+      await recordTaskBulkAudit({
+        operationId,
+        operation: input.operation,
+        actorId: input.actorId,
+        taskId: item.taskId,
+        before,
+        after: before,
+        result: "skipped",
+        reason: item.code,
+        message: item.reason,
+      })
+      results.push({ ...item, result: "skipped", message: item.reason, task: before })
+      continue
+    }
+
+    const deleteResult = input.operation === "delete_assets_only"
+      ? await deleteTaskAssetCollection(item.taskId)
+      : await deleteTaskWithAssets(item.taskId)
+
+    if (!deleteResult.deleted) {
+      const message = deleteResult.reason
+      await recordTaskBulkAudit({
+        operationId,
+        operation: input.operation,
+        actorId: input.actorId,
+        taskId: item.taskId,
+        before,
+        after: before,
+        result: "failed",
+        reason: message,
+        message,
+      })
+      results.push({ ...item, result: "failed", message, task: before })
+      continue
+    }
+
+    await recordTaskBulkAudit({
+      operationId,
+      operation: input.operation,
+      actorId: input.actorId,
+      taskId: item.taskId,
+      before,
+      after: null,
+      result: "success",
+      reason: input.reason ?? null,
+      message: input.operation === "delete_assets_only" ? "已清空任务素材" : "已删除任务和素材",
+    })
+    results.push({
+      ...item,
+      result: "success",
+      message: input.operation === "delete_assets_only" ? "已清空任务素材" : "已删除任务和素材",
+      task: null,
+    })
+  }
+
+  return buildTaskBulkResult(operationId, input.operation, results)
+}
+
+function buildTaskBulkResult(operationId: string, operation: TaskBulkOperation, items: TaskBulkResultItem[]) {
+  const success = items.filter((item) => item.result === "success").length
+  const skipped = items.filter((item) => item.result === "skipped").length
+  const failed = items.filter((item) => item.result === "failed").length
+  return {
+    operationId,
+    operation,
+    status: failed > 0 || skipped > 0 ? "partially_completed" as const : "completed" as const,
+    summary: {
+      total: items.length,
+      success,
+      skipped,
+      failed,
+    },
+    items,
+  }
+}
+
+export async function listTaskOperationAudit(limit = 50): Promise<TaskOperationAuditRecord[]> {
+  const records = await readTaskOperationAuditRecords()
+  return records.slice(0, Math.max(1, Math.min(200, limit)))
 }
 
 export async function createTask(input: CreateTaskInput): Promise<{ task: TaskSummary; taskRunConfig: unknown }> {

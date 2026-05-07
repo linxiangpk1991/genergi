@@ -243,6 +243,10 @@ export type TaskSummary = {
   workerId?: string | null
   activeJobId?: string | null
   planning?: TaskPlanningSnapshot
+  archivedAt?: string | null
+  archivedBy?: string | null
+  archiveReason?: string | null
+  archiveOperationId?: string | null
 }
 
 export type StoryboardScene = {
@@ -335,6 +339,57 @@ export type TaskDetail = {
   workerId?: string | null
   activeJobId?: string | null
   planning?: TaskPlanningSnapshot
+  archivedAt?: string | null
+  archivedBy?: string | null
+  archiveReason?: string | null
+  archiveOperationId?: string | null
+}
+
+export type TaskBulkOperation = "archive" | "restore" | "delete_task_with_assets" | "delete_assets_only" | "cancel" | "resume"
+
+export type TaskBulkPreviewItem = {
+  taskId: string
+  title: string
+  status: string
+  archived: boolean
+  allowed: boolean
+  reason: string
+  code: string
+  assetSummary: {
+    assetCount: number
+    hasFinalVideo: boolean
+    hasSubtitles: boolean
+    hasScript: boolean
+  }
+}
+
+export type TaskBulkPreviewResponse = {
+  operation: TaskBulkOperation
+  summary: {
+    total: number
+    allowed: number
+    blocked: number
+  }
+  items: TaskBulkPreviewItem[]
+}
+
+export type TaskBulkResultItem = TaskBulkPreviewItem & {
+  result: "success" | "skipped" | "failed"
+  message: string
+  task?: TaskSummary | null
+}
+
+export type TaskBulkResultResponse = {
+  operationId: string
+  operation: TaskBulkOperation
+  status: "completed" | "partially_completed"
+  summary: {
+    total: number
+    success: number
+    skipped: number
+    failed: number
+  }
+  items: TaskBulkResultItem[]
 }
 
 export type TaskDiagnostics = {
@@ -818,7 +873,33 @@ export const api = {
   listProjects: () => request<{ projects: ProjectRecord[] }>("/api/projects"),
   getProjectLibrary: (projectId: string) =>
     request<{ entries: ProjectApprovedBlueprintRecord[] }>(`/api/projects/${projectId}/library`),
-  listTasks: () => request<{ tasks: TaskSummary[] }>("/api/tasks"),
+  listTasks: (options?: { includeArchived?: boolean }) =>
+    request<{ tasks: TaskSummary[] }>(options?.includeArchived ? "/api/tasks?includeArchived=1" : "/api/tasks"),
+  previewTaskBulkOperation: (payload: { taskIds: string[]; operation: TaskBulkOperation }) =>
+    request<TaskBulkPreviewResponse>("/api/tasks/bulk/preview", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  deleteTaskBulk: (payload: {
+    taskIds: string[]
+    operation: "archive" | "restore" | "delete_task_with_assets" | "delete_assets_only"
+    reason?: string
+    confirmationText?: string
+  }) =>
+    request<TaskBulkResultResponse>("/api/tasks/bulk/delete", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  cancelTaskBulk: (payload: { taskIds: string[]; reason?: string }) =>
+    request<TaskBulkResultResponse>("/api/tasks/bulk/cancel", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  resumeTaskBulk: (payload: { taskIds: string[]; reason?: string }) =>
+    request<TaskBulkResultResponse>("/api/tasks/bulk/resume", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
   getTaskDetail: (taskId: string) => request<{ detail: TaskDetail }>(`/api/tasks/${taskId}`),
   getTaskBlueprints: (taskId: string) => request<{ blueprints: TaskBlueprintRecord[] }>(`/api/tasks/${taskId}/blueprints`),
   getTaskCurrentBlueprint: (taskId: string) =>

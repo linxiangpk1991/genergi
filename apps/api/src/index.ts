@@ -26,6 +26,7 @@ import {
   readModelRecords,
   readProviderRecords,
   readRuntimeStatus,
+  appendTaskOperationAuditRecord,
   appendTaskRetryRequest,
   readTaskTimeline,
   readTaskRetryRequests,
@@ -46,10 +47,14 @@ import {
   deleteTaskAsset,
   deleteTaskAssetCollection,
   deleteTaskWithAssets,
+  executeTaskBulkArchive,
+  executeTaskBulkDeletion,
   getTaskAsset,
   getTaskAssets,
   getTaskDetail,
+  listTaskOperationAudit,
   listTasks,
+  previewTaskBulkOperation,
   markTaskRetryPending,
   resumeFailedTask,
   restoreTaskState,
@@ -105,6 +110,20 @@ const retryTaskBodySchema = z.object({
   scope: z.enum(["task", "scene", "keyframe", "video"]).optional(),
   sceneId: z.string().trim().min(1).optional(),
   reason: z.string().trim().min(1).optional(),
+})
+const taskBulkOperationSchema = z.enum([
+  "archive",
+  "restore",
+  "delete_task_with_assets",
+  "delete_assets_only",
+  "cancel",
+  "resume",
+])
+const taskBulkBodySchema = z.object({
+  taskIds: z.array(z.string().trim().min(1)).min(1).max(200),
+  operation: taskBulkOperationSchema,
+  reason: z.string().trim().min(1).optional(),
+  confirmationText: z.string().trim().optional(),
 })
 const blueprintReviewBodySchema = z.object({
   decision: blueprintReviewDecisionSchema,
@@ -2051,9 +2070,281 @@ app.get("/api/production/schedule", async (c) => {
 requireAuthNamespace("/api/tasks")
 
 app.get("/api/tasks", async (c) => {
-  const tasks = await listTasks()
+  const includeArchived = c.req.query("includeArchived") === "1" || c.req.query("includeArchived") === "true"
+  const tasks = await listTasks({ includeArchived })
   return c.json({ tasks: tasks.map(enrichSummary) })
 })
+
+app.post(
+  "/api/tasks/bulk/preview",
+  zValidator("json", taskBulkBodySchema.pick({ taskIds: true, operation: true })),
+  async (c) => {
+    const payload = c.req.valid("json")
+    return c.json(await previewTaskBulkOperation(payload))
+  },
+)
+
+app.get("/api/tasks/bulk/audit", async (c) => {
+  const limit = Number(c.req.query("limit") ?? 50)
+  return c.json({ audit: await listTaskOperationAudit(Number.isFinite(limit) ? limit : 50) })
+})
+
+app.post(
+  "/api/tasks/bulk/delete",
+  zValidator("json", taskBulkBodySchema),
+  async (c) => {
+    const payload = c.req.valid("json")
+    if (payload.operation !== "archive" && payload.operation !== "restore" && payload.operation !== "delete_task_with_assets" && payload.operation !== "delete_assets_only") {
+      return c.json({ message: "TASK_BULK_OPERATION_NOT_DELETE" }, 400)
+    }
+
+    const user = await getSessionUser(c)
+    const actorId = user?.username ?? "operator"
+    const preview = await previewTaskBulkOperation({ taskIds: payload.taskIds, operation: payload.operation })
+    const operationLabel =
+      payload.operation === "delete_task_with_assets"
+        ? `删除 ${preview.summary.allowed} 个任务`
+        : payload.operation === "delete_assets_only"
+          ? `清空 ${preview.summary.allowed} 个任务素材`
+          : ""
+    if (operationLabel && payload.confirmationText !== operationLabel) {
+      return c.json({
+        message: "TASK_BULK_CONFIRMATION_MISMATCH",
+        expected: operationLabel,
+      }, 400)
+    }
+
+    if (payload.operation === "archive" || payload.operation === "restore") {
+      return c.json(await executeTaskBulkArchive({
+        taskIds: payload.taskIds,
+        actorId,
+        reason: payload.reason ?? null,
+        restore: payload.operation === "restore",
+      }))
+    }
+
+    return c.json(await executeTaskBulkDeletion({
+      taskIds: payload.taskIds,
+      actorId,
+      operation: payload.operation,
+      reason: payload.reason ?? null,
+    }))
+  },
+)
+
+app.post(
+  "/api/tasks/bulk/cancel",
+  zValidator("json", taskBulkBodySchema.pick({ taskIds: true, reason: true })),
+  async (c) => {
+    const payload = c.req.valid("json")
+    const user = await getSessionUser(c)
+    const actorId = user?.username ?? "operator"
+    const operationId = `bulk_cancel_${Date.now()}`
+    const preview = await previewTaskBulkOperation({ taskIds: payload.taskIds, operation: "cancel" })
+    const items = []
+
+    for (const item of preview.items) {
+      const before = (await listTasks({ includeArchived: true })).find((entry) => entry.id === item.taskId) ?? null
+      if (!item.allowed) {
+        await appendTaskOperationAuditRecord({
+          operationId,
+          operationType: "bulk_cancel",
+          actorId,
+          resourceId: item.taskId,
+          before: before as Record<string, unknown> | null,
+          after: before as Record<string, unknown> | null,
+          result: "skipped",
+          reason: item.code,
+          message: item.reason,
+        })
+        items.push({ ...item, result: "skipped", message: item.reason })
+        continue
+      }
+
+      let queue
+      try {
+        queue = await cancelTaskJobs(item.taskId)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "TASK_QUEUE_UNAVAILABLE"
+        await appendTaskOperationAuditRecord({
+          operationId,
+          operationType: "bulk_cancel",
+          actorId,
+          resourceId: item.taskId,
+          before: before as Record<string, unknown> | null,
+          after: before as Record<string, unknown> | null,
+          result: "failed",
+          reason: "TASK_QUEUE_UNAVAILABLE",
+          message,
+        })
+        items.push({ ...item, result: "failed", message })
+        continue
+      }
+
+      const canceled = await cancelTask(item.taskId, queue)
+      if (!canceled) {
+        await appendTaskOperationAuditRecord({
+          operationId,
+          operationType: "bulk_cancel",
+          actorId,
+          resourceId: item.taskId,
+          before: before as Record<string, unknown> | null,
+          after: before as Record<string, unknown> | null,
+          result: "failed",
+          reason: "TASK_NOT_FOUND",
+          message: "任务不存在或状态已变化",
+        })
+        items.push({ ...item, result: "failed", message: "任务不存在或状态已变化" })
+        continue
+      }
+
+      await appendTaskOperationAuditRecord({
+        operationId,
+        operationType: "bulk_cancel",
+        actorId,
+        resourceId: item.taskId,
+        before: before as Record<string, unknown> | null,
+        after: canceled.summary as unknown as Record<string, unknown>,
+        result: "success",
+        reason: payload.reason ?? null,
+        message: queue.hadActiveJob ? "已发起终止，正在执行的任务会等待生成服务退出" : "已取消任务",
+      })
+      items.push({ ...item, result: "success", message: queue.hadActiveJob ? "已发起终止，正在执行的任务会等待生成服务退出" : "已取消任务", task: canceled.summary })
+    }
+
+    return c.json({
+      operationId,
+      operation: "cancel",
+      actorId,
+      status: items.some((item) => item.result !== "success") ? "partially_completed" : "completed",
+      summary: {
+        total: items.length,
+        success: items.filter((item) => item.result === "success").length,
+        skipped: items.filter((item) => item.result === "skipped").length,
+        failed: items.filter((item) => item.result === "failed").length,
+      },
+      items,
+    })
+  },
+)
+
+app.post(
+  "/api/tasks/bulk/resume",
+  zValidator("json", taskBulkBodySchema.pick({ taskIds: true, reason: true })),
+  async (c) => {
+    const payload = c.req.valid("json")
+    const user = await getSessionUser(c)
+    const actorId = user?.username ?? "operator"
+    const operationId = `bulk_resume_${Date.now()}`
+    const preview = await previewTaskBulkOperation({ taskIds: payload.taskIds, operation: "resume" })
+    const items = []
+
+    for (const item of preview.items) {
+      const before = (await listTasks({ includeArchived: true })).find((entry) => entry.id === item.taskId) ?? null
+      if (!item.allowed) {
+        await appendTaskOperationAuditRecord({
+          operationId,
+          operationType: "bulk_resume",
+          actorId,
+          resourceId: item.taskId,
+          before: before as Record<string, unknown> | null,
+          after: before as Record<string, unknown> | null,
+          result: "skipped",
+          reason: item.code,
+          message: item.reason,
+        })
+        items.push({ ...item, result: "skipped", message: item.reason })
+        continue
+      }
+
+      const task = before
+      const detail = await getTaskDetail(item.taskId)
+      if (!task || !detail) {
+        await appendTaskOperationAuditRecord({
+          operationId,
+          operationType: "bulk_resume",
+          actorId,
+          resourceId: item.taskId,
+          before: before as Record<string, unknown> | null,
+          after: before as Record<string, unknown> | null,
+          result: "failed",
+          reason: "TASK_NOT_FOUND",
+          message: "任务不存在或详情缺失",
+        })
+        items.push({ ...item, result: "failed", message: "任务不存在或详情缺失" })
+        continue
+      }
+
+      const statusDetail = `${task.statusDetail ?? detail.statusDetail ?? ""}`
+      const recoverableFailureText = `${task.failureReason ?? detail.failureReason ?? ""} ${statusDetail}`
+      const failedAfterPlanning =
+        /scene|video|keyframe|subtitle|audio|timeout|成片|视频|画面|关键帧|字幕|音频/i.test(recoverableFailureText)
+      const continueExecution =
+        failedAfterPlanning ||
+        task.blueprintStatus === "approved" ||
+        task.blueprintStatus === "queued_for_video" ||
+        task.blueprintStatus === "video_generating" ||
+        task.blueprintStatus === "completed"
+
+      const resumed = await resumeFailedTask(item.taskId)
+      if (!resumed) {
+        items.push({ ...item, result: "failed", message: "任务不存在或状态已变化" })
+        continue
+      }
+
+      try {
+        const queue = await enqueueTask(item.taskId, {
+          reason: "bulk_resume_failed_task",
+          continueExecution,
+          blueprintVersion: detail.blueprintVersion,
+          stage: "resume_after_failure",
+          resumeFrom: "failed_task",
+        })
+        await appendTaskOperationAuditRecord({
+          operationId,
+          operationType: "bulk_resume",
+          actorId,
+          resourceId: item.taskId,
+          before: before as Record<string, unknown> | null,
+          after: resumed.summary as unknown as Record<string, unknown>,
+          result: "success",
+          reason: payload.reason ?? null,
+          message: queue.queued ? "已恢复并重新加入队列" : "已恢复任务",
+        })
+        items.push({ ...item, result: "success", message: queue.queued ? "已恢复并重新加入队列" : "已恢复任务", task: resumed.summary })
+      } catch (error) {
+        await restoreTaskState(task, detail)
+        const message = error instanceof Error ? error.message : "TASK_QUEUE_UNAVAILABLE"
+        await appendTaskOperationAuditRecord({
+          operationId,
+          operationType: "bulk_resume",
+          actorId,
+          resourceId: item.taskId,
+          before: before as Record<string, unknown> | null,
+          after: before as Record<string, unknown> | null,
+          result: "failed",
+          reason: "TASK_QUEUE_UNAVAILABLE",
+          message,
+        })
+        items.push({ ...item, result: "failed", message })
+      }
+    }
+
+    return c.json({
+      operationId,
+      operation: "resume",
+      actorId,
+      status: items.some((item) => item.result !== "success") ? "partially_completed" : "completed",
+      summary: {
+        total: items.length,
+        success: items.filter((item) => item.result === "success").length,
+        skipped: items.filter((item) => item.result === "skipped").length,
+        failed: items.filter((item) => item.result === "failed").length,
+      },
+      items,
+    }, 202)
+  },
+)
 
 app.get("/api/tasks/:taskId", async (c) => {
   const detail = await getTaskDetail(c.req.param("taskId"))

@@ -246,4 +246,59 @@ describe("API task asset deletion", () => {
     await expect(stat(sharedAssetsDir)).rejects.toThrow()
     expect(await readFile(unsafePath, "utf8")).toBe("keep me")
   })
+
+  it("previews bulk deletion and deletes only terminal tasks with an audit trail", async () => {
+    const { app, cookie, shared, store, taskId, exportDir, sharedAssetsDir } = await createTaskWithAssets()
+    await shared.updateTaskSummary(taskId, (task) => ({ ...task, status: "completed" }))
+    const running = await store.createTask({
+      projectId: "project_default",
+      title: "Running task should stay",
+      script: "Keep this running task.",
+      modeId: "high_quality",
+      channelId: "tiktok",
+      terminalPresetId: "phone_portrait",
+      aspectRatio: "9:16",
+      targetDurationSec: 30,
+      generationMode: "user_locked",
+      audioStrategy: "tts_only",
+      subtitleStrategy: "tts_aligned",
+    })
+    await shared.updateTaskSummary(running.task.id, (task) => ({ ...task, status: "running" }))
+
+    const previewResponse = await app.request("/api/tasks/bulk/preview", {
+      method: "POST",
+      headers: { Cookie: cookie, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        taskIds: [taskId, running.task.id],
+        operation: "delete_task_with_assets",
+      }),
+    })
+
+    expect(previewResponse.status).toBe(200)
+    const preview = await previewResponse.json()
+    expect(preview.summary).toEqual({ total: 2, allowed: 1, blocked: 1 })
+    expect(preview.items.find((item: any) => item.taskId === running.task.id).reason).toContain("不能删除")
+
+    const deleteResponse = await app.request("/api/tasks/bulk/delete", {
+      method: "POST",
+      headers: { Cookie: cookie, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        taskIds: [taskId, running.task.id],
+        operation: "delete_task_with_assets",
+        confirmationText: "删除 1 个任务",
+      }),
+    })
+
+    expect(deleteResponse.status).toBe(200)
+    const result = await deleteResponse.json()
+    expect(result.summary).toEqual({ total: 2, success: 1, skipped: 1, failed: 0 })
+    expect((await shared.readTaskSummaries()).some((task) => task.id === taskId)).toBe(false)
+    expect((await shared.readTaskSummaries()).some((task) => task.id === running.task.id)).toBe(true)
+    await expect(stat(exportDir)).rejects.toThrow()
+    await expect(stat(sharedAssetsDir)).rejects.toThrow()
+
+    const audit = await shared.readTaskOperationAuditRecords()
+    expect(audit.some((record) => record.operationId === result.operationId && record.resourceId === taskId && record.result === "success")).toBe(true)
+    expect(audit.some((record) => record.operationId === result.operationId && record.resourceId === running.task.id && record.result === "skipped")).toBe(true)
+  })
 })

@@ -21,6 +21,8 @@ import type {
   StoryboardScene,
   StoredUser,
   TaskDetail,
+  TaskOperationAuditRecord,
+  TaskOperationType,
   TaskTimelineEvent,
   TaskTimelineEventInput,
   TaskRuntimeTrace,
@@ -56,6 +58,8 @@ function resolveFiles() {
     tempTimelinesFile: path.join(dataDir, "task-timelines.tmp.json"),
     retryRequestsFile: path.join(dataDir, "task-retry-requests.json"),
     tempRetryRequestsFile: path.join(dataDir, "task-retry-requests.tmp.json"),
+    operationAuditFile: path.join(dataDir, "task-operation-audit.json"),
+    tempOperationAuditFile: path.join(dataDir, "task-operation-audit.tmp.json"),
     assetsFile: path.join(dataDir, "assets.json"),
     tempAssetsFile: path.join(dataDir, "assets.tmp.json"),
     usersFile: path.join(dataDir, "users.json"),
@@ -138,6 +142,20 @@ function normalizeTaskRuntimeTraceRecord<T extends Partial<TaskRuntimeTrace>>(re
 
 function normalizeNullableString(value: unknown) {
   return typeof value === "string" && value.trim().length > 0 ? value : null
+}
+
+function normalizeTaskArchiveStateRecord(record: {
+  archivedAt?: string | null
+  archivedBy?: string | null
+  archiveReason?: string | null
+  archiveOperationId?: string | null
+}) {
+  return {
+    archivedAt: normalizeNullableString(record.archivedAt),
+    archivedBy: normalizeNullableString(record.archivedBy),
+    archiveReason: normalizeNullableString(record.archiveReason),
+    archiveOperationId: normalizeNullableString(record.archiveOperationId),
+  }
 }
 
 const sensitiveKeyPattern = /(^|[-_])(authorization|api[-_]?key|access[-_]?token|refresh[-_]?token|secret|password|bearer|token|key)($|[-_])/i
@@ -688,6 +706,10 @@ export function normalizeTaskSummaryRecord(
     lastHeartbeatAt?: string | null
     workerId?: string | null
     activeJobId?: string | null
+    archivedAt?: string | null
+    archivedBy?: string | null
+    archiveReason?: string | null
+    archiveOperationId?: string | null
   },
 ): TaskSummary {
   return {
@@ -711,6 +733,7 @@ export function normalizeTaskSummaryRecord(
     failureReason: normalizeNullableString(task.failureReason),
     statusDetail: normalizeNullableString(task.statusDetail),
     cancelRequestedAt: normalizeNullableString(task.cancelRequestedAt),
+    ...normalizeTaskArchiveStateRecord(task),
     ...normalizeReviewSummaryRecord(task),
     ...normalizeTaskRuntimeTraceRecord(task),
   }
@@ -736,6 +759,10 @@ export function normalizeTaskDetailRecord(
     lastHeartbeatAt?: string | null
     workerId?: string | null
     activeJobId?: string | null
+    archivedAt?: string | null
+    archivedBy?: string | null
+    archiveReason?: string | null
+    archiveOperationId?: string | null
   },
 ): TaskDetail {
   const taskRunConfig = detail.taskRunConfig
@@ -797,6 +824,7 @@ export function normalizeTaskDetailRecord(
     failureReason: normalizeNullableString(detail.failureReason),
     statusDetail: normalizeNullableString(detail.statusDetail),
     cancelRequestedAt: normalizeNullableString(detail.cancelRequestedAt),
+    ...normalizeTaskArchiveStateRecord(detail),
     scenes: Array.isArray(detail.scenes)
       ? detail.scenes.map((scene) => normalizeStoryboardScene(scene))
       : [],
@@ -914,6 +942,10 @@ export async function readTaskSummaries(): Promise<TaskSummary[]> {
         reviewStage?: ReviewStageId | null
         pendingReviewCount?: number
         reviewUpdatedAt?: string | null
+        archivedAt?: string | null
+        archivedBy?: string | null
+        archiveReason?: string | null
+        archiveOperationId?: string | null
       }
     >
     const normalized = tasks.map((task) => normalizeTaskSummaryRecord(task))
@@ -1107,6 +1139,84 @@ export async function appendTaskTimelineEvent(taskId: string, input: TaskTimelin
   records[taskId] = [...events, event].slice(-MAX_TASK_TIMELINE_EVENTS)
   await writeTaskTimelineRecords(records)
   return event
+}
+
+function normalizeTaskOperationType(value: unknown): TaskOperationType {
+  switch (value) {
+    case "bulk_restore":
+    case "bulk_delete_task_with_assets":
+    case "bulk_delete_assets_only":
+    case "bulk_cancel":
+    case "bulk_resume":
+      return value
+    default:
+      return "bulk_archive"
+  }
+}
+
+function normalizeAuditRecord(record: Partial<TaskOperationAuditRecord>, fallbackIndex: number): TaskOperationAuditRecord {
+  const createdAt = normalizeNullableString(record.createdAt) ?? now()
+  return {
+    id: normalizeNullableString(record.id) ?? `audit_${fallbackIndex}`,
+    operationId: normalizeNullableString(record.operationId) ?? "operation_unknown",
+    operationType: normalizeTaskOperationType(record.operationType),
+    actorId: normalizeNullableString(record.actorId) ?? "system",
+    resourceType: "task",
+    resourceId: normalizeNullableString(record.resourceId) ?? "task_unknown",
+    before: record.before && typeof record.before === "object"
+      ? redactTimelineValue(record.before) as Record<string, unknown>
+      : null,
+    after: record.after && typeof record.after === "object"
+      ? redactTimelineValue(record.after) as Record<string, unknown>
+      : null,
+    result: record.result === "success" || record.result === "failed" ? record.result : "skipped",
+    reason: normalizeNullableString(record.reason),
+    message: normalizeNullableString(record.message),
+    createdAt,
+  }
+}
+
+async function writeTaskOperationAuditRecords(records: TaskOperationAuditRecord[]) {
+  const { dataDir, operationAuditFile, tempOperationAuditFile } = resolveFiles()
+  await mkdir(dataDir, { recursive: true })
+  await commitTempFile(tempOperationAuditFile, operationAuditFile, JSON.stringify(records, null, 2))
+}
+
+export async function readTaskOperationAuditRecords(): Promise<TaskOperationAuditRecord[]> {
+  const { dataDir, operationAuditFile } = resolveFiles()
+  await mkdir(dataDir, { recursive: true })
+  try {
+    const content = await readFile(operationAuditFile, "utf8")
+    if (!content.trim()) {
+      return []
+    }
+
+    const records = JSON.parse(content) as Partial<TaskOperationAuditRecord>[]
+    return Array.isArray(records)
+      ? records.map((record, index) => normalizeAuditRecord(record, index + 1))
+      : []
+  } catch {
+    return []
+  }
+}
+
+export async function appendTaskOperationAuditRecord(
+  input: Omit<TaskOperationAuditRecord, "id" | "createdAt" | "resourceType"> & {
+    id?: string
+    createdAt?: string
+    resourceType?: "task"
+  },
+) {
+  const records = await readTaskOperationAuditRecords()
+  const nextRecord = normalizeAuditRecord({
+    ...input,
+    id: input.id ?? `audit_${Date.now()}_${records.length + 1}`,
+    createdAt: input.createdAt ?? now(),
+    resourceType: "task",
+  }, records.length + 1)
+  const nextRecords = [nextRecord, ...records].slice(0, 500)
+  await writeTaskOperationAuditRecords(nextRecords)
+  return nextRecord
 }
 
 async function writeTaskRetryRequestRecords(records: Record<string, RetryRequest[]>) {

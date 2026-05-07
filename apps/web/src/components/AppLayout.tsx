@@ -9,6 +9,7 @@ const navGroups = [
       { to: "/", label: "任务启动" },
       { to: "/task-review", label: "任务审核" },
       { to: "/batch-dashboard", label: "生产看板" },
+      { to: "/task-management", label: "任务管理" },
       { to: "/asset-center", label: "素材与交付" },
     ],
   },
@@ -39,6 +40,13 @@ function getWorkspaceMeta(pathname: string) {
     return {
       title: "生产看板",
       description: "集中查看任务进度、卡住情况和需要人工处理的问题。",
+    }
+  }
+
+  if (pathname === "/task-management") {
+    return {
+      title: "任务管理",
+      description: "集中筛选任务、批量预检、归档、删除、取消和恢复失败任务。",
     }
   }
 

@@ -134,6 +134,40 @@ export const taskRuntimeTraceSchema = z.object({
 })
 export type TaskRuntimeTrace = z.infer<typeof taskRuntimeTraceSchema>
 
+export const taskArchiveStateSchema = z.object({
+  archivedAt: z.string().nullable().optional(),
+  archivedBy: z.string().nullable().optional(),
+  archiveReason: z.string().nullable().optional(),
+  archiveOperationId: z.string().nullable().optional(),
+})
+export type TaskArchiveState = z.infer<typeof taskArchiveStateSchema>
+
+export const taskOperationTypeSchema = z.enum([
+  "bulk_archive",
+  "bulk_restore",
+  "bulk_delete_task_with_assets",
+  "bulk_delete_assets_only",
+  "bulk_cancel",
+  "bulk_resume",
+])
+export type TaskOperationType = z.infer<typeof taskOperationTypeSchema>
+
+export const taskOperationAuditRecordSchema = z.object({
+  id: z.string(),
+  operationId: z.string(),
+  operationType: taskOperationTypeSchema,
+  actorId: z.string(),
+  resourceType: z.literal("task"),
+  resourceId: z.string(),
+  before: z.record(z.string(), z.unknown()).nullable(),
+  after: z.record(z.string(), z.unknown()).nullable(),
+  result: z.enum(["success", "skipped", "failed"]),
+  reason: z.string().nullable(),
+  message: z.string().nullable(),
+  createdAt: z.string(),
+})
+export type TaskOperationAuditRecord = z.infer<typeof taskOperationAuditRecordSchema>
+
 export const taskTimelineLevelSchema = z.enum(["info", "warning", "error"])
 export type TaskTimelineLevel = z.infer<typeof taskTimelineLevelSchema>
 
@@ -242,7 +276,7 @@ export const taskSummarySchema = z.object({
   estimatedCostCny: z.number().nonnegative(),
   createdAt: z.string(),
   updatedAt: z.string(),
-}).extend(reviewSummarySchema.shape).extend(taskRuntimeTraceSchema.shape)
+}).extend(reviewSummarySchema.shape).extend(taskRuntimeTraceSchema.shape).extend(taskArchiveStateSchema.shape)
 export type TaskSummary = z.infer<typeof taskSummarySchema>
 
 export const storyboardSceneSchema = z.object({
@@ -286,7 +320,7 @@ export const taskDetailSchema = z.object({
   cancelRequestedAt: z.string().nullable().optional(),
   scenes: z.array(storyboardSceneSchema),
   updatedAt: z.string(),
-}).extend(reviewSummarySchema.shape).extend(taskRuntimeTraceSchema.shape)
+}).extend(reviewSummarySchema.shape).extend(taskRuntimeTraceSchema.shape).extend(taskArchiveStateSchema.shape)
 export type TaskDetail = z.infer<typeof taskDetailSchema>
 
 export const assetRecordSchema = z.object({

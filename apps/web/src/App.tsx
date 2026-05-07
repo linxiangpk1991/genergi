@@ -6,6 +6,7 @@ import { BatchDashboardPage } from "./pages/BatchDashboardPage"
 import { HomePage } from "./pages/HomePage"
 import { LoginPage } from "./pages/LoginPage"
 import { AssetsPage } from "./pages/AssetsPage"
+import { TaskManagementPage } from "./pages/TaskManagementPage"
 import { UserCenterPage } from "./pages/UserCenterPage"
 import { ModelControlCenterPage } from "./pages/ModelControlCenterPage"
 import { ModelProvidersPage } from "./pages/ModelProvidersPage"
@@ -50,6 +51,7 @@ export function App() {
       <Routes>
         <Route path="/" element={<HomePage />} />
         <Route path="/batch-dashboard" element={<BatchDashboardPage />} />
+        <Route path="/task-management" element={<TaskManagementPage />} />
         <Route path="/task-review" element={<TaskReviewPage />} />
         <Route path="/project-library" element={<ProjectLibraryPage />} />
         <Route path="/asset-center" element={<AssetsPage />} />
