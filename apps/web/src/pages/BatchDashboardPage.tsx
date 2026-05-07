@@ -133,6 +133,10 @@ function getTaskLane(task: TaskSummary): ProductionLaneId {
     return "blocked"
   }
 
+  if (task.status === "waiting_review") {
+    return "waiting_review"
+  }
+
   if (
     task.executionMode === "review_required" &&
     (task.blueprintStatus === "ready_for_review" ||
@@ -168,8 +172,16 @@ function getTaskEta(task: TaskSummary) {
     return "等待调度"
   }
 
+  if (lane === "blocked") {
+    return isStaleRunningTask(task) ? "已卡住" : "等待人工动作"
+  }
+
+  if (lane === "waiting_review") {
+    return "等待人工动作"
+  }
+
   if (task.progressPct <= 0 || task.progressPct >= 100) {
-    return lane === "waiting_review" ? "等待人工动作" : "计算中"
+    return "计算中"
   }
 
   const startedAtMs = Date.parse(task.stageStartedAt ?? task.createdAt)

@@ -439,7 +439,7 @@ describe("task status details and cancel actions", () => {
         createRunningTask({
           id: "task_review",
           title: "Waiting review task",
-          status: "running",
+          status: "waiting_review",
           progressPct: 45,
           blueprintStatus: "ready_for_review",
           statusDetail: "蓝图待人工审核",
@@ -487,6 +487,8 @@ describe("task status details and cancel actions", () => {
       expect(text).toContain("provider_timeout")
       expect(text).toContain("Worker / Redis 容量")
       expect(text).toContain("保守继续：先打开资产排查，再恢复卡住任务")
+      expect(text).toContain("等待人工动作")
+      expect(text).not.toContain("约 731 小时")
     })
   })
 

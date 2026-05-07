@@ -240,6 +240,12 @@ const RETRY_IMPACT_COPY: Record<DeliveryRetryKind, string> = {
   scene: "重跑该 scene 的关键帧与视频，成本最高，适合画面方向错误。",
 }
 
+const RETRY_BUTTON_LABELS: Record<DeliveryRetryKind, string> = {
+  keyframe: "关键帧",
+  video: "视频段",
+  scene: "整段",
+}
+
 const ASSET_TYPE_BY_CHECK: Partial<Record<DeliveryCheckKey, AssetRecord["assetType"]>> = {
   finalVideo: "video_bundle",
   subtitles: "subtitles",
@@ -992,16 +998,19 @@ export function AssetsPage() {
     const previewableCount = assets.filter((asset) => asset.previewable).length
     const missingCount = assets.filter((asset) => !asset.exists).length
     const deliverables = assets.filter((asset) => ["video_bundle", "subtitles", "script", "audio"].includes(asset.assetType))
-    const deliverableReadyCount = deliverables.filter((asset) => asset.status === "ready").length
+    const deliveryChecks = deliveryWorkbench?.checks ?? []
+    const deliverableReadyCount = deliveryChecks.length
+      ? deliveryChecks.filter((check) => check.status === "ready").length
+      : deliverables.filter((asset) => asset.status === "ready").length
 
     return {
       readyCount,
       previewableCount,
       missingCount,
       deliverableReadyCount,
-      deliverableTotal: deliverables.length,
+      deliverableTotal: deliveryChecks.length || deliverables.length,
     }
-  }, [assets])
+  }, [assets, deliveryWorkbench])
 
   const durationDelta = useMemo(() => getDurationDelta(selectedTask), [selectedTask])
   const durationDeltaLabel = durationDelta == null ? "待成片" : `${durationDelta > 0 ? "+" : ""}${durationDelta.toFixed(1)}s`
@@ -1023,6 +1032,7 @@ export function AssetsPage() {
     [deliveryWorkbench],
   )
   const deliveryScenes = deliveryWorkbench?.scenes ?? []
+  const canUseDeliveryRetry = selectedTask?.status === "failed" || Boolean(diagnostics?.recoverable)
   const deliveryManifestUrl = selectedTaskId
     ? deliveryWorkbench?.manifestUrl
       ? resolveApiUrl(deliveryWorkbench.manifestUrl)
@@ -1191,6 +1201,10 @@ export function AssetsPage() {
   }
 
   function renderDeliveryRetryButton(kind: DeliveryRetryKind, sceneId?: string) {
+    if (!canUseDeliveryRetry) {
+      return null
+    }
+
     const actionKey = `${kind}:${sceneId ?? "task"}`
     return (
       <button
@@ -1200,7 +1214,7 @@ export function AssetsPage() {
         title={RETRY_IMPACT_COPY[kind]}
         type="button"
       >
-        {retryingDeliveryAction === actionKey ? "提交中..." : `retry ${kind}`}
+        {retryingDeliveryAction === actionKey ? "提交中" : RETRY_BUTTON_LABELS[kind]}
       </button>
     )
   }
@@ -1394,7 +1408,7 @@ export function AssetsPage() {
                 <span>keyframe</span>
                 <span>video</span>
                 <span>review</span>
-                <span>局部重试</span>
+                <span>重试</span>
               </div>
               {deliveryScenes.map((scene) => (
                 <div className="delivery-scene-matrix__row" key={scene.sceneId}>
@@ -1406,9 +1420,15 @@ export function AssetsPage() {
                   {renderSceneCell(scene.video)}
                   {renderSceneCell(scene.review)}
                   <div className="delivery-retry-actions">
-                    {renderDeliveryRetryButton("keyframe", scene.sceneId)}
-                    {renderDeliveryRetryButton("video", scene.sceneId)}
-                    {renderDeliveryRetryButton("scene", scene.sceneId)}
+                    {canUseDeliveryRetry ? (
+                      <>
+                        {renderDeliveryRetryButton("keyframe", scene.sceneId)}
+                        {renderDeliveryRetryButton("video", scene.sceneId)}
+                        {renderDeliveryRetryButton("scene", scene.sceneId)}
+                      </>
+                    ) : (
+                      <span className="muted">无需重试</span>
+                    )}
                   </div>
                 </div>
               ))}

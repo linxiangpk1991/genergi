@@ -28,6 +28,10 @@ body {
   font-size: 14px;
 }
 
+body {
+  overflow-x: hidden;
+}
+
 button,
 input,
 textarea,
@@ -351,6 +355,7 @@ select {
   border-radius: 18px;
   box-shadow: var(--genergi-shadow);
   padding: 20px;
+  min-width: 0;
 }
 
 .card h2,
@@ -368,6 +373,7 @@ select {
 .side-panel {
   display: grid;
   gap: 16px;
+  min-width: 0;
 }
 
 .field-label {
@@ -701,7 +707,7 @@ select.input {
 }
 
 .task-item--wide {
-  grid-template-columns: minmax(240px, 1.4fr) minmax(150px, 0.6fr) minmax(220px, 0.8fr) minmax(200px, 0.9fr);
+  grid-template-columns: minmax(220px, 1.35fr) minmax(132px, 0.5fr) minmax(180px, 0.72fr) minmax(150px, 0.62fr);
   align-items: center;
   gap: 12px;
 }
@@ -1292,6 +1298,31 @@ select.input {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
+}
+
+@media (max-width: 1500px) and (min-width: 1201px) {
+  .production-grid {
+    grid-template-columns: minmax(210px, 260px) minmax(0, 1fr);
+  }
+
+  .production-grid > .side-panel {
+    grid-column: 1 / -1;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    align-items: start;
+  }
+
+  .task-item--wide {
+    grid-template-columns: minmax(0, 1fr) minmax(128px, 0.32fr) minmax(150px, 0.42fr);
+  }
+
+  .task-item--wide > div:first-child,
+  .task-item--wide > .task-item__actions {
+    grid-column: 1 / -1;
+  }
+
+  .task-item--wide > .task-item__actions {
+    justify-content: flex-start;
+  }
 }
 
 @media (max-width: 1200px) {
@@ -1995,6 +2026,8 @@ select.input {
 
 .delivery-scene-matrix {
   overflow-x: auto;
+  max-width: 100%;
+  min-width: 0;
   border-radius: 12px;
   border: 1px solid rgba(0, 71, 171, 0.08);
 }
@@ -2064,6 +2097,11 @@ select.input {
   align-content: flex-start;
   gap: 8px;
   min-width: 0;
+}
+
+.delivery-retry-actions .muted {
+  align-self: center;
+  font-size: 12px;
 }
 
 .delivery-scene-matrix__empty {
@@ -2684,6 +2722,89 @@ select.input {
   .registry-item__header {
     flex-direction: column;
     align-items: stretch;
+  }
+}
+
+@media (max-width: 640px) {
+  .page-shell {
+    gap: 12px;
+    overflow-x: clip;
+    padding: 10px;
+  }
+
+  #root,
+  .workspace,
+  .card--main {
+    overflow-x: hidden;
+  }
+
+  .sidebar,
+  .workspace-toolbar,
+  .card {
+    border-radius: 14px;
+  }
+
+  .sidebar {
+    padding: 12px;
+  }
+
+  .brand-logo {
+    height: 34px;
+  }
+
+  .nav-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .nav-item {
+    padding: 8px 10px 8px 12px;
+    font-size: 12px;
+  }
+
+  .workspace-toolbar,
+  .topbar,
+  .topbar-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .workspace-toolbar {
+    padding: 12px;
+  }
+
+  .workspace-toolbar-actions,
+  .delivery-command-bar__actions,
+  .asset-item-actions {
+    justify-content: flex-start;
+  }
+
+  .topbar h1 {
+    font-size: 24px;
+  }
+
+  .card {
+    padding: 14px;
+  }
+
+  .delivery-workbench {
+    padding: 12px;
+  }
+
+  .production-grid,
+  .production-grid > .side-panel,
+  .task-item--wide {
+    grid-template-columns: 1fr;
+  }
+
+  .delivery-scene-matrix__head,
+  .delivery-scene-matrix__row {
+    min-width: 720px;
+  }
+
+  .primary-button,
+  .ghost-button {
+    padding: 8px 12px;
+    font-size: 12px;
   }
 }
 
