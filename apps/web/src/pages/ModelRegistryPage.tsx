@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from "react"
-import { Link, useLocation } from "react-router-dom"
 import {
   api,
   MODEL_CONTROL_SLOT_LABELS,
@@ -16,6 +15,15 @@ import {
   normalizeTextWireApiForUi,
   TEXT_WIRE_API_OPTIONS,
 } from "../lib/model-control-display"
+import {
+  CapabilityTags,
+  ConfirmActionDialog,
+  type ConfirmActionState,
+  getLifecycleDetail,
+  ModelControlNav,
+  ModelControlNotice,
+  ModelStatusBadge,
+} from "../features/model-control/toolkit"
 
 const emptyForm: CreateModelRegistryEntryPayload = {
   modelKey: "",
@@ -40,42 +48,6 @@ function formatDateTime(value?: string | null) {
   return parsed.toLocaleString("zh-CN")
 }
 
-function getStatusClass(status: ModelControlLifecycleStatus) {
-  return `status-badge status-badge--${status}`
-}
-
-function ModelControlNav() {
-  const location = useLocation()
-
-  const navItems = [
-    { to: "/model-control-center", label: "总览" },
-    { to: "/model-control-center/providers", label: "接入方管理" },
-    { to: "/model-control-center/registry", label: "模型列表" },
-    { to: "/model-control-center/defaults", label: "默认模型" },
-  ]
-
-  return (
-    <div className="model-control-nav">
-      {navItems.map((item) => {
-        const isActive =
-          item.to === "/model-control-center"
-            ? location.pathname === item.to
-            : location.pathname.startsWith(item.to)
-
-        return (
-          <Link
-            key={item.to}
-            className={isActive ? "model-control-nav__item model-control-nav__item--active" : "model-control-nav__item"}
-            to={item.to}
-          >
-            {item.label}
-          </Link>
-        )
-      })}
-    </div>
-  )
-}
-
 function stringifyCapabilityJson(value: Record<string, unknown>) {
   return JSON.stringify(value, null, 2)
 }
@@ -96,6 +68,15 @@ function mergeCapabilityText(currentText: string, patch: Record<string, unknown>
   })
 }
 
+function isCapabilityTextValid(value: string) {
+  try {
+    const parsed = JSON.parse(value)
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+  } catch {
+    return false
+  }
+}
+
 export function ModelRegistryPage() {
   const [models, setModels] = useState<ModelRegistryRecord[]>([])
   const [providers, setProviders] = useState<ProviderRegistryRecord[]>([])
@@ -105,6 +86,7 @@ export function ModelRegistryPage() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [actionModelId, setActionModelId] = useState<string | null>(null)
+  const [confirmAction, setConfirmAction] = useState<ConfirmActionState>(null)
   const [slotFilter, setSlotFilter] = useState<"all" | CreateModelRegistryEntryPayload["slotType"]>("all")
   const [error, setError] = useState("")
   const [notice, setNotice] = useState("")
@@ -179,8 +161,14 @@ export function ModelRegistryPage() {
   }
 
   function applyAutoCapabilityPreset() {
+    if (!isCapabilityTextValid(capabilityText)) {
+      setError("能力说明 JSON 还不是合法对象，先修正后再自动补全，避免覆盖草稿。")
+      return
+    }
     const preset = buildCapabilityPreset(form.slotType, form.providerModelId)
     setCapabilityText((current) => mergeCapabilityText(current, preset))
+    setError("")
+    setNotice("已按模型 ID 补全调用能力，当前只是草稿，请点击保存后生效。")
   }
 
   function getDraftModelForProfile(): Pick<ModelRegistryRecord, "slotType" | "providerModelId" | "capabilityJson"> {
@@ -244,13 +232,35 @@ export function ModelRegistryPage() {
 
     try {
       await api.validateModelRegistryEntry(modelId)
-      setNotice("已触发真实模型校验，请查看状态与错误信息。")
+      setNotice("已完成配置检查：通过后会进入默认模型可选池；真实小样本试跑会在 smoke probe 接入后单独触发。")
       await loadRegistry()
     } catch (err) {
       setError(err instanceof Error ? err.message : "模型校验失败")
     } finally {
       setActionModelId(null)
     }
+  }
+
+  function requestStatusChange(model: ModelRegistryRecord, lifecycleStatus: ModelControlLifecycleStatus, noticeText: string) {
+    const actionLabel =
+      lifecycleStatus === "disabled"
+        ? "停用模型"
+        : lifecycleStatus === "deprecated"
+          ? "弃用模型"
+          : "恢复为草稿"
+    setConfirmAction({
+      title: `${actionLabel}：${model.displayName}`,
+      body:
+        lifecycleStatus === "draft"
+          ? "恢复后不会自动进入默认模型池，需要重新检查配置。历史任务不会受影响。"
+          : "该操作会让模型退出默认模型可选池；如果它正在作为默认模型使用，后续新任务需要重新选择可用模型。历史任务会继续保留冻结快照。",
+      confirmLabel: actionLabel,
+      danger: lifecycleStatus !== "draft",
+      onConfirm: async () => {
+        await handleStatusChange(model.id, lifecycleStatus, noticeText)
+        setConfirmAction(null)
+      },
+    })
   }
 
   async function handleStatusChange(modelId: string, lifecycleStatus: ModelControlLifecycleStatus, noticeText: string) {
@@ -281,17 +291,17 @@ export function ModelRegistryPage() {
           </p>
           </div>
           <div className="planning-summary-tags">
-            <span className="pill pill--sm">文案 / 图片 / 视频 / 配音</span>
-            <span className="pill pill--sm">能力说明 JSON</span>
-            <span className="pill pill--sm">校验通过后可选</span>
+            <span className="info-chip">文案 / 图片 / 视频 / 配音</span>
+            <span className="info-chip">能力说明 JSON</span>
+            <span className="info-chip">检查通过后可选</span>
           </div>
         </div>
 
         <ModelControlNav />
       </section>
 
-      {error ? <div className="alert">{error}</div> : null}
-      {notice ? <div className="empty-state">{notice}</div> : null}
+      {error ? <ModelControlNotice tone="error">{error}</ModelControlNotice> : null}
+      {notice ? <ModelControlNotice tone="success">{notice}</ModelControlNotice> : null}
 
       <div className="model-control-grid">
         <section className="card">
@@ -583,10 +593,11 @@ export function ModelRegistryPage() {
                       <div className="muted mono">{model.modelKey}</div>
                     </div>
                     <div className="planning-inline">
-                      <span className="pill pill--sm">{MODEL_CONTROL_SLOT_LABELS[model.slotType]}</span>
-                      <span className={getStatusClass(model.lifecycleStatus)}>{model.lifecycleStatus}</span>
+                      <span className="info-chip">{MODEL_CONTROL_SLOT_LABELS[model.slotType]}</span>
+                      <ModelStatusBadge status={model.lifecycleStatus} />
                     </div>
                   </div>
+                  <div className="model-selectable-note">{getLifecycleDetail(model.lifecycleStatus)}</div>
 
                   <div className="model-call-summary">
                     {(() => {
@@ -622,36 +633,26 @@ export function ModelRegistryPage() {
                     </div>
                   </div>
 
-                  <div className="capability-list">
-                    {Object.entries(model.capabilityJson ?? {}).length ? (
-                      Object.entries(model.capabilityJson).map(([key, value]) => (
-                        <span key={key} className="capability-pill">
-                          {key}: {String(value)}
-                        </span>
-                      ))
-                    ) : (
-                      <span className="muted">尚未提供能力元数据</span>
-                    )}
-                  </div>
+                  <CapabilityTags value={model.capabilityJson} />
 
                   <div className="row-actions">
                     <button className="ghost-button ghost-button--compact" onClick={() => startEdit(model)} type="button">
-                      编辑
+                      载入编辑
                     </button>
                     <button
-                      className="ghost-button ghost-button--compact"
+                      className="model-action-button model-action-button--check"
                       disabled={actionModelId === model.id}
                       onClick={() => void handleValidate(model.id)}
                       type="button"
                     >
-                      {actionModelId === model.id ? "处理中..." : "开始校验"}
+                      {actionModelId === model.id ? "检查中..." : "检查配置"}
                     </button>
                     <button
-                      className="ghost-button ghost-button--compact"
+                      className={model.lifecycleStatus === "disabled" ? "ghost-button ghost-button--compact" : "warning-button"}
                       disabled={actionModelId === model.id}
                       onClick={() =>
-                        void handleStatusChange(
-                          model.id,
+                        requestStatusChange(
+                          model,
                           model.lifecycleStatus === "disabled" ? "draft" : "disabled",
                           model.lifecycleStatus === "disabled"
                             ? "模型已恢复到草稿状态，请重新校验。"
@@ -663,10 +664,10 @@ export function ModelRegistryPage() {
                       {model.lifecycleStatus === "disabled" ? "恢复草稿" : "标记禁用"}
                     </button>
                     <button
-                      className="ghost-button ghost-button--compact"
+                      className="danger-button danger-button--compact"
                       disabled={actionModelId === model.id || model.lifecycleStatus === "deprecated"}
                       onClick={() =>
-                        void handleStatusChange(model.id, "deprecated", "模型已标记为弃用，保留历史记录但不建议继续选用。")
+                        requestStatusChange(model, "deprecated", "模型已标记为弃用，保留历史记录但不建议继续选用。")
                       }
                       type="button"
                     >
@@ -681,6 +682,11 @@ export function ModelRegistryPage() {
           )}
         </section>
       </div>
+      <ConfirmActionDialog
+        busy={Boolean(actionModelId)}
+        onClose={() => setConfirmAction(null)}
+        state={confirmAction}
+      />
     </div>
   )
 }

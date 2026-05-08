@@ -23,6 +23,10 @@ import {
   normalizeImageProviderModelId,
   normalizeModelCapability,
   normalizeVideoProviderModelId,
+  buildModelRoutingProfile,
+  canPatchModelLifecycle,
+  getModelSelectableReason,
+  shouldResetModelValidation,
   readModelDefaults,
   readModelRecords,
   readProviderRecords,
@@ -838,6 +842,7 @@ const createModelInputSchema = z.object({
   providerModelId: z.string().trim().min(1),
   displayName: z.string().trim().min(1),
   capabilityJson: z.record(z.string(), z.unknown()).optional().default({}),
+  lifecycleStatus: z.enum(["draft", "disabled"]).optional(),
 })
 
 const updateModelInputSchema = z.object({
@@ -1153,6 +1158,7 @@ function buildModelControlSeedState(): {
         slotType.startsWith("video")
           ? { ...resolveVideoModelCapability(normalizeVideoProviderModelId(modelRef.id)) }
           : { provider: modelRef.provider },
+        modelRef.provider,
       ),
       lifecycleStatus: "available",
       lastValidatedAt: now,
@@ -1282,19 +1288,35 @@ function sanitizeProviderRecord(provider: ModelControlProviderRecord) {
     updatedAt: provider.updatedAt,
     secretConfigured: Boolean(provider.encryptedSecret),
     secretPreview: provider.secretPreview,
+    hasSecret: Boolean(provider.encryptedSecret),
+    maskedSecret: provider.secretPreview,
   }
 }
 
 function sanitizeModelRecord(model: ModelControlModelRecord, providers: ModelControlProviderRecord[]) {
   const provider = providers.find((item) => item.id === model.providerId) ?? null
+  const routingProfile = buildModelRoutingProfile({
+    slotType: model.slotType,
+    providerModelId: model.providerModelId,
+    providerType: provider?.providerType,
+    capabilityJson: model.capabilityJson,
+  })
+  const selectableReason = getModelSelectableReason({
+    modelStatus: model.lifecycleStatus,
+    providerStatus: provider?.status ?? null,
+  })
   return {
     id: model.id,
     modelKey: model.modelKey,
     providerId: model.providerId,
+    providerDisplayName: provider?.displayName ?? null,
+    providerType: provider?.providerType ?? null,
     slotType: model.slotType,
     providerModelId: model.providerModelId,
     displayName: model.displayName,
     capabilityJson: model.capabilityJson,
+    routingProfile,
+    selectableReason,
     lifecycleStatus: model.lifecycleStatus,
     lastValidatedAt: model.lastValidatedAt,
     lastValidationError: model.lastValidationError,
@@ -1391,10 +1413,21 @@ function buildSelectablePools(state: {
       valueId: model.id,
       modelId: model.id,
       displayName: model.displayName,
+      providerDisplayName: provider.displayName,
       providerId: provider.id,
       providerType: provider.providerType,
       providerModelId: model.providerModelId,
       capabilityJson: model.capabilityJson,
+      routingProfile: buildModelRoutingProfile({
+        slotType: model.slotType,
+        providerModelId: model.providerModelId,
+        providerType: provider.providerType,
+        capabilityJson: model.capabilityJson,
+      }),
+      selectableReason: getModelSelectableReason({
+        modelStatus: model.lifecycleStatus,
+        providerStatus: provider.status,
+      }),
     })
   }
 
@@ -1408,8 +1441,15 @@ function buildSelectablePools(state: {
       sourceType: "provider",
       valueId: provider.id,
       providerId: provider.id,
+      providerDisplayName: provider.displayName,
       displayName: provider.displayName,
       providerType: provider.providerType,
+      routingProfile: buildModelRoutingProfile({
+        slotType: "ttsProvider",
+        providerModelId: provider.providerType,
+        providerType: provider.providerType,
+        capabilityJson: {},
+      }),
     })
   }
 
@@ -1800,6 +1840,7 @@ app.get("/api/model-control/models", async (c) => {
 app.post("/api/model-control/models", zValidator("json", createModelInputSchema), async (c) => {
   const payload = c.req.valid("json")
   const state = await ensureModelControlState()
+  const linkedProvider = state.providers.find((provider) => provider.id === payload.providerId) ?? null
   const now = nowIso()
   const record: ModelControlModelRecord = {
     id: randomUUID(),
@@ -1808,8 +1849,11 @@ app.post("/api/model-control/models", zValidator("json", createModelInputSchema)
     slotType: payload.slotType,
     providerModelId: payload.providerModelId,
     displayName: payload.displayName,
-    capabilityJson: normalizeModelCapability(payload.slotType, payload.providerModelId, payload.capabilityJson),
-    lifecycleStatus: "draft",
+    capabilityJson: normalizeModelCapability(payload.slotType, payload.providerModelId, payload.capabilityJson, linkedProvider?.providerType),
+    lifecycleStatus:
+      payload.lifecycleStatus === "disabled" || payload.lifecycleStatus === "draft"
+        ? payload.lifecycleStatus
+        : "draft",
     lastValidatedAt: null,
     lastValidationError: null,
     createdAt: now,
@@ -1832,10 +1876,20 @@ app.patch("/api/model-control/models/:modelId", zValidator("json", updateModelIn
   const current = state.models[index]
   const nextSlotType = payload.slotType ?? current.slotType
   const nextProviderModelId = payload.providerModelId ?? current.providerModelId
+  const nextProviderId = payload.providerId ?? current.providerId
+  const linkedProvider = state.providers.find((provider) => provider.id === nextProviderId) ?? null
+  const changedKeys = Object.keys(payload)
+  if (payload.lifecycleStatus && !canPatchModelLifecycle(payload.lifecycleStatus)) {
+    return c.json({ message: "MODEL_STATUS_REQUIRES_VALIDATION" }, 409)
+  }
+  const validationReset = shouldResetModelValidation(changedKeys)
+  const nextLifecycleStatus =
+    payload.lifecycleStatus ??
+    (validationReset && current.lifecycleStatus === "available" ? "draft" : current.lifecycleStatus)
   const next: ModelControlModelRecord = {
     ...current,
     modelKey: payload.modelKey ?? current.modelKey,
-    providerId: payload.providerId ?? current.providerId,
+    providerId: nextProviderId,
     slotType: nextSlotType,
     providerModelId: nextProviderModelId,
     displayName: payload.displayName ?? current.displayName,
@@ -1843,11 +1897,12 @@ app.patch("/api/model-control/models/:modelId", zValidator("json", updateModelIn
       nextSlotType,
       nextProviderModelId,
       payload.capabilityJson ?? current.capabilityJson,
+      linkedProvider?.providerType,
     ),
-    lifecycleStatus: payload.lifecycleStatus ?? "draft",
-    lastValidatedAt: payload.lifecycleStatus && payload.lifecycleStatus !== "available" ? current.lastValidatedAt : null,
+    lifecycleStatus: nextLifecycleStatus,
+    lastValidatedAt: validationReset ? null : current.lastValidatedAt,
     lastValidationError:
-      payload.lifecycleStatus && payload.lifecycleStatus !== "available" ? current.lastValidationError : null,
+      validationReset ? "模型配置已变更，请重新检查配置。" : current.lastValidationError,
     updatedAt: nowIso(),
   }
   const models = [...state.models]
@@ -2064,6 +2119,9 @@ app.get("/api/model-control/selectable", async (c) => {
               providerDisplayName?: string | null
               providerType?: string | null
               providerId?: string
+              providerModelId?: string
+              routingProfile?: Record<string, unknown>
+              selectableReason?: Record<string, unknown>
               capabilityJson?: Record<string, unknown>
               description?: string | null
             }
@@ -2078,8 +2136,12 @@ app.get("/api/model-control/selectable", async (c) => {
                     ? record.providerType
                     : null,
               providerId: record.providerId,
-            slotType,
+              providerType: record.providerType ?? null,
+              providerModelId: record.providerModelId,
+              slotType,
               capabilityJson: record.capabilityJson,
+              routingProfile: record.routingProfile,
+              selectableReason: record.selectableReason,
               description: record.description ?? null,
             }
           }),

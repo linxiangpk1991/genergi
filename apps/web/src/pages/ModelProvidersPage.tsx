@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react"
-import { Link, useLocation } from "react-router-dom"
 import {
   api,
   type CreateModelProviderPayload,
@@ -8,6 +7,13 @@ import {
   type ProviderRegistryRecord,
 } from "../api"
 import { AUTH_TYPE_OPTIONS, formatAuthType, formatProviderType, PROVIDER_TYPE_OPTIONS } from "../lib/model-control-display"
+import {
+  ConfirmActionDialog,
+  type ConfirmActionState,
+  ModelControlNav,
+  ModelControlNotice,
+  ModelStatusBadge,
+} from "../features/model-control/toolkit"
 
 const emptyForm: CreateModelProviderPayload = {
   providerKey: "",
@@ -32,42 +38,6 @@ function formatDateTime(value?: string | null) {
   return parsed.toLocaleString("zh-CN")
 }
 
-function getStatusClass(status: ModelControlLifecycleStatus) {
-  return `status-badge status-badge--${status}`
-}
-
-function ModelControlNav() {
-  const location = useLocation()
-
-  const navItems = [
-    { to: "/model-control-center", label: "总览" },
-    { to: "/model-control-center/providers", label: "接入方管理" },
-    { to: "/model-control-center/registry", label: "模型列表" },
-    { to: "/model-control-center/defaults", label: "默认模型" },
-  ]
-
-  return (
-    <div className="model-control-nav">
-      {navItems.map((item) => {
-        const isActive =
-          item.to === "/model-control-center"
-            ? location.pathname === item.to
-            : location.pathname.startsWith(item.to)
-
-        return (
-          <Link
-            key={item.to}
-            className={isActive ? "model-control-nav__item model-control-nav__item--active" : "model-control-nav__item"}
-            to={item.to}
-          >
-            {item.label}
-          </Link>
-        )
-      })}
-    </div>
-  )
-}
-
 export function ModelProvidersPage() {
   const [providers, setProviders] = useState<ProviderRegistryRecord[]>([])
   const [form, setForm] = useState<CreateModelProviderPayload>(emptyForm)
@@ -75,6 +45,7 @@ export function ModelProvidersPage() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [actionProviderId, setActionProviderId] = useState<string | null>(null)
+  const [confirmAction, setConfirmAction] = useState<ConfirmActionState>(null)
   const [error, setError] = useState("")
   const [notice, setNotice] = useState("")
 
@@ -150,7 +121,7 @@ export function ModelProvidersPage() {
           secret: form.secret?.trim() || undefined,
           status: form.status,
         })
-        setNotice("接入方已创建。下一步请执行真实校验。")
+        setNotice("接入方已创建。下一步请检查配置，通过后才能绑定可用模型。")
       }
 
       resetForm()
@@ -169,7 +140,7 @@ export function ModelProvidersPage() {
 
     try {
       await api.validateModelProvider(providerId)
-      setNotice("已开始真实校验。结果请看状态和错误信息。")
+      setNotice("已完成配置检查。当前检查会确认接口地址、鉴权和密钥状态。")
       await loadProviders()
     } catch (err) {
       setError(err instanceof Error ? err.message : "接入方校验失败")
@@ -195,6 +166,23 @@ export function ModelProvidersPage() {
     }
   }
 
+  function requestToggleProvider(provider: ProviderRegistryRecord) {
+    const nextStatus: ModelControlLifecycleStatus = provider.status === "disabled" ? "draft" : "disabled"
+    setConfirmAction({
+      title: `${nextStatus === "disabled" ? "停用接入方" : "恢复接入方"}：${provider.displayName}`,
+      body:
+        nextStatus === "disabled"
+          ? "停用后，绑定到这个接入方的模型会退出默认模型可选池。请确认后续新任务已有可用替代模型。"
+          : "恢复后只是回到未检查状态，需要重新检查配置后才能继续用于模型路由。",
+      confirmLabel: nextStatus === "disabled" ? "确认停用" : "恢复为草稿",
+      danger: nextStatus === "disabled",
+      onConfirm: async () => {
+        await handleToggleProvider(provider)
+        setConfirmAction(null)
+      },
+    })
+  }
+
   return (
     <div className="workspace-page">
       <section className="card">
@@ -207,17 +195,17 @@ export function ModelProvidersPage() {
             </p>
           </div>
           <div className="planning-summary-tags">
-            <span className="pill pill--sm">真实接口地址</span>
-            <span className="pill pill--sm">真实校验</span>
-            <span className="pill pill--sm">掩码展示</span>
+            <span className="info-chip">真实接口地址</span>
+            <span className="info-chip">配置检查</span>
+            <span className="info-chip">掩码展示</span>
           </div>
         </div>
 
         <ModelControlNav />
       </section>
 
-      {error ? <div className="alert">{error}</div> : null}
-      {notice ? <div className="empty-state">{notice}</div> : null}
+      {error ? <ModelControlNotice tone="error">{error}</ModelControlNotice> : null}
+      {notice ? <ModelControlNotice tone="success">{notice}</ModelControlNotice> : null}
 
       <div className="model-control-grid">
         <section className="card">
@@ -405,7 +393,7 @@ export function ModelProvidersPage() {
                         <div className="muted">不会显示明文</div>
                       </td>
                       <td>
-                        <div className={getStatusClass(provider.status)}>{provider.status}</div>
+                        <ModelStatusBadge status={provider.status} />
                         <div className="muted">最近校验：{formatDateTime(provider.lastValidatedAt)}</div>
                         {provider.lastValidationError ? (
                           <div className="inline-error-text">{provider.lastValidationError}</div>
@@ -418,20 +406,20 @@ export function ModelProvidersPage() {
                             onClick={() => startEdit(provider)}
                             type="button"
                           >
-                            编辑
+                            载入编辑
                           </button>
                           <button
-                            className="ghost-button ghost-button--compact"
+                            className="model-action-button model-action-button--check"
                             disabled={actionProviderId === provider.id}
                             onClick={() => void handleValidate(provider.id)}
                             type="button"
                           >
-                            {actionProviderId === provider.id ? "处理中..." : "开始校验"}
+                            {actionProviderId === provider.id ? "检查中..." : "检查配置"}
                           </button>
                           <button
-                            className="ghost-button ghost-button--compact"
+                            className={provider.status === "disabled" ? "ghost-button ghost-button--compact" : "warning-button"}
                             disabled={actionProviderId === provider.id}
-                            onClick={() => void handleToggleProvider(provider)}
+                            onClick={() => requestToggleProvider(provider)}
                             type="button"
                           >
                             {provider.status === "disabled" ? "恢复草稿" : "标记禁用"}
@@ -448,6 +436,11 @@ export function ModelProvidersPage() {
           )}
         </section>
       </div>
+      <ConfirmActionDialog
+        busy={Boolean(actionProviderId)}
+        onClose={() => setConfirmAction(null)}
+        state={confirmAction}
+      />
     </div>
   )
 }

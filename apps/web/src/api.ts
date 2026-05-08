@@ -705,6 +705,8 @@ export type ProviderRegistryRecord = {
   status: ModelControlLifecycleStatus
   hasSecret?: boolean
   maskedSecret?: string | null
+  secretConfigured?: boolean
+  secretPreview?: string | null
   lastValidatedAt?: string | null
   lastValidationError?: string | null
   createdAt?: string
@@ -716,11 +718,18 @@ export type ModelRegistryRecord = {
   modelKey: string
   providerId: string
   providerDisplayName?: string | null
+  providerType?: string | null
   slotType: ModelControlSlotType
   providerModelId: string
   displayName: string
   lifecycleStatus: ModelControlLifecycleStatus
   capabilityJson: Record<string, unknown>
+  routingProfile?: Record<string, unknown>
+  selectableReason?: {
+    selectable: boolean
+    label: string
+    detail: string
+  }
   lastValidatedAt?: string | null
   lastValidationError?: string | null
   createdAt?: string
@@ -747,6 +756,12 @@ export type SelectableModelOption = {
   providerModelId?: string
   slotType: ModelControlSlotType
   capabilityJson?: Record<string, unknown>
+  routingProfile?: Record<string, unknown>
+  selectableReason?: {
+    selectable: boolean
+    label: string
+    detail: string
+  }
   description?: string | null
 }
 
@@ -793,12 +808,14 @@ export type UpdateModelDefaultsPayload = {
 
 export type CreateTaskPayload = {
   projectId: string
+  modeId?: ModelControlModeId
   title: string
   script: string
   terminalPresetId: TerminalPresetId
   targetDurationSec: number
   audioStrategy: AudioStrategy
   subtitleStrategy: SubtitleStrategy
+  modelOverrides?: Partial<Record<ModelControlSlotType, { modelId?: string; providerId?: string }>>
 }
 
 export function getAudioStrategyLabel(strategy: AudioStrategy | null | undefined) {

@@ -13,6 +13,7 @@ vi.mock("../../../apps/web/src/api", async () => {
       bootstrap: vi.fn(),
       listTasks: vi.fn(),
       listProjects: vi.fn(),
+      getSelectableModelPools: vi.fn(),
       createTask: vi.fn(),
     },
   }
@@ -22,6 +23,7 @@ import {
   api,
   type BootstrapResponse,
   type ProjectRecord,
+  type SelectableModelPoolsResponse,
 } from "../../../apps/web/src/api"
 import { HomePage } from "../../../apps/web/src/pages/HomePage"
 
@@ -89,6 +91,65 @@ function createProjects(): ProjectRecord[] {
   ]
 }
 
+function createHomeSelectablePools(): SelectableModelPoolsResponse {
+  return {
+    modeId: "high_quality",
+    pools: {
+      textModel: {
+        slotType: "textModel",
+        options: [
+          {
+            recordId: "model_text_hq",
+            displayName: "GPT-5.5",
+            providerDisplayName: "OpenAI",
+            providerModelId: "gpt-5.5",
+            slotType: "textModel",
+          },
+        ],
+        effectiveId: "model_text_hq",
+      },
+      imageModel: {
+        slotType: "imageModel",
+        options: [
+          {
+            recordId: "model_image_hq",
+            displayName: "GPT Image",
+            providerDisplayName: "OpenAI",
+            providerModelId: "gpt-image-2",
+            slotType: "imageModel",
+          },
+        ],
+        effectiveId: "model_image_hq",
+      },
+      videoModel: {
+        slotType: "videoModel",
+        options: [
+          {
+            recordId: "model_video_hq",
+            displayName: "Veo 3.1",
+            providerDisplayName: "Google",
+            providerModelId: "veo-3.1",
+            slotType: "videoModel",
+          },
+        ],
+        effectiveId: "model_video_hq",
+      },
+      ttsProvider: {
+        slotType: "ttsProvider",
+        options: [
+          {
+            recordId: "provider_tts",
+            displayName: "Edge TTS",
+            providerDisplayName: "Edge",
+            slotType: "ttsProvider",
+          },
+        ],
+        effectiveId: "provider_tts",
+      },
+    },
+  }
+}
+
 describe("HomePage project and terminal preset flow", () => {
   let container: HTMLDivElement
   let root: Root
@@ -103,6 +164,7 @@ describe("HomePage project and terminal preset flow", () => {
     vi.mocked(api.bootstrap).mockResolvedValue(createBootstrapResponse())
     vi.mocked(api.listTasks).mockResolvedValue({ tasks: [] })
     vi.mocked(api.listProjects).mockResolvedValue({ projects: createProjects() })
+    vi.mocked(api.getSelectableModelPools).mockResolvedValue(createHomeSelectablePools())
     vi.mocked(api.createTask).mockResolvedValue({
       task: {
         id: "task_created",
@@ -249,9 +311,9 @@ describe("HomePage project and terminal preset flow", () => {
       targetDurationSec: 30,
       audioStrategy: "native_plus_tts_ducked",
       subtitleStrategy: "whisper_cpp",
+      modeId: "high_quality",
     })
     expect(payload).not.toHaveProperty("aspectRatio")
-    expect(payload).not.toHaveProperty("modeId")
     expect(payload).not.toHaveProperty("channelId")
     expect(payload).not.toHaveProperty("generationMode")
     expect(payload).not.toHaveProperty("modelOverrides")
@@ -361,6 +423,7 @@ describe("HomePage P0-P2 launch console behavior", () => {
     vi.mocked(api.bootstrap).mockResolvedValue(createBootstrapResponse())
     vi.mocked(api.listTasks).mockResolvedValue({ tasks: [] })
     vi.mocked(api.listProjects).mockResolvedValue({ projects: createProjects() })
+    vi.mocked(api.getSelectableModelPools).mockResolvedValue(createHomeSelectablePools())
     vi.mocked(api.createTask).mockResolvedValue({
       task: createRecentHomeTask({
         id: "task_created",

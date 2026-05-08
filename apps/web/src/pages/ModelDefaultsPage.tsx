@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react"
-import { Link, useLocation } from "react-router-dom"
 import {
   api,
+  MODEL_CONTROL_MODE_LABELS,
   MODEL_CONTROL_SLOT_LABELS,
   MODEL_CONTROL_SLOT_ORDER,
   type ModelControlDefaults,
@@ -10,43 +10,17 @@ import {
   type SelectableModelPoolsResponse,
 } from "../api"
 import { getModelCallProfile } from "../lib/model-control-display"
+import {
+  ConfirmActionDialog,
+  type ConfirmActionState,
+  EffectiveDefaultsPanel,
+  ModelControlNav,
+  ModelControlNotice,
+} from "../features/model-control/toolkit"
 
 type SlotDraft = Partial<Record<(typeof MODEL_CONTROL_SLOT_ORDER)[number], string>>
 
 const emptySlotDraft: SlotDraft = {}
-const ACTIVE_TASK_CREATION_MODE: ModelControlModeId = "high_quality"
-
-function ModelControlNav() {
-  const location = useLocation()
-
-  const navItems = [
-    { to: "/model-control-center", label: "总览" },
-    { to: "/model-control-center/providers", label: "接入方管理" },
-    { to: "/model-control-center/registry", label: "模型列表" },
-    { to: "/model-control-center/defaults", label: "默认模型" },
-  ]
-
-  return (
-    <div className="model-control-nav">
-      {navItems.map((item) => {
-        const isActive =
-          item.to === "/model-control-center"
-            ? location.pathname === item.to
-            : location.pathname.startsWith(item.to)
-
-        return (
-          <Link
-            key={item.to}
-            className={isActive ? "model-control-nav__item model-control-nav__item--active" : "model-control-nav__item"}
-            to={item.to}
-          >
-            {item.label}
-          </Link>
-        )
-      })}
-    </div>
-  )
-}
 
 function buildDraftFromDefaults(defaults: ModelControlDefaults | null, modeId?: ModelControlModeId) {
   return MODEL_CONTROL_SLOT_ORDER.reduce<SlotDraft>((accumulator, slot) => {
@@ -97,10 +71,12 @@ function describeOption(option: SelectableModelOption | null | undefined) {
 export function ModelDefaultsPage() {
   const [defaults, setDefaults] = useState<ModelControlDefaults | null>(null)
   const [taskCreationSelectable, setTaskCreationSelectable] = useState<SelectableModelPoolsResponse | null>(null)
+  const [selectedModeId, setSelectedModeId] = useState<ModelControlModeId>("high_quality")
   const [globalDraft, setGlobalDraft] = useState<SlotDraft>(emptySlotDraft)
   const [taskCreationDraft, setTaskCreationDraft] = useState<SlotDraft>(emptySlotDraft)
   const [loading, setLoading] = useState(true)
   const [savingScope, setSavingScope] = useState<string | null>(null)
+  const [confirmAction, setConfirmAction] = useState<ConfirmActionState>(null)
   const [error, setError] = useState("")
   const [notice, setNotice] = useState("")
 
@@ -111,13 +87,13 @@ export function ModelDefaultsPage() {
     try {
       const [defaultsResponse, taskCreationSelectableResponse] = await Promise.all([
         api.getModelDefaults(),
-        api.getSelectableModelPools(ACTIVE_TASK_CREATION_MODE),
+        api.getSelectableModelPools(selectedModeId),
       ])
 
       setDefaults(defaultsResponse)
       setTaskCreationSelectable(taskCreationSelectableResponse)
       setGlobalDraft(buildDraftFromDefaults(defaultsResponse))
-      setTaskCreationDraft(buildDraftFromDefaults(defaultsResponse, ACTIVE_TASK_CREATION_MODE))
+      setTaskCreationDraft(buildDraftFromDefaults(defaultsResponse, selectedModeId))
     } catch (err) {
       setError(err instanceof Error ? err.message : "默认模型加载失败")
     } finally {
@@ -127,7 +103,7 @@ export function ModelDefaultsPage() {
 
   useEffect(() => {
     void loadDefaults()
-  }, [])
+  }, [selectedModeId])
 
   const globalOptions = useMemo(
     () =>
@@ -158,7 +134,7 @@ export function ModelDefaultsPage() {
       })
       setDefaults(response)
       setGlobalDraft(buildDraftFromDefaults(response))
-      setTaskCreationDraft(buildDraftFromDefaults(response, ACTIVE_TASK_CREATION_MODE))
+      setTaskCreationDraft(buildDraftFromDefaults(response, selectedModeId))
       setNotice("全局兜底模型已保存。当前以系统返回结果为准。")
     } catch (err) {
       setError(err instanceof Error ? err.message : "保存全局兜底模型失败")
@@ -168,23 +144,47 @@ export function ModelDefaultsPage() {
   }
 
   async function handleSaveTaskCreationDefaults() {
-    setSavingScope(ACTIVE_TASK_CREATION_MODE)
+    setSavingScope(selectedModeId)
     setError("")
     setNotice("")
 
     try {
-      const response = await api.updateModeModelDefaults(ACTIVE_TASK_CREATION_MODE, {
+      const response = await api.updateModeModelDefaults(selectedModeId, {
         assignments: toAssignmentPayload(taskCreationDraft),
       })
       setDefaults(response)
       setGlobalDraft(buildDraftFromDefaults(response))
-      setTaskCreationDraft(buildDraftFromDefaults(response, ACTIVE_TASK_CREATION_MODE))
-      setNotice("新任务默认模型已保存。")
+      setTaskCreationDraft(buildDraftFromDefaults(response, selectedModeId))
+      setNotice(`${MODEL_CONTROL_MODE_LABELS[selectedModeId]}默认模型已保存。后续新任务会使用新的生效组合，历史任务不受影响。`)
     } catch (err) {
       setError(err instanceof Error ? err.message : "保存新任务默认模型失败")
     } finally {
       setSavingScope(null)
     }
+  }
+
+  function requestSaveGlobal() {
+    setConfirmAction({
+      title: "保存全局兜底模型",
+      body: "全局兜底只在当前模式没有单独指定模型时生效。保存后只影响后续新任务，历史任务会继续使用创建时冻结的模型快照。",
+      confirmLabel: "保存全局兜底",
+      onConfirm: async () => {
+        await handleSaveGlobal()
+        setConfirmAction(null)
+      },
+    })
+  }
+
+  function requestSaveModeDefaults() {
+    setConfirmAction({
+      title: `保存${MODEL_CONTROL_MODE_LABELS[selectedModeId]}默认模型`,
+      body: "这会改变该模式后续新任务的默认模型组合，不会影响已经创建的任务。保存前请确认四个槽位的当前有效值符合预期。",
+      confirmLabel: `保存${MODEL_CONTROL_MODE_LABELS[selectedModeId]}`,
+      onConfirm: async () => {
+        await handleSaveTaskCreationDefaults()
+        setConfirmAction(null)
+      },
+    })
   }
 
   return (
@@ -199,17 +199,44 @@ export function ModelDefaultsPage() {
             </p>
           </div>
           <div className="planning-summary-tags">
-            <span className="pill pill--sm">全局兜底</span>
-            <span className="pill pill--sm">新任务默认</span>
-            <span className="pill pill--sm">创建时固定</span>
+            <span className="info-chip">全局兜底</span>
+            <span className="info-chip">新任务默认</span>
+            <span className="info-chip">创建时固定</span>
           </div>
         </div>
 
         <ModelControlNav />
       </section>
 
-      {error ? <div className="alert">{error}</div> : null}
-      {notice ? <div className="empty-state">{notice}</div> : null}
+      {error ? <ModelControlNotice tone="error">{error}</ModelControlNotice> : null}
+      {notice ? <ModelControlNotice tone="success">{notice}</ModelControlNotice> : null}
+
+      <section className="card">
+        <div className="section-header section-header--stack">
+          <div>
+            <h3>新任务模式</h3>
+            <p className="section-note">
+              先选择要维护的模式，再调整该模式的新任务默认模型。这里的当前生效组合会在任务创建时固定下来。
+            </p>
+          </div>
+          <div className="segmented-control segmented-control--compact" role="radiogroup" aria-label="新任务模式">
+            {(["high_quality", "mass_production"] as ModelControlModeId[]).map((modeId) => (
+              <button
+                aria-checked={selectedModeId === modeId}
+                className={selectedModeId === modeId ? "segment segment--active" : "segment"}
+                key={modeId}
+                onClick={() => setSelectedModeId(modeId)}
+                role="radio"
+                type="button"
+              >
+                {MODEL_CONTROL_MODE_LABELS[modeId]}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <EffectiveDefaultsPanel modeId={selectedModeId} defaults={defaults} pools={taskCreationSelectable} />
+      </section>
 
       <section className="card">
         <div className="section-header">
@@ -279,7 +306,7 @@ export function ModelDefaultsPage() {
               <button className="ghost-button" onClick={() => setGlobalDraft(buildDraftFromDefaults(defaults))} type="button">
                 恢复到系统当前值
               </button>
-              <button className="primary-button" disabled={savingScope === "global"} onClick={() => void handleSaveGlobal()} type="button">
+              <button className="primary-button" disabled={savingScope === "global"} onClick={requestSaveGlobal} type="button">
                 {savingScope === "global" ? "保存中..." : "保存全局兜底"}
               </button>
             </div>
@@ -289,8 +316,8 @@ export function ModelDefaultsPage() {
 
       <section className="card">
         <div className="section-header">
-          <h3>新任务默认</h3>
-          <span className="muted">这就是新任务创建时真正会固定下来的模型组合</span>
+          <h3>{MODEL_CONTROL_MODE_LABELS[selectedModeId]}默认</h3>
+          <span className="muted">这就是该模式新任务创建时真正会固定下来的模型组合</span>
         </div>
 
         {loading ? (
@@ -337,23 +364,29 @@ export function ModelDefaultsPage() {
             <div className="action-row">
               <button
                 className="ghost-button"
-                onClick={() => setTaskCreationDraft(buildDraftFromDefaults(defaults, ACTIVE_TASK_CREATION_MODE))}
+                onClick={() => setTaskCreationDraft(buildDraftFromDefaults(defaults, selectedModeId))}
                 type="button"
               >
                 恢复到系统当前值
               </button>
               <button
                 className="primary-button"
-                disabled={savingScope === ACTIVE_TASK_CREATION_MODE}
-                onClick={() => void handleSaveTaskCreationDefaults()}
+                disabled={savingScope === selectedModeId}
+                onClick={requestSaveModeDefaults}
                 type="button"
               >
-                {savingScope === ACTIVE_TASK_CREATION_MODE ? "保存中..." : "保存新任务默认"}
+                {savingScope === selectedModeId ? "保存中..." : `保存${MODEL_CONTROL_MODE_LABELS[selectedModeId]}`}
               </button>
             </div>
           </>
         )}
       </section>
+
+      <ConfirmActionDialog
+        busy={Boolean(savingScope)}
+        onClose={() => setConfirmAction(null)}
+        state={confirmAction}
+      />
     </div>
   )
 }

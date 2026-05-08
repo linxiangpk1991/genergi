@@ -1,10 +1,18 @@
 import { z } from "zod"
+import { modelRoutingProfileSchema, normalizeRoutingCapability } from "./model-routing.js"
 
 export const providerTypeSchema = z.enum([
+  "direct-openai",
   "anthropic-compatible",
+  "anthropic-native",
+  "gemini-compatible",
   "openai-compatible",
   "edge-tts",
   "azure-tts",
+  "litellm-proxy",
+  "portkey-gateway",
+  "helicone-gateway",
+  "custom-http",
   "custom",
 ])
 export type ProviderType = z.infer<typeof providerTypeSchema>
@@ -85,6 +93,7 @@ export function normalizeModelCapability(
   slotType: ModelSlotType,
   providerModelId: string,
   capabilityJson: Record<string, unknown> = {},
+  providerType?: string | null,
 ): Record<string, unknown> {
   const capability = { ...capabilityJson }
 
@@ -123,7 +132,12 @@ export function normalizeModelCapability(
     }
   }
 
-  return capability
+  return normalizeRoutingCapability({
+    slotType,
+    providerModelId,
+    providerType,
+    capabilityJson: capability,
+  })
 }
 
 export const providerRecordSchema = z.object({
@@ -170,6 +184,7 @@ export const modelRecordSchema = z.object({
   providerModelId: z.string().min(1),
   displayName: z.string().min(1),
   capabilityJson: modelCapabilitySchema,
+  routingProfile: modelRoutingProfileSchema.optional(),
   lifecycleStatus: modelControlStatusSchema,
   lastValidatedAt: z.string().nullable(),
   lastValidationError: z.string().nullable(),
@@ -252,6 +267,7 @@ export const resolvedSlotSnapshotSchema = z.object({
   providerModelId: z.string().min(1),
   displayName: z.string().min(1),
   capabilityJson: modelCapabilitySchema,
+  routingProfile: modelRoutingProfileSchema.optional(),
   validatedAt: z.string().nullable(),
 })
 export type ResolvedSlotSnapshot = z.infer<typeof resolvedSlotSnapshotSchema>

@@ -5,10 +5,17 @@ import {
   buildBatchDashboardUrl,
   buildTaskReviewUrl,
   getSubtitleStrategyLabel,
+  MODEL_CONTROL_MODE_LABELS,
+  MODEL_CONTROL_SLOT_LABELS,
+  MODEL_CONTROL_SLOT_ORDER,
   type BootstrapResponse,
+  type ModelControlModeId,
+  type ModelControlSlotType,
   type ProjectRecord,
   type RenderSpec,
+  type SelectableModelOption,
   type SubtitleStrategy,
+  type SelectableModelPoolsResponse,
   type TerminalPresetId,
   type TaskSummary,
 } from "../api";
@@ -36,10 +43,12 @@ type DraftPayload = {
   title: string
   script: string
   projectId: string
+  modeId: ModelControlModeId
   terminalPresetId: TerminalPresetId
   targetDurationSec: number
   audioStrategy: "tts_only" | "native_plus_tts_ducked"
   subtitleStrategy: SubtitleStrategy
+  modelOverrides?: Partial<Record<ModelControlSlotType, string>>
 }
 
 const TERMINAL_PRESET_OPTIONS: Array<{
@@ -139,6 +148,7 @@ const SUBTITLE_STRATEGY_OPTIONS: Array<{
 ]
 
 const LAUNCH_DRAFT_STORAGE_KEY = "genergi.task-launch.draft.v1"
+const DEFAULT_LAUNCH_MODE_ID: ModelControlModeId = "high_quality"
 
 const SCRIPT_TEMPLATES = [
   {
@@ -200,10 +210,43 @@ function getChannelLabel(channelIds: string[]) {
   return labels[primaryChannel] ?? primaryChannel
 }
 
+function describeSelectableModel(option: SelectableModelOption | null | undefined) {
+  if (!option) {
+    return "使用默认"
+  }
+  const provider = option.providerDisplayName ? ` / ${option.providerDisplayName}` : ""
+  const modelId = option.providerModelId ? ` · ${option.providerModelId}` : ""
+  return `${option.displayName}${provider}${modelId}`
+}
+
+function buildModelOverridePayload(overrides: Partial<Record<ModelControlSlotType, string>>) {
+  return MODEL_CONTROL_SLOT_ORDER.reduce<NonNullable<DraftPayload["modelOverrides"]>>((accumulator, slot) => {
+    const value = overrides[slot]
+    if (!value) {
+      return accumulator
+    }
+    accumulator[slot] = value
+    return accumulator
+  }, {})
+}
+
+function toCreateTaskOverrides(overrides: Partial<Record<ModelControlSlotType, string>>) {
+  const draft = buildModelOverridePayload(overrides)
+  const entries = Object.entries(draft) as Array<[ModelControlSlotType, string]>
+  if (!entries.length) {
+    return undefined
+  }
+  return entries.reduce<NonNullable<Parameters<typeof api.createTask>[0]["modelOverrides"]>>((accumulator, [slot, value]) => {
+    accumulator[slot] = slot === "ttsProvider" ? { providerId: value } : { modelId: value }
+    return accumulator
+  }, {})
+}
+
 export function HomePage() {
   const [bootstrap, setBootstrap] = useState<BootstrapResponse | null>(null);
   const [projects, setProjects] = useState<ProjectRecord[]>([]);
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
+  const [modelPools, setModelPools] = useState<SelectableModelPoolsResponse | null>(null);
   const storedDraft = useMemo(() => getStoredLaunchDraft(), []);
   const [title, setTitle] = useState(storedDraft?.title ?? "");
   const [script, setScript] = useState(storedDraft?.script ?? "");
@@ -216,6 +259,9 @@ export function HomePage() {
   );
   const [subtitleStrategy, setSubtitleStrategy] = useState<SubtitleStrategy>(
     storedDraft?.subtitleStrategy ?? "tts_aligned",
+  );
+  const [modelOverrides, setModelOverrides] = useState<Partial<Record<ModelControlSlotType, string>>>(
+    storedDraft?.modelOverrides ?? {},
   );
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -234,14 +280,16 @@ export function HomePage() {
   useEffect(() => {
     async function load() {
       try {
-        const [bootstrapRes, taskRes, projectRes] = await Promise.all([
+        const [bootstrapRes, taskRes, projectRes, modelPoolRes] = await Promise.all([
           api.bootstrap(),
           api.listTasks(),
           api.listProjects(),
+          api.getSelectableModelPools(DEFAULT_LAUNCH_MODE_ID).catch(() => null),
         ]);
         setBootstrap(bootstrapRes);
         setTasks(taskRes.tasks);
         setProjects(projectRes.projects);
+        setModelPools(modelPoolRes);
         if (!storedDraft?.projectId && projectRes.projects[0]?.id) {
           setProjectId(projectRes.projects[0].id);
         }
@@ -297,17 +345,19 @@ export function HomePage() {
             title,
             script,
             projectId,
+            modeId: DEFAULT_LAUNCH_MODE_ID,
             terminalPresetId,
             targetDurationSec,
             audioStrategy,
             subtitleStrategy,
+            modelOverrides: buildModelOverridePayload(modelOverrides),
           } satisfies DraftPayload),
         )
       } else {
         window.localStorage.removeItem(LAUNCH_DRAFT_STORAGE_KEY)
       }
     } catch {}
-  }, [audioStrategy, projectId, script, subtitleStrategy, targetDurationSec, terminalPresetId, title])
+  }, [audioStrategy, modelOverrides, projectId, script, subtitleStrategy, targetDurationSec, terminalPresetId, title])
 
   useEffect(() => {
     const hasDraft = Boolean(title.trim() || script.trim())
@@ -381,6 +431,10 @@ export function HomePage() {
     [projectId, script, targetDurationSec, tasks, title],
   )
   const channelLabel = getChannelLabel(selectedProject?.defaultChannelIds ?? ["tiktok"])
+  const modelOverrideCount = MODEL_CONTROL_SLOT_ORDER.filter((slot) => Boolean(modelOverrides[slot])).length
+  const modelOverrideLabels = MODEL_CONTROL_SLOT_ORDER
+    .filter((slot) => Boolean(modelOverrides[slot]))
+    .map((slot) => MODEL_CONTROL_SLOT_LABELS[slot])
   const readyCheckCount = launchReadiness.checks.filter((check) => check.status === "ready").length
   const riskyCheckCount = launchReadiness.checks.filter((check) => check.status === "risk").length
   const suggestionCheckCount = launchReadiness.checks.filter((check) => check.status === "suggestion").length
@@ -435,6 +489,7 @@ export function HomePage() {
     }
     setTitle("")
     setScript("")
+    setModelOverrides({})
     setFieldErrors({})
     setDraftRestored(false)
   }
@@ -455,14 +510,17 @@ export function HomePage() {
     setNotice("");
     setCreatedTask(null);
     try {
+      const nextModelOverrides = toCreateTaskOverrides(modelOverrides)
       const result = await api.createTask({
         title,
         script,
         projectId,
+        modeId: DEFAULT_LAUNCH_MODE_ID,
         terminalPresetId,
         targetDurationSec,
         audioStrategy,
         subtitleStrategy,
+        ...(nextModelOverrides ? { modelOverrides: nextModelOverrides } : {}),
       });
       setTasks((current) => [result.task, ...current]);
       const successMessage = getCreateTaskNotice(result.task);
@@ -474,6 +532,7 @@ export function HomePage() {
       });
       setTitle("");
       setScript("");
+      setModelOverrides({});
       setFieldErrors({});
       setConfirmOpen(false);
       setDraftRestored(false);
@@ -781,6 +840,59 @@ export function HomePage() {
                   </button>
                 ))}
               </div>
+              <div className="model-override-panel">
+                <div className="section-header">
+                  <div>
+                    <h3>本次模型覆盖</h3>
+                    <p className="section-note">
+                      默认使用模型管理里的{MODEL_CONTROL_MODE_LABELS[DEFAULT_LAUNCH_MODE_ID]}组合。只有排查质量问题或临时试模型时，才需要单独覆盖。
+                    </p>
+                  </div>
+                  {modelOverrideCount ? (
+                    <button className="ghost-button ghost-button--compact" onClick={() => setModelOverrides({})} type="button">
+                      清空覆盖
+                    </button>
+                  ) : null}
+                </div>
+                <div className="model-override-grid">
+                  {MODEL_CONTROL_SLOT_ORDER.map((slot) => {
+                    const pool = modelPools?.pools?.[slot]
+                    const effectiveOption = pool?.options.find((option) => option.recordId === pool.effectiveId)
+                    const overrideOption = pool?.options.find((option) => option.recordId === modelOverrides[slot])
+                    return (
+                      <label className={modelOverrides[slot] ? "slot-override-card slot-override-card--overridden" : "slot-override-card"} key={slot}>
+                        <div className="slot-override-card__header">
+                          <strong>{MODEL_CONTROL_SLOT_LABELS[slot]}</strong>
+                          <span className={modelOverrides[slot] ? "info-chip info-chip--accent" : "info-chip"}>
+                            {modelOverrides[slot] ? "本次覆盖" : "使用默认"}
+                          </span>
+                        </div>
+                        <select
+                          className="input"
+                          value={modelOverrides[slot] ?? ""}
+                          onChange={(event) =>
+                            setModelOverrides((current) => ({
+                              ...current,
+                              [slot]: event.target.value || undefined,
+                            }))
+                          }
+                        >
+                          <option value="">使用默认：{describeSelectableModel(effectiveOption)}</option>
+                          {(pool?.options ?? []).map((option) => (
+                            <option key={option.recordId} value={option.recordId}>
+                              {describeSelectableModel(option)}
+                            </option>
+                          ))}
+                        </select>
+                        <div className="slot-override-card__summary">
+                          <span>当前生效：{describeSelectableModel(overrideOption ?? effectiveOption)}</span>
+                          <span>可选模型：{pool?.options.length ?? 0}</span>
+                        </div>
+                      </label>
+                    )
+                  })}
+                </div>
+              </div>
             </details>
           </section>
         </form>
@@ -803,6 +915,7 @@ export function HomePage() {
             <div className="metric-row"><span>成片组织</span><strong>{productionEstimate.routeLabel}</strong></div>
             <div className="metric-row"><span>预计预算</span><strong>¥{productionEstimate.estimatedBudgetCny.toFixed(2)}</strong></div>
             <div className="metric-row"><span>音频/字幕</span><strong>{selectedAudioStrategy.label} / {getSubtitleStrategyLabel(subtitleStrategy)}</strong></div>
+            <div className="metric-row"><span>模型覆盖</span><strong>{modelOverrideCount ? modelOverrideLabels.join("、") : "使用默认组合"}</strong></div>
             <div className="metric-row"><span>审核流程</span><strong>生成方案与关键画面先审</strong></div>
             <div className="launch-risk-summary">
               <span>风险 {riskyCheckCount}</span>
@@ -871,6 +984,7 @@ export function HomePage() {
               <div className="metric-row"><span>时长 / 画幅</span><strong>{targetDurationSec}s / {renderSpec.aspectRatio}</strong></div>
               <div className="metric-row"><span>镜头 / 预算</span><strong>{productionEstimate.sceneCount} 段 / ¥{productionEstimate.estimatedBudgetCny.toFixed(2)}</strong></div>
               <div className="metric-row"><span>生成流程</span><strong>先审后生成</strong></div>
+              <div className="metric-row"><span>模型设置</span><strong>{modelOverrideCount ? `本次覆盖 ${modelOverrideCount} 项` : "使用默认组合"}</strong></div>
               <div className="metric-row"><span>相似任务</span><strong>{similarTasks.matches.length ? `${similarTasks.matches.length} 条需确认` : "未发现明显重复"}</strong></div>
             </div>
             <div className={`launch-preflight launch-preflight--${launchReadiness.level}`}>

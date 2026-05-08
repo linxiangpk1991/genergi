@@ -519,6 +519,94 @@ describe("API model control registry routes", () => {
     expect(listedModel?.capabilityJson.endpointStyle).toBe("responses")
   })
 
+  it("keeps lifecycle changes explicit and resets validation after model call settings change", async () => {
+    const { app, cookie } = await createAuthedApp()
+
+    const providerResponse = await app.request("/api/model-control/providers", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: cookie,
+      },
+      body: JSON.stringify({
+        providerKey: "openai-direct",
+        providerType: "direct-openai",
+        displayName: "OpenAI Direct",
+        endpointUrl: "https://api.openai.com/v1",
+        authType: "bearer_token",
+        secret: "test-secret",
+      }),
+    })
+    const providerPayload = (await providerResponse.json()) as { provider: { id: string } }
+
+    const validateProvider = await app.request(`/api/model-control/validation/providers/${providerPayload.provider.id}`, {
+      method: "POST",
+      headers: { Cookie: cookie },
+    })
+    expect(validateProvider.status).toBe(200)
+
+    const modelResponse = await app.request("/api/model-control/models", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: cookie,
+      },
+      body: JSON.stringify({
+        modelKey: "gpt-5-5-direct",
+        providerId: providerPayload.provider.id,
+        slotType: "textModel",
+        providerModelId: "gpt-5.5",
+        displayName: "GPT-5.5 Direct",
+        capabilityJson: {},
+      }),
+    })
+    const modelPayload = (await modelResponse.json()) as { model: { id: string } }
+
+    const validateModel = await app.request(`/api/model-control/validation/models/${modelPayload.model.id}`, {
+      method: "POST",
+      headers: { Cookie: cookie },
+    })
+    expect(validateModel.status).toBe(200)
+
+    const unsafeStatusPatch = await app.request(`/api/model-control/models/${modelPayload.model.id}`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: cookie,
+      },
+      body: JSON.stringify({
+        lifecycleStatus: "available",
+      }),
+    })
+    expect(unsafeStatusPatch.status).toBe(409)
+
+    const configPatch = await app.request(`/api/model-control/models/${modelPayload.model.id}`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: cookie,
+      },
+      body: JSON.stringify({
+        providerModelId: "gpt-5.5-latest",
+      }),
+    })
+    expect(configPatch.status).toBe(200)
+    const configPayload = (await configPatch.json()) as {
+      model: {
+        lifecycleStatus: string
+        lastValidatedAt: string | null
+        lastValidationError: string | null
+        routingProfile: Record<string, unknown>
+      }
+    }
+
+    expect(configPayload.model.lifecycleStatus).toBe("draft")
+    expect(configPayload.model.lastValidatedAt).toBeNull()
+    expect(configPayload.model.lastValidationError).toContain("模型配置已变更")
+    expect(configPayload.model.routingProfile.wireApi).toBe("responses")
+    expect(configPayload.model.routingProfile.endpointPath).toBe("/v1/responses")
+  })
+
   it("infers Gemini image records as Generate Content when older capability JSON is missing transport", async () => {
     const { app, cookie } = await createAuthedApp()
 

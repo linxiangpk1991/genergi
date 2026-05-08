@@ -1524,6 +1524,9 @@ function resolveOpenAITextWireApi(input: {
   capabilityJson?: Record<string, unknown>
 }) {
   const explicit =
+    (typeof input.capabilityJson?.routingProfile === "object" && input.capabilityJson.routingProfile && !Array.isArray(input.capabilityJson.routingProfile)
+      ? (input.capabilityJson.routingProfile as Record<string, unknown>).wireApi
+      : undefined) ??
     input.capabilityJson?.wireApi ??
     input.capabilityJson?.wire_api ??
     input.capabilityJson?.textWireApi ??

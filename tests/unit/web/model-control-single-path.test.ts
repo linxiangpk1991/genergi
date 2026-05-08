@@ -170,7 +170,7 @@ describe("model control single-path surfaces", () => {
     vi.clearAllMocks()
   })
 
-  it("loads defaults page around one task-creation default instead of dual modes", async () => {
+  it("loads defaults page with a visible high-quality and mass-production mode switch", async () => {
     await act(async () => {
       root.render(
         createElement(
@@ -192,10 +192,10 @@ describe("model control single-path surfaces", () => {
 
     await waitFor(() => {
       const text = container.textContent ?? ""
-      expect(text).toContain("新任务默认")
-      expect(text).not.toContain("量产模式")
-      expect(text).not.toContain("高质量模式")
-      expect(text).not.toContain("模式默认")
+      expect(text).toContain("高质量模式默认")
+      expect(text).toContain("量产模式")
+      expect(text).toContain("当前新任务生效组合")
+      expect(text).toContain("默认与覆盖")
     })
   })
 

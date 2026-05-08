@@ -2,17 +2,48 @@ import type { ModelControlSlotType, ModelRegistryRecord, ProviderRegistryRecord 
 
 export const PROVIDER_TYPE_OPTIONS = [
   {
+    value: "direct-openai",
+    label: "OpenAI 官方",
+    description: "直接连接 OpenAI 官方接口，GPT-5/GPT-5.5 文案规划会走 Responses API。",
+  },
+  {
     value: "openai-compatible",
-    label: "OpenAI / OpenAI 兼容",
-    description: "适合 OpenAI Responses、Chat Completions、Images，以及兼容代理。",
+    label: "OpenAI 兼容代理",
+    description: "适合自建网关、LiteLLM、聚合代理等兼容 OpenAI 路径的服务。",
+  },
+  {
+    value: "litellm-proxy",
+    label: "LiteLLM 网关",
+    description: "适合统一接入多家模型、后续做 fallback、预算和路由策略。",
+  },
+  {
+    value: "portkey-gateway",
+    label: "Portkey 网关",
+    description: "适合外部网关治理、策略路由和审计场景。",
+  },
+  {
+    value: "helicone-gateway",
+    label: "Helicone 网关",
+    description: "适合加强调用观测、成本追踪和请求日志。",
   },
   {
     value: "anthropic-compatible",
     label: "Anthropic / Claude 兼容",
     description: "适合 Claude Messages API 或兼容代理。",
   },
+  {
+    value: "anthropic-native",
+    label: "Anthropic 官方",
+    description: "直接连接 Claude Messages API。",
+  },
+  {
+    value: "gemini-compatible",
+    label: "Gemini / Google 兼容",
+    description: "适合 Gemini Generate Content 或兼容服务。",
+  },
   { value: "edge-tts", label: "Edge TTS", description: "本地/免费配音兜底，不需要接口地址和密钥。" },
   { value: "azure-tts", label: "Azure TTS", description: "Azure 语音服务接入。" },
+  { value: "custom-http", label: "自定义 HTTP", description: "有固定 HTTP 接口但不完全兼容现有协议，需要工程确认。" },
   { value: "custom", label: "自定义接入", description: "特殊服务或临时代理，需工程确认调用方式。" },
 ]
 
@@ -90,10 +121,18 @@ export function normalizeTextWireApiForUi(value: unknown, providerModelId = "") 
 }
 
 export function getModelCallProfile(model: Pick<ModelRegistryRecord, "slotType" | "providerModelId" | "capabilityJson">) {
+  const routingProfile =
+    typeof model.capabilityJson.routingProfile === "object" &&
+    model.capabilityJson.routingProfile &&
+    !Array.isArray(model.capabilityJson.routingProfile)
+      ? (model.capabilityJson.routingProfile as Record<string, unknown>)
+      : null
+
   if (model.slotType === "textModel") {
     const gpt5Family = model.providerModelId.trim().toLowerCase().startsWith("gpt-5")
     const wireApi = normalizeTextWireApiForUi(
-      model.capabilityJson.wireApi ??
+      routingProfile?.wireApi ??
+        model.capabilityJson.wireApi ??
         model.capabilityJson.wire_api ??
         model.capabilityJson.textWireApi ??
         (gpt5Family ? "responses" : model.capabilityJson.endpointStyle),
@@ -104,6 +143,13 @@ export function getModelCallProfile(model: Pick<ModelRegistryRecord, "slotType" 
 
   if (model.slotType === "imageModel") {
     const transport = normalizeCapabilityValue(model.capabilityJson.imageTransport)
+    const wireApi = normalizeCapabilityValue(routingProfile?.wireApi)
+    if (wireApi === "gemini_generate_content") {
+      return IMAGE_TRANSPORT_OPTIONS[1]
+    }
+    if (wireApi === "images_generations") {
+      return IMAGE_TRANSPORT_OPTIONS[0]
+    }
     if (transport === "gemini_generate_content" || model.providerModelId.toLowerCase().includes("gemini")) {
       return IMAGE_TRANSPORT_OPTIONS[1]
     }

@@ -5,6 +5,7 @@ import type {
   ResolvedSlotSnapshot,
   TaskModelOverride,
 } from "@genergi/shared"
+import { buildModelRoutingProfile } from "@genergi/shared"
 import { getModelDefaultsDocument, listModelRecords, listProviderRecords } from "./registry-store.js"
 
 const ALL_SLOTS: ModelSlotType[] = [
@@ -74,6 +75,12 @@ export async function resolveEffectiveSlots(input: {
         providerModelId: provider.providerType,
         displayName: provider.displayName,
         capabilityJson: {},
+        routingProfile: buildModelRoutingProfile({
+          slotType,
+          providerModelId: provider.providerType,
+          providerType: provider.providerType,
+          capabilityJson: {},
+        }),
         validatedAt: provider.lastValidatedAt,
       })
       continue
@@ -101,6 +108,12 @@ export async function resolveEffectiveSlots(input: {
         providerModelId: overrideModel.providerModelId,
         displayName: overrideModel.displayName,
         capabilityJson: overrideModel.capabilityJson ?? {},
+        routingProfile: buildModelRoutingProfile({
+          slotType,
+          providerModelId: overrideModel.providerModelId,
+          providerType: provider.providerType,
+          capabilityJson: overrideModel.capabilityJson ?? {},
+        }),
         validatedAt: overrideModel.lastValidatedAt,
       })
       continue
@@ -131,6 +144,12 @@ export async function resolveEffectiveSlots(input: {
       providerModelId: model.providerModelId,
       displayName: model.displayName,
       capabilityJson: model.capabilityJson ?? {},
+      routingProfile: buildModelRoutingProfile({
+        slotType,
+        providerModelId: model.providerModelId,
+        providerType: provider.providerType,
+        capabilityJson: model.capabilityJson ?? {},
+      }),
       validatedAt: model.lastValidatedAt,
     })
   }
