@@ -560,6 +560,15 @@ function getAssetSourceLabel(asset: AssetRecord) {
   return `来自：${normalizeOperatorCopy(asset.label)}`
 }
 
+function formatRuntimeStatus(service?: RuntimeStatusResponse["runtime"]["api"] | null) {
+  if (!service) {
+    return "暂未同步 · 等待状态回传"
+  }
+
+  const statusLabel = service.status === "healthy" ? "正常" : "需检查"
+  return `${statusLabel} · ${normalizeOperatorCopy(service.message) || "暂无补充信息"}`
+}
+
 function getAssetModelLabel(asset: AssetRecord) {
   return asset.modelTrace?.label ? `使用模型：${asset.modelTrace.label}` : "使用模型：这条素材没有留下模型记录"
 }
@@ -1764,15 +1773,15 @@ export function AssetsPage() {
             <div className="task-list compact-list">
               <div className="task-item">
                 <strong>后台接口</strong>
-                <span>{runtime?.api.status ?? "unknown"} · {normalizeOperatorCopy(runtime?.api.message) || "N/A"}</span>
+                <span>{formatRuntimeStatus(runtime?.api)}</span>
               </div>
               <div className="task-item">
                 <strong>生成服务</strong>
-                <span>{runtime?.worker.status ?? "unknown"} · {normalizeOperatorCopy(runtime?.worker.message) || "N/A"}</span>
+                <span>{formatRuntimeStatus(runtime?.worker)}</span>
               </div>
               <div className="task-item">
                 <strong>排队服务</strong>
-                <span>{runtime?.redis.status ?? "unknown"} · {normalizeOperatorCopy(runtime?.redis.message) || "N/A"}</span>
+                <span>{formatRuntimeStatus(runtime?.redis)}</span>
               </div>
             </div>
           </section>

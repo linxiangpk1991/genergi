@@ -50,7 +50,7 @@ function getWorkspaceMeta(pathname: string) {
     }
   }
 
-  if (pathname === "/asset-center") {
+  if (pathname === "/asset-center" || pathname === "/assets-delivery") {
     return {
       title: "素材与交付",
       description: "查看成片、字幕、脚本、分段视频和排查用文件。",
@@ -140,7 +140,7 @@ export function AppLayout({ children, operator }: AppLayoutProps) {
           </div>
           <div className="workspace-toolbar-actions">
             {!isHome ? <Link className="ghost-button" to="/">返回任务入口</Link> : null}
-            <span className="pill pill--accent">English Output</span>
+            <span className="pill pill--accent">英文成片</span>
             <span className="operator-badge">管理员：{operator}</span>
             <button className="ghost-button" onClick={() => void handleLogout()}>
               退出登录

@@ -80,6 +80,26 @@ function getTaskStageLabel(task: TaskSummary) {
   return normalizeOperatorCopy(task.currentStageLabel || task.statusDetail) || getStatusLabel(task.status)
 }
 
+function formatRuntimeStatus(service?: RuntimeStatusResponse["runtime"]["api"] | null) {
+  if (!service) {
+    return "暂未同步"
+  }
+
+  return service.status === "healthy" ? "正常" : "需检查"
+}
+
+function getKeyframeCountLabel(task: TaskSummary) {
+  if (typeof task.keyframeCount === "number" && Number.isFinite(task.keyframeCount) && task.keyframeCount > 0) {
+    return `${task.keyframeCount} 张`
+  }
+
+  if (typeof task.targetDurationSec === "number" && Number.isFinite(task.targetDurationSec) && task.targetDurationSec > 0) {
+    return `${Math.max(1, Math.ceil(task.targetDurationSec / 15))} 张`
+  }
+
+  return "待确认"
+}
+
 function isAttentionTask(task: TaskSummary) {
   return (
     task.status === "failed" ||
@@ -363,9 +383,9 @@ export function TaskManagementPage() {
       </header>
 
       <section className="task-control-status">
-        <span>后台接口：{runtime?.api.status ?? "unknown"}</span>
-        <span>生成服务：{runtime?.worker.status ?? "unknown"}</span>
-        <span>排队服务：{runtime?.redis.status ?? "unknown"}</span>
+        <span>后台接口：{formatRuntimeStatus(runtime?.api)}</span>
+        <span>生成服务：{formatRuntimeStatus(runtime?.worker)}</span>
+        <span>排队服务：{formatRuntimeStatus(runtime?.redis)}</span>
         <span>当前筛选：{filteredTasks.length}</span>
       </section>
 
@@ -564,7 +584,7 @@ export function TaskManagementPage() {
                         <strong>{task.title}</strong>
                         <div className="mono">{task.id}</div>
                         <div className="muted">
-                          关键画面 {task.keyframeCount ?? Math.max(1, Math.ceil(task.targetDurationSec / 15))} 张 · {task.keyframeGenerationMode === "single" ? "单张生成" : "批量生成"}
+                          关键画面 {getKeyframeCountLabel(task)} · {task.keyframeGenerationMode === "single" ? "单张生成" : "批量生成"}
                         </div>
                         <ModelUsageSummary compact source={task.modelUsage} />
                         {task.archivedAt ? <span className="status-pill status-pill--disabled">已归档</span> : null}

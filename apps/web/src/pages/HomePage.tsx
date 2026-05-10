@@ -720,7 +720,7 @@ export function HomePage({ operator }: { operator?: string } = {}) {
           </p>
         </div>
         <div className="topbar-actions">
-          <span className="pill">English Output</span>
+          <span className="pill">英文成片</span>
           <span className="pill">单一路径</span>
           <span className="pill">TikTok 默认</span>
           <span className="pill pill--accent">审核优先</span>
@@ -883,7 +883,7 @@ export function HomePage({ operator }: { operator?: string } = {}) {
                 setScript(event.target.value)
                 setFieldErrors((current) => ({ ...current, script: undefined }))
               }}
-              placeholder="直接写你想表达的内容、卖点、情绪、目标人群和转化目标，不需要写技术参数或模型指令。"
+              placeholder="直接写你想表达的内容、卖点、情绪、目标人群和转化目标，不需要写专业参数。"
             />
             {fieldErrors.script ? <div className="field-error" id="launch-script-error">{fieldErrors.script}</div> : null}
 

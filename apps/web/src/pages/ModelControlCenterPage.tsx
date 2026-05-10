@@ -201,7 +201,7 @@ export function ModelControlCenterPage() {
       </div>
       <section className="model-control-link-grid">
         <Link className="card model-control-link-card" to="/model-control-center/providers">
-          <div className="eyebrow">Step 1</div>
+          <div className="eyebrow">第 1 步</div>
           <h3>接入方管理</h3>
           <p>维护接口地址、鉴权方式、密钥状态和最近一次校验结果。</p>
           <div className="planning-inline">
@@ -212,7 +212,7 @@ export function ModelControlCenterPage() {
         </Link>
 
         <Link className="card model-control-link-card" to="/model-control-center/registry">
-          <div className="eyebrow">Step 2</div>
+          <div className="eyebrow">第 2 步</div>
           <h3>模型列表</h3>
           <p>为文案、图片、视频、配音登记可运行模型，并记录能力说明和绑定的接入方。</p>
           <div className="planning-inline">
@@ -223,7 +223,7 @@ export function ModelControlCenterPage() {
         </Link>
 
         <Link className="card model-control-link-card" to="/model-control-center/defaults">
-          <div className="eyebrow">Step 3</div>
+          <div className="eyebrow">第 3 步</div>
           <h3>默认模型</h3>
           <p>设置全局兜底和新任务默认模型，让运营知道新任务会用哪套组合。</p>
           <div className="planning-inline">

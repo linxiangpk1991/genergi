@@ -235,4 +235,42 @@ describe("TaskManagementPage", () => {
       expect(container.textContent).toContain("Veo 3.1 Portrait HD")
     })
   })
+
+  it("uses readable runtime labels and keeps old task keyframe counts understandable", async () => {
+    vi.mocked(api.runtimeStatus).mockResolvedValue({
+      runtime: {
+        api: { name: "api", status: "healthy", updatedAt: "now", message: "ok" },
+        worker: { name: "worker", status: "degraded", updatedAt: "now", message: "worker unavailable" },
+        redis: { name: "redis", status: "healthy", updatedAt: "now", message: "ok" },
+      },
+    })
+    vi.mocked(api.listTasks).mockResolvedValue({
+      tasks: [
+        createTask({
+          id: "task_legacy",
+          title: "Legacy task without keyframe count",
+          keyframeCount: null,
+          targetDurationSec: null,
+        }),
+      ] as any,
+    })
+
+    await act(async () => {
+      root.render(createElement(MemoryRouter, null, createElement(TaskManagementPage)))
+    })
+
+    const allTasksTab = Array.from(container.querySelectorAll("button")).find((button) => button.textContent?.includes("全部任务"))
+    await act(async () => {
+      allTasksTab?.click()
+    })
+
+    await waitFor(() => {
+      const text = container.textContent ?? ""
+      expect(text).toContain("后台接口：正常")
+      expect(text).toContain("生成服务：需检查")
+      expect(text).toContain("关键画面 待确认 · 批量生成")
+      expect(text).not.toContain("unknown")
+      expect(text).not.toContain("关键画面 张")
+    })
+  })
 })

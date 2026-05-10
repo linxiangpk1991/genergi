@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { Navigate, Route, Routes } from "react-router-dom"
+import { Navigate, Route, Routes, useLocation } from "react-router-dom"
 import { api } from "./api"
 import { AppLayout } from "./components/AppLayout"
 import { BatchDashboardPage } from "./pages/BatchDashboardPage"
@@ -20,6 +20,11 @@ import { HelpFeaturePage } from "./pages/HelpFeaturePage"
 import { HelpReleaseTimelinePage } from "./pages/HelpReleaseTimelinePage"
 import { TaskReviewPage } from "./pages/TaskReviewPage"
 import { ProjectLibraryPage } from "./pages/ProjectLibraryPage"
+
+function AssetDeliveryRedirect() {
+  const location = useLocation()
+  return <Navigate to={`/asset-center${location.search}`} replace />
+}
 
 export function App() {
   const [authLoading, setAuthLoading] = useState(true)
@@ -57,6 +62,7 @@ export function App() {
         <Route path="/task-review" element={<TaskReviewPage />} />
         <Route path="/project-library" element={<ProjectLibraryPage />} />
         <Route path="/asset-center" element={<AssetsPage />} />
+        <Route path="/assets-delivery" element={<AssetDeliveryRedirect />} />
         <Route path="/user-center" element={<UserCenterPage operator={operator} />} />
         <Route path="/help-center" element={<HelpCenterHomePage />} />
         <Route path="/help-center/workflows/:workflowId" element={<HelpWorkflowPage />} />

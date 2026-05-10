@@ -73,6 +73,15 @@ function canResumeFailedTask(task: TaskSummary) {
   return task.status === "failed"
 }
 
+function formatRuntimeStatus(service?: RuntimeStatusResponse["runtime"]["api"] | null) {
+  if (!service) {
+    return "暂未同步 · 等待状态回传"
+  }
+
+  const statusLabel = service.status === "healthy" ? "正常" : "需检查"
+  return `${statusLabel} · ${normalizeOperatorCopy(service.message) || "暂无补充信息"}`
+}
+
 function isStaleRunningTask(task: TaskSummary) {
   if (task.status !== "running") {
     return false
@@ -748,8 +757,8 @@ export function BatchDashboardPage() {
               <p>{capacityState.recommendation}</p>
             </div>
             <div className="task-list compact-list">
-              <div className="task-item"><strong>生成服务</strong><span>{runtime?.worker.status ?? "unknown"} · {normalizeOperatorCopy(runtime?.worker.message) || "N/A"}</span></div>
-              <div className="task-item"><strong>排队服务</strong><span>{runtime?.redis.status ?? "unknown"} · {normalizeOperatorCopy(runtime?.redis.message) || "N/A"}</span></div>
+              <div className="task-item"><strong>生成服务</strong><span>{formatRuntimeStatus(runtime?.worker)}</span></div>
+              <div className="task-item"><strong>排队服务</strong><span>{formatRuntimeStatus(runtime?.redis)}</span></div>
               <div className={metrics.blockedCount || metrics.failedCount ? "task-item task-item--blocked" : "task-item"}>
                 <strong>业务队列</strong>
                 <span>
@@ -802,9 +811,9 @@ export function BatchDashboardPage() {
           <section className="card card--compact">
             <h3>系统健康</h3>
             <div className="task-list compact-list">
-              <div className="task-item"><strong>生成服务</strong><span>{runtime?.worker.status ?? "unknown"} · {normalizeOperatorCopy(runtime?.worker.message) || "N/A"}</span></div>
-              <div className="task-item"><strong>后台接口</strong><span>{runtime?.api.status ?? "unknown"} · {normalizeOperatorCopy(runtime?.api.message) || "N/A"}</span></div>
-              <div className="task-item"><strong>排队服务</strong><span>{runtime?.redis.status ?? "unknown"} · {normalizeOperatorCopy(runtime?.redis.message) || "N/A"}</span></div>
+              <div className="task-item"><strong>生成服务</strong><span>{formatRuntimeStatus(runtime?.worker)}</span></div>
+              <div className="task-item"><strong>后台接口</strong><span>{formatRuntimeStatus(runtime?.api)}</span></div>
+              <div className="task-item"><strong>排队服务</strong><span>{formatRuntimeStatus(runtime?.redis)}</span></div>
             </div>
           </section>
 

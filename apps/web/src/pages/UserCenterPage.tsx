@@ -231,7 +231,7 @@ export function UserCenterPage({ operator }: { operator?: string } = {}) {
     <div className="workspace-page user-center-page">
       <div className="topbar">
         <div>
-          <div className="eyebrow">User Center</div>
+          <div className="eyebrow">账号管理</div>
           <h1>用户中心</h1>
           <p>维护登录账号、昵称、启停状态和密码。当前共 {userCount} 个用户。</p>
         </div>
