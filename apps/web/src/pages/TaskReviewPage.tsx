@@ -101,6 +101,7 @@ export function TaskReviewPage() {
   const [failedKeyframeImages, setFailedKeyframeImages] = useState<string[]>([])
   const [selectedQualityReasons, setSelectedQualityReasons] = useState<QualityIssueCategory[]>([])
   const [qualityNote, setQualityNote] = useState("")
+  const [emptyFilterNotice, setEmptyFilterNotice] = useState<ReviewTaskFilter | null>(null)
 
   const selectedTaskId = detail?.taskId ?? routeTaskId
   const selectedTaskOption = useMemo(
@@ -111,23 +112,16 @@ export function TaskReviewPage() {
     () => tasks.filter((task) => matchesReviewTaskFilter(task, taskFilter)),
     [taskFilter, tasks],
   )
-  const taskOptions = useMemo(() => {
-    if (!selectedTaskOption) {
-      return filteredTasks
-    }
-
-    if (filteredTasks.some((task) => task.id === selectedTaskOption.id)) {
-      return filteredTasks
-    }
-
-    return [selectedTaskOption, ...filteredTasks]
-  }, [filteredTasks, selectedTaskOption])
+  const taskOptions = useMemo(() => filteredTasks, [filteredTasks])
+  const filterHasNoTasks = taskFilter !== "all" && emptyFilterNotice === taskFilter && filteredTasks.length === 0
 
   function handleTaskFilterChange(nextFilter: ReviewTaskFilter) {
     setTaskFilter(nextFilter)
+    setEmptyFilterNotice(null)
 
     const nextTasks = tasks.filter((task) => matchesReviewTaskFilter(task, nextFilter))
     if (!nextTasks.length) {
+      setEmptyFilterNotice(nextFilter)
       return
     }
 
@@ -447,6 +441,11 @@ export function TaskReviewPage() {
     return <div className="empty-state">正在加载审核内容...</div>
   }
 
+  const visibleDetail = filterHasNoTasks ? null : detail
+  const visibleBlueprint = filterHasNoTasks ? null : blueprint
+  const visibleReview = filterHasNoTasks ? null : review
+  const visiblePendingNotice = filterHasNoTasks ? "" : blueprintPendingNotice
+
   return (
     <div className="workspace-page">
       <header className="topbar">
@@ -456,67 +455,75 @@ export function TaskReviewPage() {
           <p>先把脚本、关键画面和尺寸看一遍，确认方向对了再继续生成正片。</p>
         </div>
         <div className="topbar-actions">
-          {blueprint ? <span className="pill">{`方案 v${blueprint.version}`}</span> : null}
-          {detail?.blueprintStatus ? <span className="pill pill--accent">{getBlueprintStatusLabel(detail.blueprintStatus)}</span> : null}
+          {visibleBlueprint ? <span className="pill">{`方案 v${visibleBlueprint.version}`}</span> : null}
+          {visibleDetail?.blueprintStatus ? <span className="pill pill--accent">{getBlueprintStatusLabel(visibleDetail.blueprintStatus)}</span> : null}
         </div>
       </header>
 
       {error ? <div className="alert">{error}</div> : null}
-      {blueprintPendingNotice ? <div className="alert alert--warning">{blueprintPendingNotice}</div> : null}
+      {visiblePendingNotice ? <div className="alert alert--warning">{visiblePendingNotice}</div> : null}
 
       <div className="workspace-grid">
         <section className="card card--main">
+          <label className="field-label">任务选择</label>
+          <div className="planning-summary-tags" style={{ marginBottom: 12 }}>
+            <button
+              className={taskFilter === "ready_for_review" ? "primary-button" : "ghost-button"}
+              onClick={() => handleTaskFilterChange("ready_for_review")}
+              type="button"
+            >
+              待审核
+            </button>
+            <button
+              className={taskFilter === "approved" ? "primary-button" : "ghost-button"}
+              onClick={() => handleTaskFilterChange("approved")}
+              type="button"
+            >
+              已通过
+            </button>
+            <button
+              className={taskFilter === "rejected" ? "primary-button" : "ghost-button"}
+              onClick={() => handleTaskFilterChange("rejected")}
+              type="button"
+            >
+              已驳回
+            </button>
+            <button
+              className={taskFilter === "all" ? "primary-button" : "ghost-button"}
+              onClick={() => handleTaskFilterChange("all")}
+              type="button"
+            >
+              显示全部任务
+            </button>
+          </div>
           {taskOptions.length ? (
-            <>
-              <label className="field-label">任务选择</label>
-              <div className="planning-summary-tags" style={{ marginBottom: 12 }}>
-                <button
-                  className={taskFilter === "ready_for_review" ? "primary-button" : "ghost-button"}
-                  onClick={() => handleTaskFilterChange("ready_for_review")}
-                  type="button"
-                >
-                  待审核
-                </button>
-                <button
-                  className={taskFilter === "approved" ? "primary-button" : "ghost-button"}
-                  onClick={() => handleTaskFilterChange("approved")}
-                  type="button"
-                >
-                  已通过
-                </button>
-                <button
-                  className={taskFilter === "rejected" ? "primary-button" : "ghost-button"}
-                  onClick={() => handleTaskFilterChange("rejected")}
-                  type="button"
-                >
-                  已驳回
-                </button>
-                <button
-                  className={taskFilter === "all" ? "primary-button" : "ghost-button"}
-                  onClick={() => handleTaskFilterChange("all")}
-                  type="button"
-                >
-                  显示全部任务
-                </button>
-              </div>
-              <select
-                className="input"
-                value={selectedTaskId ?? taskOptions[0]?.id ?? ""}
-                onChange={(event) => {
-                  setLoading(true)
-                  setError("")
-                  syncTaskRoute(event.target.value, false)
-                }}
-              >
-                {taskOptions.map((task) => (
-                  <option key={task.id} value={task.id}>
-                    {task.title} · {task.projectId} · {getBlueprintStatusLabel(task.blueprintStatus)}
-                  </option>
-                ))}
-              </select>
-            </>
-          ) : null}
+            <select
+              className="input"
+              value={selectedTaskId ?? taskOptions[0]?.id ?? ""}
+              onChange={(event) => {
+                setLoading(true)
+                setError("")
+                syncTaskRoute(event.target.value, false)
+              }}
+            >
+              {taskOptions.map((task) => (
+                <option key={task.id} value={task.id}>
+                  {task.title} · {task.projectId} · {getBlueprintStatusLabel(task.blueprintStatus)}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <div className="empty-inline">
+              {taskFilter === "approved"
+                ? "当前没有已通过的任务。"
+                : taskFilter === "rejected"
+                  ? "当前没有已驳回的任务。"
+                  : "当前没有待审核任务。"}
+            </div>
+          )}
 
+          {!filterHasNoTasks ? (
+            <>
           <div className="section-header">
             <h2>生成方案总览</h2>
             <div className="section-actions">
@@ -532,7 +539,7 @@ export function TaskReviewPage() {
                   </button>
                   <button
                     className="secondary-button"
-                    disabled={!blueprint || submitting || !hasRejectReason}
+                    disabled={!blueprint || submitting}
                     onClick={() => void submitReview("rejected")}
                     type="button"
                   >
@@ -763,7 +770,7 @@ export function TaskReviewPage() {
                       </button>
                       <button
                         className="secondary-button"
-                        disabled={!blueprint || submitting || !hasRejectReason}
+                        disabled={!blueprint || submitting}
                         onClick={() => void submitReview("rejected")}
                         type="button"
                       >
@@ -777,32 +784,43 @@ export function TaskReviewPage() {
               </section>
             )) ?? <div className="empty-inline">当前还没有分段生成方案。</div>}
           </div>
+            </>
+          ) : null}
         </section>
 
         <aside className="side-panel">
           <section className="card card--compact">
             <h3>当前状态</h3>
             <div className="task-list compact-list">
-              <div className="task-item">
-                <strong>方案版本</strong>
-                <span>{blueprint ? `方案 v${blueprint.version}` : "未生成"}</span>
-              </div>
-              <div className="task-item">
-                <strong>方案状态</strong>
-                <span>{getBlueprintStatusLabel(blueprint?.status ?? detail?.blueprintStatus)}</span>
-              </div>
-              <div className="task-item">
-                <strong>最新审核</strong>
-                <span>{review ? `${getReviewDecisionLabel(review.decision)} · ${review.decidedAt}` : "暂无"}</span>
-              </div>
-              <div className="task-item">
-                <strong>视频内容</strong>
-                <span>{sourceScript ? "已加载" : "暂无"}</span>
-              </div>
-              <div className="task-item">
-                <strong>音频策略</strong>
-                <span>{getAudioStrategyLabel(detail?.taskRunConfig.audioStrategy)}</span>
-              </div>
+              {filterHasNoTasks ? (
+                <div className="task-item">
+                  <strong>当前筛选</strong>
+                  <span>暂无任务</span>
+                </div>
+              ) : (
+                <>
+                  <div className="task-item">
+                    <strong>方案版本</strong>
+                    <span>{visibleBlueprint ? `方案 v${visibleBlueprint.version}` : "未生成"}</span>
+                  </div>
+                  <div className="task-item">
+                    <strong>方案状态</strong>
+                    <span>{getBlueprintStatusLabel(visibleBlueprint?.status ?? visibleDetail?.blueprintStatus)}</span>
+                  </div>
+                  <div className="task-item">
+                    <strong>最新审核</strong>
+                    <span>{visibleReview ? `${getReviewDecisionLabel(visibleReview.decision)} · ${visibleReview.decidedAt}` : "暂无"}</span>
+                  </div>
+                  <div className="task-item">
+                    <strong>视频内容</strong>
+                    <span>{sourceScript ? "已加载" : "暂无"}</span>
+                  </div>
+                  <div className="task-item">
+                    <strong>音频策略</strong>
+                    <span>{getAudioStrategyLabel(visibleDetail?.taskRunConfig.audioStrategy)}</span>
+                  </div>
+                </>
+              )}
             </div>
           </section>
 

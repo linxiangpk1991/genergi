@@ -612,6 +612,91 @@ describe("TaskReviewPage", () => {
     })
   })
 
+  it("tells the operator what is missing when rejecting without a reason", async () => {
+    await act(async () => {
+      root.render(
+        createElement(
+          MemoryRouter,
+          { initialEntries: ["/task-review?taskId=task_reviewable"] },
+          createElement(
+            Routes,
+            null,
+            createElement(Route, { path: "/task-review", element: createElement(TaskReviewPage) }),
+          ),
+        ),
+      )
+    })
+
+    await waitFor(() => {
+      expect(container.textContent ?? "").toContain("驳回并重做方案")
+    })
+
+    const rejectButton = Array.from(container.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("驳回并重做方案"),
+    ) as HTMLButtonElement | undefined
+    expect(rejectButton).toBeTruthy()
+    expect(rejectButton?.disabled).toBe(false)
+
+    await act(async () => {
+      rejectButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }))
+    })
+
+    await waitFor(() => {
+      expect(container.textContent ?? "").toContain("请先选择一个驳回原因")
+    })
+    expect(vi.mocked(api.reviewTaskBlueprint)).not.toHaveBeenCalled()
+  })
+
+  it("shows an empty filter state instead of keeping a stale review task", async () => {
+    await act(async () => {
+      root.render(
+        createElement(
+          MemoryRouter,
+          { initialEntries: ["/task-review?taskId=task_reviewable"] },
+          createElement(
+            Routes,
+            null,
+            createElement(Route, { path: "/task-review", element: createElement(TaskReviewPage) }),
+          ),
+        ),
+      )
+    })
+
+    await waitFor(() => {
+      expect(container.textContent ?? "").toContain("Reviewable task")
+    })
+
+    const approvedFilterButton = Array.from(container.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("已通过"),
+    )
+    expect(approvedFilterButton).toBeTruthy()
+
+    await act(async () => {
+      approvedFilterButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }))
+    })
+
+    await waitFor(() => {
+      const text = container.textContent ?? ""
+      expect(text).toContain("当前没有已通过的任务。")
+      expect(text).not.toContain("生成方案总览")
+      expect(container.querySelector("select")).toBeNull()
+    })
+
+    const pendingFilterButton = Array.from(container.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("待审核"),
+    )
+    expect(pendingFilterButton).toBeTruthy()
+
+    await act(async () => {
+      pendingFilterButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }))
+    })
+
+    await waitFor(() => {
+      expect(container.textContent ?? "").toContain("生成方案总览")
+      expect(container.querySelector("select")).toBeTruthy()
+    })
+  })
+
   it("shows a waiting state instead of a raw error when a pending task has no blueprint yet", async () => {
     vi.mocked(api.listTasks).mockResolvedValue({
       tasks: [
@@ -1897,4 +1982,3 @@ describe("TaskReviewPage", () => {
     })
   })
 })
-
