@@ -14,6 +14,8 @@ const MODEL_CONTROL_NAV_ITEMS = [
   { to: "/model-control-center/providers", label: "接入方" },
   { to: "/model-control-center/registry", label: "模型路由" },
   { to: "/model-control-center/defaults", label: "默认与覆盖" },
+  { to: "/model-control-center/routing", label: "路由策略" },
+  { to: "/model-control-center/diagnostics", label: "诊断记录" },
 ]
 
 const STATUS_COPY: Record<ModelControlLifecycleStatus, { label: string; detail: string }> = {
@@ -63,8 +65,15 @@ export function CapabilityTags({ value }: { value: Record<string, unknown> | nul
   if (!entries.length) {
     return <span className="muted">尚未提供能力元数据</span>
   }
+  const supportsBatchKeyframes = value?.supportsBatchKeyframes === true
+  const maxBatchImages = typeof value?.maxBatchImages === "number" ? value.maxBatchImages : null
   return (
     <div className="capability-list">
+      {supportsBatchKeyframes ? (
+        <code className="capability-pill capability-pill--success">
+          批量关键画面: 最多 {maxBatchImages ?? 4} 张
+        </code>
+      ) : null}
       {entries.map(([key, item]) => (
         <code className="capability-pill" key={key}>
           {key}: {String(item)}

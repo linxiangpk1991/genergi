@@ -100,6 +100,12 @@ export function ProjectLibraryPage() {
         <div className="planning-summary-card">
           <strong>{selectedProject?.name ?? "未选择项目"}</strong>
           <span>{selectedProject?.description ?? "当前项目还没有额外说明。"}</span>
+          <span>
+            默认画面参考：{selectedProject?.defaultVisualSeedInput || "未设置，任务启动时按视频内容自动补全"}
+          </span>
+          <span>
+            默认关键画面生成：{selectedProject?.defaultKeyframeGenerationMode === "single" ? "单张生成" : "批量生成"}
+          </span>
         </div>
 
         <div className="task-list">

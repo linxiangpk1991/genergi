@@ -9,8 +9,12 @@ import {
   MODEL_CONTROL_SLOT_LABELS,
   MODEL_CONTROL_SLOT_ORDER,
   type BootstrapResponse,
+  type BilingualUnderstandingPreview,
+  type EnglishExecutionBrief,
   type ModelControlModeId,
   type ModelControlSlotType,
+  type ModelRoutePreviewResponse,
+  type KeyframeGenerationMode,
   type ProjectRecord,
   type RenderSpec,
   type SelectableModelOption,
@@ -42,10 +46,12 @@ type FieldErrors = {
 type DraftPayload = {
   title: string
   script: string
+  visualSeedInput: string
   projectId: string
   modeId: ModelControlModeId
   terminalPresetId: TerminalPresetId
   targetDurationSec: number
+  keyframeGenerationMode: KeyframeGenerationMode
   audioStrategy: "tts_only" | "native_plus_tts_ducked"
   subtitleStrategy: SubtitleStrategy
   modelOverrides?: Partial<Record<ModelControlSlotType, string>>
@@ -219,6 +225,33 @@ function describeSelectableModel(option: SelectableModelOption | null | undefine
   return `${option.displayName}${provider}${modelId}`
 }
 
+function getRoutePreviewSlot(
+  routePreview: ModelRoutePreviewResponse | null,
+  slot: ModelControlSlotType,
+) {
+  return routePreview?.slots.find((item) => item.slotType === slot) ?? null
+}
+
+function getOverrideOption(
+  modelPools: SelectableModelPoolsResponse | null,
+  slot: ModelControlSlotType,
+  modelId: string | undefined,
+) {
+  if (!modelId) {
+    return null
+  }
+  return modelPools?.pools?.[slot]?.options.find((option) => option.recordId === modelId) ?? null
+}
+
+function getRoutePreviewTone(routePreview: ModelRoutePreviewResponse | null) {
+  if (!routePreview) {
+    return "suggestion"
+  }
+  return routePreview.warnings.length || routePreview.slots.some((slot) => slot.warnings.length)
+    ? "suggestion"
+    : "ready"
+}
+
 function buildModelOverridePayload(overrides: Partial<Record<ModelControlSlotType, string>>) {
   return MODEL_CONTROL_SLOT_ORDER.reduce<NonNullable<DraftPayload["modelOverrides"]>>((accumulator, slot) => {
     const value = overrides[slot]
@@ -247,13 +280,19 @@ export function HomePage() {
   const [projects, setProjects] = useState<ProjectRecord[]>([]);
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
   const [modelPools, setModelPools] = useState<SelectableModelPoolsResponse | null>(null);
+  const [modelRoutePreview, setModelRoutePreview] = useState<ModelRoutePreviewResponse | null>(null);
+  const [modelRoutePreviewError, setModelRoutePreviewError] = useState("");
   const storedDraft = useMemo(() => getStoredLaunchDraft(), []);
   const [title, setTitle] = useState(storedDraft?.title ?? "");
   const [script, setScript] = useState(storedDraft?.script ?? "");
+  const [visualSeedInput, setVisualSeedInput] = useState(storedDraft?.visualSeedInput ?? "");
   const [projectId, setProjectId] = useState(storedDraft?.projectId ?? "project_default");
   const [terminalPresetId, setTerminalPresetId] =
     useState<TerminalPresetId>(storedDraft?.terminalPresetId ?? "phone_portrait");
   const [targetDurationSec, setTargetDurationSec] = useState(storedDraft?.targetDurationSec ?? 30);
+  const [keyframeGenerationMode, setKeyframeGenerationMode] = useState<KeyframeGenerationMode>(
+    storedDraft?.keyframeGenerationMode ?? "batch",
+  );
   const [audioStrategy, setAudioStrategy] = useState<"tts_only" | "native_plus_tts_ducked">(
     storedDraft?.audioStrategy ?? "tts_only",
   );
@@ -269,6 +308,10 @@ export function HomePage() {
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [notice, setNotice] = useState("");
   const [createdTask, setCreatedTask] = useState<TaskSummary | null>(null);
+  const [understandingPreview, setUnderstandingPreview] = useState<BilingualUnderstandingPreview | null>(null);
+  const [executionBrief, setExecutionBrief] = useState<EnglishExecutionBrief | null>(null);
+  const [understandingLoading, setUnderstandingLoading] = useState(false);
+  const [understandingError, setUnderstandingError] = useState("");
   const [tasksUpdatedAt, setTasksUpdatedAt] = useState<string>("");
   const [floatingToast, setFloatingToast] = useState<FloatingToastState | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -280,16 +323,21 @@ export function HomePage() {
   useEffect(() => {
     async function load() {
       try {
-        const [bootstrapRes, taskRes, projectRes, modelPoolRes] = await Promise.all([
+        const [bootstrapRes, taskRes, projectRes, modelPoolRes, modelRoutePreviewRes] = await Promise.all([
           api.bootstrap(),
           api.listTasks(),
           api.listProjects(),
           api.getSelectableModelPools(DEFAULT_LAUNCH_MODE_ID).catch(() => null),
+          api.getModelRoutePreview(DEFAULT_LAUNCH_MODE_ID).catch((err) => {
+            setModelRoutePreviewError(err instanceof Error ? err.message : "模型路线预览加载失败")
+            return null
+          }),
         ]);
         setBootstrap(bootstrapRes);
         setTasks(taskRes.tasks);
         setProjects(projectRes.projects);
         setModelPools(modelPoolRes);
+        setModelRoutePreview(modelRoutePreviewRes);
         if (!storedDraft?.projectId && projectRes.projects[0]?.id) {
           setProjectId(projectRes.projects[0].id);
         }
@@ -336,7 +384,7 @@ export function HomePage() {
   }, [floatingToast]);
 
   useEffect(() => {
-    const hasDraft = Boolean(title.trim() || script.trim())
+    const hasDraft = Boolean(title.trim() || script.trim() || visualSeedInput.trim())
     try {
       if (hasDraft) {
         window.localStorage.setItem(
@@ -344,10 +392,12 @@ export function HomePage() {
           JSON.stringify({
             title,
             script,
+            visualSeedInput,
             projectId,
             modeId: DEFAULT_LAUNCH_MODE_ID,
             terminalPresetId,
             targetDurationSec,
+            keyframeGenerationMode,
             audioStrategy,
             subtitleStrategy,
             modelOverrides: buildModelOverridePayload(modelOverrides),
@@ -357,10 +407,10 @@ export function HomePage() {
         window.localStorage.removeItem(LAUNCH_DRAFT_STORAGE_KEY)
       }
     } catch {}
-  }, [audioStrategy, modelOverrides, projectId, script, subtitleStrategy, targetDurationSec, terminalPresetId, title])
+  }, [audioStrategy, keyframeGenerationMode, modelOverrides, projectId, script, subtitleStrategy, targetDurationSec, terminalPresetId, title, visualSeedInput])
 
   useEffect(() => {
-    const hasDraft = Boolean(title.trim() || script.trim())
+    const hasDraft = Boolean(title.trim() || script.trim() || visualSeedInput.trim())
     function handleBeforeUnload(event: BeforeUnloadEvent) {
       if (!hasDraft || submitting) {
         return
@@ -371,12 +421,28 @@ export function HomePage() {
 
     window.addEventListener("beforeunload", handleBeforeUnload)
     return () => window.removeEventListener("beforeunload", handleBeforeUnload)
-  }, [script, submitting, title])
+  }, [script, submitting, title, visualSeedInput])
 
   const selectedProject = useMemo(
     () => projects.find((project) => project.id === projectId) ?? null,
     [projects, projectId],
   );
+  useEffect(() => {
+    if (!selectedProject) {
+      return
+    }
+    if (!storedDraft?.visualSeedInput && !visualSeedInput.trim() && selectedProject.defaultVisualSeedInput) {
+      setVisualSeedInput(selectedProject.defaultVisualSeedInput)
+    }
+    if (!storedDraft?.keyframeGenerationMode && selectedProject.defaultKeyframeGenerationMode) {
+      setKeyframeGenerationMode(selectedProject.defaultKeyframeGenerationMode)
+    }
+  }, [
+    selectedProject,
+    storedDraft?.keyframeGenerationMode,
+    storedDraft?.visualSeedInput,
+    visualSeedInput,
+  ])
   const renderSpec = getRenderSpec(terminalPresetId);
   const selectedAudioStrategy =
     AUDIO_STRATEGY_OPTIONS.find((item) => item.id === audioStrategy) ?? AUDIO_STRATEGY_OPTIONS[0];
@@ -389,11 +455,17 @@ export function HomePage() {
     targetDurationSec <= 8
       ? "单条成片"
       : "多段成片";
+  const keyframeCount = Math.max(1, Math.ceil(targetDurationSec / 15));
+  useEffect(() => {
+    setUnderstandingPreview(null)
+    setExecutionBrief(null)
+    setUnderstandingError("")
+  }, [script, visualSeedInput, targetDurationSec, keyframeCount])
   const routePreviewDetail =
     routePreview === "单条成片"
       ? "这次内容会优先保持一条完整表达，减少切换感。"
       : "这次内容会按多段组织后再合成为完整成片，优先保证表达稳定。";
-  const planningSummary = "系统会尽量保留原始文案的主题、人物、场景和内容方向，只做视频结构整理。";
+  const planningSummary = "系统会尽量保留视频内容的主题、人物、场景和内容方向，只做视频结构整理。";
   const taskStatusSummary = useMemo(() => {
     const runningCount = tasks.filter(
       (task) => task.status === "running",
@@ -435,6 +507,13 @@ export function HomePage() {
   const modelOverrideLabels = MODEL_CONTROL_SLOT_ORDER
     .filter((slot) => Boolean(modelOverrides[slot]))
     .map((slot) => MODEL_CONTROL_SLOT_LABELS[slot])
+  const modelRoutePreviewTone = getRoutePreviewTone(modelRoutePreview)
+  const modelRouteWarningCount =
+    modelRoutePreview?.slots.reduce((count, slot) => count + slot.warnings.length, 0) ??
+    (modelRoutePreviewError ? 1 : 0)
+  const modelRouteSummary = modelOverrideCount
+    ? `本次已手动覆盖 ${modelOverrideCount} 个环节，提交时会优先使用你选的模型。`
+    : modelRoutePreview?.summary
   const readyCheckCount = launchReadiness.checks.filter((check) => check.status === "ready").length
   const riskyCheckCount = launchReadiness.checks.filter((check) => check.status === "risk").length
   const suggestionCheckCount = launchReadiness.checks.filter((check) => check.status === "suggestion").length
@@ -457,7 +536,7 @@ export function HomePage() {
       nextErrors.title = "请填写任务名称"
     }
     if (!script.trim()) {
-      nextErrors.script = "请填写原始文案"
+      nextErrors.script = "请填写视频内容"
     }
     setFieldErrors(nextErrors)
     if (nextErrors.title || nextErrors.script) {
@@ -466,7 +545,7 @@ export function HomePage() {
       setError("请先补齐必填字段")
       setFloatingToast({
         tone: "error",
-        message: "请先补齐任务名称和原始文案",
+        message: "请先补齐任务名称和视频内容",
       })
       focusFirstInvalidField(nextErrors)
       return false
@@ -489,6 +568,11 @@ export function HomePage() {
     }
     setTitle("")
     setScript("")
+    setVisualSeedInput("")
+    setUnderstandingPreview(null)
+    setExecutionBrief(null)
+    setUnderstandingError("")
+    setKeyframeGenerationMode("batch")
     setModelOverrides({})
     setFieldErrors({})
     setDraftRestored(false)
@@ -497,6 +581,39 @@ export function HomePage() {
   function applyScriptTemplate(templateBody: string) {
     setScript((current) => (current.trim() ? `${current.trim()}\n\n${templateBody}` : templateBody))
     setFieldErrors((current) => ({ ...current, script: undefined }))
+  }
+
+  async function handleGenerateUnderstandingPreview() {
+    if (!script.trim()) {
+      setFieldErrors((current) => ({ ...current, script: "请先填写视频内容" }))
+      setUnderstandingError("请先填写视频内容，系统会根据这段内容理解主题和画面方向。")
+      scriptInputRef.current?.focus()
+      return
+    }
+
+    setUnderstandingLoading(true)
+    setUnderstandingError("")
+    try {
+      const result = await api.createUnderstandingPreview({
+        sourceBrief: script,
+        visualSeedInput: visualSeedInput.trim() || null,
+        targetDurationSec,
+        keyframeCount,
+        keepCharacterConsistent: true,
+      })
+      setUnderstandingPreview(result.understandingPreview)
+      setExecutionBrief(result.executionBrief)
+      setFloatingToast({
+        tone: "success",
+        message: "已生成中英预览，正式生成会使用英文画面提示词。",
+      })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "生成理解预览失败"
+      setUnderstandingError(message)
+      setFloatingToast({ tone: "error", message })
+    } finally {
+      setUnderstandingLoading(false)
+    }
   }
 
   async function handleCreateTask() {
@@ -518,6 +635,12 @@ export function HomePage() {
         modeId: DEFAULT_LAUNCH_MODE_ID,
         terminalPresetId,
         targetDurationSec,
+        visualSeedInput: visualSeedInput.trim() || null,
+        keepCharacterConsistent: true,
+        keyframeGenerationMode,
+        keyframeCount,
+        understandingPreview,
+        executionBrief,
         audioStrategy,
         subtitleStrategy,
         ...(nextModelOverrides ? { modelOverrides: nextModelOverrides } : {}),
@@ -532,6 +655,11 @@ export function HomePage() {
       });
       setTitle("");
       setScript("");
+      setVisualSeedInput("");
+      setUnderstandingPreview(null);
+      setExecutionBrief(null);
+      setUnderstandingError("");
+      setKeyframeGenerationMode("batch");
       setModelOverrides({});
       setFieldErrors({});
       setConfirmOpen(false);
@@ -567,7 +695,7 @@ export function HomePage() {
           <div className="eyebrow">GENERGI Command Center</div>
           <h1>新建生产任务</h1>
           <p>
-            按 3 步新建任务：先确认项目和输出规格，再写清原始文案，最后检查风险后提交。提交后会先进入审核。
+            按 3 步新建任务：先确认项目和输出规格，再写清视频内容，可选补充画面参考，最后检查风险后提交。
           </p>
         </div>
         <div className="topbar-actions">
@@ -582,7 +710,7 @@ export function HomePage() {
       {draftRestored ? (
         <section className="planning-summary-card launch-draft-card">
           <strong>已恢复未提交草稿</strong>
-          <span>标题、原始文案和输出设置已从本机草稿恢复。提交成功后会自动清理草稿。</span>
+          <span>任务名称、视频内容、画面参考和输出设置已从本机草稿恢复。提交成功后会自动清理草稿。</span>
           <button className="ghost-button ghost-button--compact" onClick={() => setDraftRestored(false)} type="button">
             知道了
           </button>
@@ -641,7 +769,7 @@ export function HomePage() {
             </select>
             <div className="launch-project-preview">
               <strong>{selectedProject?.name ?? "未选择项目"}</strong>
-              <span>默认渠道：{channelLabel} · 输出语言：English · 模式：high_quality</span>
+              <span>默认渠道：{channelLabel} · 输出语言：English · 模式：{MODEL_CONTROL_MODE_LABELS[DEFAULT_LAUNCH_MODE_ID]}</span>
               <span>{selectedProject?.brandDirection ?? "暂无品牌方向"} · {(selectedProject?.reusableStyleConstraints ?? []).join(" / ") || "暂无固定风格要求"}</span>
             </div>
 
@@ -680,20 +808,21 @@ export function HomePage() {
                 ))}
               </div>
             </fieldset>
+
           </section>
 
           <section className="launch-step">
             <div className="launch-step__header">
               <span className="launch-step__index">2</span>
               <div>
-                <h2>原始文案</h2>
+                <h2>视频内容</h2>
                 <p className="section-note" id="launch-script-help">
-                  写清业务内容、卖点、目标人群、使用场景和 CTA，不需要写模型指令。
+                  写你想表达的内容、卖点、情绪、目标人群和 CTA。系统会自动拆成口播、分镜和画面提示词。
                 </p>
               </div>
             </div>
 
-            <label className="field-label" htmlFor="launch-title">任务名称</label>
+            <label className="field-label" htmlFor="launch-title">任务名称（必填）</label>
             <input
               aria-describedby={fieldErrors.title ? "launch-title-error" : undefined}
               aria-invalid={Boolean(fieldErrors.title)}
@@ -711,7 +840,7 @@ export function HomePage() {
             />
             {fieldErrors.title ? <div className="field-error" id="launch-title-error">{fieldErrors.title}</div> : null}
 
-            <div className="template-row" aria-label="原始文案模板">
+            <div className="template-row" aria-label="视频内容模板">
               {SCRIPT_TEMPLATES.map((template) => (
                 <button className="ghost-button ghost-button--compact" key={template.id} onClick={() => applyScriptTemplate(template.body)} type="button">
                   套用{template.label}
@@ -719,7 +848,7 @@ export function HomePage() {
               ))}
             </div>
 
-            <label className="field-label" htmlFor="launch-script">原始文案</label>
+            <label className="field-label" htmlFor="launch-script">视频内容（必填）</label>
             <textarea
               aria-describedby={fieldErrors.script ? "launch-script-error launch-script-help" : "launch-script-help"}
               aria-invalid={Boolean(fieldErrors.script)}
@@ -733,13 +862,109 @@ export function HomePage() {
                 setScript(event.target.value)
                 setFieldErrors((current) => ({ ...current, script: undefined }))
               }}
-              placeholder="直接写要表达的内容、卖点、情绪和转化目标，不需要写技术参数或模型指令。"
+              placeholder="直接写你想表达的内容、卖点、情绪、目标人群和转化目标，不需要写技术参数或模型指令。"
             />
             {fieldErrors.script ? <div className="field-error" id="launch-script-error">{fieldErrors.script}</div> : null}
 
+            <div className="visual-brief-panel">
+              <div className="visual-brief-panel__header">
+                <div>
+                  <label className="field-label" htmlFor="launch-visual-seed">画面参考（可选）</label>
+                  <p className="section-note">
+                    不填写也可以，系统会根据视频内容自动补全画面方向。填写后只作为角色、场景、风格和一致性参考，不会替代视频内容。
+                  </p>
+                </div>
+                <div className="visual-brief-panel__actions">
+                  <button
+                    className="ghost-button ghost-button--compact"
+                    disabled={understandingLoading || !script.trim()}
+                    onClick={handleGenerateUnderstandingPreview}
+                    type="button"
+                  >
+                    {understandingLoading ? "理解中..." : "生成理解预览"}
+                  </button>
+                  <span className="pill pill--sm">{targetDurationSec}s 自动生成 {keyframeCount} 张关键画面</span>
+                </div>
+              </div>
+              <textarea
+                autoComplete="off"
+                className="textarea textarea--compact"
+                id="launch-visual-seed"
+                name="visualSeedInput"
+                value={visualSeedInput}
+                onChange={(event) => setVisualSeedInput(event.target.value)}
+                placeholder={"可选填写：\n主角：例如 28 岁亚洲女性，疲惫但专业\n场景：例如 深夜办公室、桌面凌乱\n风格：例如 柔和电影感、动画插画、真实摄影\n情绪：例如 压抑、反思、逐渐看到希望\n禁止项：例如 不要文字水印、不要夸张表情\n角色一致：例如 全片保持同一位主角"}
+              />
+              {understandingError ? (
+                <div className="alert alert--error">{understandingError}</div>
+              ) : null}
+              {understandingPreview && executionBrief ? (
+                <div className="visual-understanding-card">
+                  <div className="visual-understanding-card__header">
+                    <div>
+                      <strong>系统理解预览</strong>
+                      <span>中英对照给运营确认，正式给图片和视频模型的内容只使用英文执行提示词。</span>
+                    </div>
+                    <span className="pill pill--sm">英文执行</span>
+                  </div>
+                  <div className="visual-understanding-grid">
+                    <div>
+                      <span>主题</span>
+                      <strong>{understandingPreview.topic.zh}</strong>
+                      <em>{understandingPreview.topic.en}</em>
+                    </div>
+                    <div>
+                      <span>主角</span>
+                      <strong>{understandingPreview.visualBrief.subject.zh}</strong>
+                      <em>{understandingPreview.visualBrief.subject.en}</em>
+                    </div>
+                    <div>
+                      <span>场景</span>
+                      <strong>{understandingPreview.visualBrief.setting.zh}</strong>
+                      <em>{understandingPreview.visualBrief.setting.en}</em>
+                    </div>
+                    <div>
+                      <span>情绪</span>
+                      <strong>{understandingPreview.emotionalArc.zh}</strong>
+                      <em>{understandingPreview.emotionalArc.en}</em>
+                    </div>
+                  </div>
+                  <div className="visual-understanding-prompts">
+                    <span>执行提示词预览</span>
+                    <strong>{executionBrief.keyframePlan.length} 张关键画面 · {executionBrief.finalPromptLanguage.toUpperCase()}</strong>
+                    <p>{executionBrief.keyframePlan[0]?.imagePrompt}</p>
+                  </div>
+                </div>
+              ) : null}
+              <div className="segmented-control segmented-control--compact" role="radiogroup" aria-label="关键画面生成方式">
+                <button
+                  className={keyframeGenerationMode === "batch" ? "segment segment--active" : "segment"}
+                  onClick={() => setKeyframeGenerationMode("batch")}
+                  type="button"
+                  role="radio"
+                  aria-checked={keyframeGenerationMode === "batch"}
+                >
+                  批量生成
+                </button>
+                <button
+                  className={keyframeGenerationMode === "single" ? "segment segment--active" : "segment"}
+                  onClick={() => setKeyframeGenerationMode("single")}
+                  type="button"
+                  role="radio"
+                  aria-checked={keyframeGenerationMode === "single"}
+                >
+                  单张生成
+                </button>
+              </div>
+              <div className="visual-brief-panel__meta">
+                <span>按 {targetDurationSec}s 自动规划 {keyframeCount} 张分镜关键画面。</span>
+                <span>{keyframeGenerationMode === "batch" ? "支持批量的生图模型会一次请求整组画面。" : "逐张生成，适合单张微调或供应商不支持批量时使用。"}</span>
+              </div>
+            </div>
+
             <div className={`launch-preflight launch-preflight--${launchReadiness.level}`}>
               <div>
-                <strong>原始文案检查</strong>
+                <strong>视频内容检查</strong>
                 <span>{launchReadiness.summary}</span>
               </div>
               <span className="pill pill--sm">{readyCheckCount}/{launchReadiness.checks.length} 已通过</span>
@@ -783,6 +1008,71 @@ export function HomePage() {
                 <span className="planning-chip__label">审核流程</span>
                 <strong>{selectedExecutionModeLabel}</strong>
                 <span>{planningSummary}</span>
+              </div>
+            </div>
+
+            <div className={`model-route-preview model-route-preview--${modelRoutePreviewTone}`}>
+              <div className="model-route-preview__header">
+                <div>
+                  <h3>本次模型路线</h3>
+                  <p>
+                    {modelRouteSummary ??
+                      (modelRoutePreviewError
+                        ? "模型路线暂时没有加载成功，请先确认模型管理服务可用。"
+                        : "正在确认本次会使用的模型路线。")}
+                  </p>
+                </div>
+                <span className={modelRouteWarningCount ? "pill pill--sm pill--warning" : "pill pill--sm"}>
+                  {modelOverrideCount
+                    ? `已覆盖 ${modelOverrideCount}`
+                    : modelRouteWarningCount
+                      ? `需要确认 ${modelRouteWarningCount}`
+                      : "配置可用"}
+                </span>
+              </div>
+              {modelRoutePreviewError ? (
+                <div className="alert alert--warning">
+                  <strong>模型路线加载失败</strong>
+                  <span>{modelRoutePreviewError}</span>
+                </div>
+              ) : null}
+              <div className="model-route-preview__grid">
+                {MODEL_CONTROL_SLOT_ORDER.map((slot) => {
+                  const previewSlot = getRoutePreviewSlot(modelRoutePreview, slot)
+                  const overrideOption = getOverrideOption(modelPools, slot, modelOverrides[slot])
+                  const displayName = overrideOption?.displayName ?? previewSlot?.displayName ?? "确认中"
+                  const providerName = overrideOption?.providerDisplayName ?? previewSlot?.provider ?? "接入方待确认"
+                  const fallbackCount = overrideOption ? 0 : previewSlot?.fallbackCandidates.length ?? 0
+                  return (
+                    <div className="model-route-slot" key={slot}>
+                      <div className="model-route-slot__header">
+                        <span>{MODEL_CONTROL_SLOT_LABELS[slot]}</span>
+                        <strong>{displayName}</strong>
+                      </div>
+                      <div className="model-route-slot__meta">
+                        <span>{providerName}</span>
+                        <span>{overrideOption ? "本次手动指定" : previewSlot?.routingStrategy ?? "默认路线"}</span>
+                      </div>
+                      <p>
+                        {overrideOption
+                          ? "这次任务会优先使用这个模型，不跟随默认策略自动变化。"
+                          : previewSlot?.selectionReason ?? "正在读取模型管理里的当前配置。"}
+                      </p>
+                      <div className="model-route-slot__footer">
+                        <span className={fallbackCount ? "info-chip info-chip--accent" : "info-chip"}>
+                          {overrideOption ? "手动覆盖" : `备用 ${fallbackCount}`}
+                        </span>
+                        {overrideOption ? (
+                          <span className="status-text--success">提交后会固定到本任务</span>
+                        ) : previewSlot?.warnings.length ? (
+                          <span className="status-text--warning">{previewSlot.warnings[0]}</span>
+                        ) : (
+                          <span className="status-text--success">当前没有明显配置风险</span>
+                        )}
+                      </div>
+                    </div>
+                  )
+                })}
               </div>
             </div>
 
@@ -910,12 +1200,23 @@ export function HomePage() {
             <div className="metric-row"><span>项目</span><strong>{selectedProject?.name ?? "未选择"}</strong></div>
             <div className="metric-row"><span>默认渠道</span><strong>{channelLabel}</strong></div>
             <div className="metric-row"><span>目标时长</span><strong>{targetDurationSec}s</strong></div>
+            <div className="metric-row"><span>关键画面</span><strong>{keyframeCount} 张 / {keyframeGenerationMode === "batch" ? "批量" : "单张"}</strong></div>
             <div className="metric-row"><span>输出规格</span><strong>{renderSpec.width} × {renderSpec.height}</strong></div>
             <div className="metric-row"><span>画面比例</span><strong>{renderSpec.aspectRatio}</strong></div>
             <div className="metric-row"><span>成片组织</span><strong>{productionEstimate.routeLabel}</strong></div>
             <div className="metric-row"><span>预计预算</span><strong>¥{productionEstimate.estimatedBudgetCny.toFixed(2)}</strong></div>
             <div className="metric-row"><span>音频/字幕</span><strong>{selectedAudioStrategy.label} / {getSubtitleStrategyLabel(subtitleStrategy)}</strong></div>
             <div className="metric-row"><span>模型覆盖</span><strong>{modelOverrideCount ? modelOverrideLabels.join("、") : "使用默认组合"}</strong></div>
+            <div className="metric-row">
+              <span>模型路线</span>
+              <strong>
+                {modelOverrideCount
+                  ? `覆盖 ${modelOverrideCount} 个环节`
+                  : modelRouteWarningCount
+                    ? `${modelRouteWarningCount} 项需确认`
+                    : "默认组合可用"}
+              </strong>
+            </div>
             <div className="metric-row"><span>审核流程</span><strong>生成方案与关键画面先审</strong></div>
             <div className="launch-risk-summary">
               <span>风险 {riskyCheckCount}</span>
@@ -982,6 +1283,7 @@ export function HomePage() {
               <div className="metric-row"><span>任务名称</span><strong>{title}</strong></div>
               <div className="metric-row"><span>项目 / 渠道</span><strong>{selectedProject?.name ?? "未选择"} / {channelLabel}</strong></div>
               <div className="metric-row"><span>时长 / 画幅</span><strong>{targetDurationSec}s / {renderSpec.aspectRatio}</strong></div>
+              <div className="metric-row"><span>关键画面</span><strong>{keyframeCount} 张 / {keyframeGenerationMode === "batch" ? "批量生成" : "单张生成"}</strong></div>
               <div className="metric-row"><span>镜头 / 预算</span><strong>{productionEstimate.sceneCount} 段 / ¥{productionEstimate.estimatedBudgetCny.toFixed(2)}</strong></div>
               <div className="metric-row"><span>生成流程</span><strong>先审后生成</strong></div>
               <div className="metric-row"><span>模型设置</span><strong>{modelOverrideCount ? `本次覆盖 ${modelOverrideCount} 项` : "使用默认组合"}</strong></div>

@@ -366,6 +366,7 @@ async function writeTaskArtifacts(
       productProfile: blueprintRecord.blueprint.productProfile,
       backgroundConstraints: blueprintRecord.blueprint.backgroundConstraints,
       negativeConstraints: blueprintRecord.blueprint.negativeConstraints,
+      visualPlan: blueprintRecord.blueprint.visualPlan,
       totalVoiceoverScript: blueprintRecord.blueprint.totalVoiceoverScript,
       sceneContracts: blueprintRecord.blueprint.sceneContracts,
     },

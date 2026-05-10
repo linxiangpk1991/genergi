@@ -32,6 +32,8 @@ export function UserCenterPage() {
   const [searchQuery, setSearchQuery] = useState("")
   const [statusFilter, setStatusFilter] = useState<"all" | UserStatus>("all")
   const [copiedUserId, setCopiedUserId] = useState<string | null>(null)
+  const [testAccount, setTestAccount] = useState<{ username: string; password: string; expiresAt: string } | null>(null)
+  const [testAccountSaving, setTestAccountSaving] = useState(false)
 
   async function loadUsers() {
     setLoading(true)
@@ -203,6 +205,24 @@ export function UserCenterPage() {
     }
   }
 
+  async function handleCreateTestAccount() {
+    setTestAccountSaving(true)
+    setError("")
+    try {
+      const result = await api.createTestUser({ expiresInHours: 24 })
+      setTestAccount({
+        username: result.user.username,
+        password: result.password,
+        expiresAt: result.expiresAt,
+      })
+      await loadUsers()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "创建测试运营账号失败")
+    } finally {
+      setTestAccountSaving(false)
+    }
+  }
+
   return (
     <div className="workspace-page user-center-page">
       <div className="topbar">
@@ -212,6 +232,9 @@ export function UserCenterPage() {
           <p>维护登录账号、昵称、启停状态和密码。当前共 {userCount} 个用户。</p>
         </div>
         <div className="topbar-actions">
+          <button className="secondary-button" disabled={testAccountSaving} onClick={() => void handleCreateTestAccount()} type="button">
+            {testAccountSaving ? "创建中..." : "创建测试账号"}
+          </button>
           <button className="primary-button" onClick={openCreateForm} type="button">
             新建用户
           </button>
@@ -219,6 +242,12 @@ export function UserCenterPage() {
       </div>
 
       {error ? <div className="alert">{error}</div> : null}
+      {testAccount ? (
+        <div className="alert alert--success">
+          测试账号已创建：<strong>{testAccount.username}</strong> / <code>{testAccount.password}</code>，有效期至{" "}
+          {new Date(testAccount.expiresAt).toLocaleString("zh-CN")}
+        </div>
+      ) : null}
 
       <section className="card">
         <div className="section-header">
@@ -278,6 +307,8 @@ export function UserCenterPage() {
                   <th>账号</th>
                   <th>昵称</th>
                   <th>状态</th>
+                  <th>用途</th>
+                  <th>过期时间</th>
                   <th>操作</th>
                 </tr>
               </thead>
@@ -299,6 +330,8 @@ export function UserCenterPage() {
                         {user.status === "active" ? "启用中" : "已停用"}
                       </span>
                     </td>
+                    <td>{user.purpose === "test_operator" ? "测试运营" : "正式运营"}</td>
+                    <td>{user.expiresAt ? new Date(user.expiresAt).toLocaleString("zh-CN") : "长期"}</td>
                     <td>
                       <div className="row-actions">
                         <button className="secondary-button" onClick={() => openEditForm(user)} type="button">

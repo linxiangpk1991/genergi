@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises"
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
@@ -83,9 +83,10 @@ describe("API model control registry routes", () => {
       app.request("/api/model-control/models"),
       app.request("/api/model-control/defaults"),
       app.request("/api/model-control/selectable?modeId=high_quality"),
+      app.request("/api/model-control/route-preview?modeId=high_quality"),
     ])
 
-    expect(responses.map((response) => response.status)).toEqual([401, 401, 401, 401])
+    expect(responses.map((response) => response.status)).toEqual([401, 401, 401, 401, 401])
   })
 
   it("exposes only four runtime slots and collapses legacy media defaults into unified image/video defaults", async () => {
@@ -113,6 +114,15 @@ describe("API model control registry routes", () => {
       "videoModel",
       "ttsProvider",
     ])
+    expect(
+      modelControl.normalizeModelCapability("imageModel", "gpt-image-2", {
+        imageTransport: "openai-images-generations",
+      }),
+    ).toMatchObject({
+      imageTransport: "openai-images-generations",
+      supportsBatchKeyframes: true,
+      maxBatchImages: 4,
+    })
 
     await writeFile(
       path.join(dataDir, "model-defaults.json"),
@@ -455,6 +465,247 @@ describe("API model control registry routes", () => {
     expect(selectableAfterPayload.slots.imageModel.some((item) => item.valueId === modelPayload.model.id)).toBe(
       true,
     )
+  })
+
+  it("marks legacy non-seed available providers invalid when required connection fields are missing", async () => {
+    const timestamp = "2026-05-01T00:00:00.000Z"
+    const { app, cookie } = await createAuthedAppWithData({
+      providers: [
+        {
+          id: "provider_old_gateway",
+          providerKey: "old-gateway",
+          providerType: "openai-compatible",
+          displayName: "Old Gateway",
+          endpointUrl: null,
+          encryptedEndpoint: null,
+          encryptedSecret: "enc:kept-for-test",
+          endpointHint: null,
+          secretHint: "****test",
+          authType: "bearer_token",
+          status: "available",
+          lastValidatedAt: timestamp,
+          lastValidationError: null,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        },
+      ],
+      models: [
+        {
+          id: "model_old_gateway_text",
+          modelKey: "old-text",
+          providerId: "provider_old_gateway",
+          slotType: "textModel",
+          providerModelId: "gpt-5.5",
+          displayName: "Old Text",
+          capabilityJson: {},
+          lifecycleStatus: "available",
+          lastValidatedAt: timestamp,
+          lastValidationError: null,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        },
+      ],
+      defaults: {
+        globalDefaults: {
+          textModel: { modelId: "model_old_gateway_text" },
+        },
+        modeDefaults: [],
+        updatedAt: timestamp,
+      },
+    })
+
+    const response = await app.request("/api/model-control/providers", {
+      headers: { Cookie: cookie },
+    })
+    expect(response.status).toBe(200)
+    const payload = (await response.json()) as {
+      providers: Array<Record<string, unknown>>
+    }
+
+    expect(payload.providers[0]).toMatchObject({
+      providerKey: "old-gateway",
+      status: "invalid",
+      lastValidationError: "接口地址未配置：非 TTS 接入方必须填写 http:// 或 https:// 开头的接口地址。",
+    })
+
+    const persisted = JSON.parse(await readFile(path.join(dataDir, "providers.json"), "utf8")) as Array<Record<string, unknown>>
+    expect(persisted[0]).toMatchObject({
+      providerKey: "old-gateway",
+      status: "invalid",
+      lastValidationError: "接口地址未配置：非 TTS 接入方必须填写 http:// 或 https:// 开头的接口地址。",
+    })
+  })
+
+  it("translates legacy English provider validation errors when listing providers", async () => {
+    const timestamp = "2026-05-09T00:57:32.000Z"
+    const { app, cookie } = await createAuthedAppWithData({
+      providers: [
+        {
+          id: "provider_english_error",
+          providerKey: "english-error",
+          providerType: "openai-compatible",
+          displayName: "English Error",
+          endpointUrl: null,
+          encryptedEndpoint: null,
+          encryptedSecret: "enc:kept-for-test",
+          endpointHint: null,
+          secretHint: "****test",
+          authType: "bearer_token",
+          status: "invalid",
+          lastValidatedAt: timestamp,
+          lastValidationError: "endpointUrl is required for non-TTS providers",
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        },
+      ],
+      models: [
+        {
+          id: "model_english_error_text",
+          modelKey: "english-text",
+          providerId: "provider_english_error",
+          slotType: "textModel",
+          providerModelId: "gpt-5.5",
+          displayName: "English Text",
+          capabilityJson: {},
+          lifecycleStatus: "available",
+          lastValidatedAt: timestamp,
+          lastValidationError: null,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        },
+      ],
+      defaults: {
+        globalDefaults: {
+          textModel: { modelId: "model_english_error_text" },
+        },
+        modeDefaults: [],
+        updatedAt: timestamp,
+      },
+    })
+
+    const response = await app.request("/api/model-control/providers", {
+      headers: { Cookie: cookie },
+    })
+    expect(response.status).toBe(200)
+    const payload = (await response.json()) as {
+      providers: Array<Record<string, unknown>>
+    }
+
+    expect(payload.providers[0].lastValidationError).toBe("接口地址未配置：非 TTS 接入方必须填写 http:// 或 https:// 开头的接口地址。")
+    expect(payload.providers[0].lastValidationError).not.toContain("endpointUrl")
+  })
+
+  it("restores known historical provider endpoints without touching saved secrets", async () => {
+    const timestamp = "2026-05-09T00:57:32.000Z"
+    const { app, cookie } = await createAuthedAppWithData({
+      providers: [
+        {
+          id: "provider_anhesea_text",
+          providerKey: "anhesea-openai-text",
+          providerType: "openai-compatible",
+          displayName: "AnHeSea OpenAI 文本中转站",
+          endpointUrl: null,
+          encryptedEndpoint: null,
+          encryptedSecret: "enc:kept-for-test",
+          endpointHint: null,
+          secretHint: "****test",
+          authType: "bearer_token",
+          status: "available",
+          lastValidatedAt: timestamp,
+          lastValidationError: null,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        },
+        {
+          id: "provider_anhesea_image",
+          providerKey: "anhesea-gpt-image2",
+          providerType: "openai-compatible",
+          displayName: "GPT-image2-自用生图模型",
+          endpointUrl: null,
+          encryptedEndpoint: null,
+          encryptedSecret: "enc:image-secret",
+          endpointHint: null,
+          secretHint: "****test",
+          authType: "bearer_token",
+          status: "available",
+          lastValidatedAt: timestamp,
+          lastValidationError: null,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        },
+        {
+          id: "provider_xiaojingai",
+          providerKey: "xiaojingai-openai-chat",
+          providerType: "openai-compatible",
+          displayName: "XiaoJingAI OpenAI Gateway",
+          endpointUrl: "linxiang",
+          encryptedEndpoint: null,
+          encryptedSecret: "enc:xiaojing-secret",
+          endpointHint: null,
+          secretHint: "****test",
+          authType: "bearer_token",
+          status: "available",
+          lastValidatedAt: timestamp,
+          lastValidationError: null,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        },
+      ],
+      models: [
+        {
+          id: "model_anhesea_text",
+          modelKey: "gpt-5-5",
+          providerId: "provider_anhesea_text",
+          slotType: "textModel",
+          providerModelId: "gpt-5.5",
+          displayName: "GPT-5.5",
+          capabilityJson: {},
+          lifecycleStatus: "available",
+          lastValidatedAt: timestamp,
+          lastValidationError: null,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        },
+      ],
+      defaults: {
+        globalDefaults: {
+          textModel: { modelId: "model_anhesea_text" },
+        },
+        modeDefaults: [],
+        updatedAt: timestamp,
+      },
+    })
+
+    const response = await app.request("/api/model-control/providers", {
+      headers: { Cookie: cookie },
+    })
+    expect(response.status).toBe(200)
+    const payload = (await response.json()) as {
+      providers: Array<Record<string, unknown>>
+    }
+
+    expect(payload.providers).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        providerKey: "anhesea-openai-text",
+        endpointUrl: "https://api.anhesea.top:9443/v1",
+        status: "available",
+        hasSecret: true,
+      }),
+      expect.objectContaining({
+        providerKey: "anhesea-gpt-image2",
+        endpointUrl: "https://api.anhesea.top:9443",
+        status: "available",
+        hasSecret: true,
+      }),
+      expect.objectContaining({
+        providerKey: "xiaojingai-openai-chat",
+        endpointUrl: "https://open.xiaojingai.com/v1",
+        status: "available",
+        hasSecret: true,
+      }),
+    ]))
+    expect(JSON.stringify(payload)).not.toContain("image-secret")
+    expect(JSON.stringify(payload)).not.toContain("xiaojing-secret")
   })
 
   it("normalizes GPT-5 family text models to the Responses API capability profile", async () => {

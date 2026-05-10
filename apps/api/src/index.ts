@@ -1,6 +1,6 @@
 import fs from "node:fs/promises"
 import path from "node:path"
-import { createCipheriv, createHash, randomBytes, randomUUID } from "node:crypto"
+import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from "node:crypto"
 import { serve } from "@hono/node-server"
 import { zValidator } from "@hono/zod-validator"
 import { Hono, type Context } from "hono"
@@ -16,6 +16,8 @@ import {
 } from "@genergi/config"
 import {
   blueprintReviewDecisionSchema,
+  blueprintQualityFeedbackSlotSchema,
+  blueprintQualityIssueCategorySchema,
   plannedExecutionBlueprintSchema,
   audioStrategySchema,
   createTaskInputSchema,
@@ -26,7 +28,14 @@ import {
   buildModelRoutingProfile,
   canPatchModelLifecycle,
   getModelSelectableReason,
+  modelRoutingPoliciesDocumentSchema,
+  slotRoutingPolicySchema,
+  readModelRoutingPolicies,
+  replaceModelRoutingPolicies,
   shouldResetModelValidation,
+  appendModelDiagnosticRecord,
+  readTaskBlueprintReviewRecords,
+  readModelDiagnosticRecords,
   readModelDefaults,
   readModelRecords,
   readProviderRecords,
@@ -43,6 +52,7 @@ import {
   updateRuntimeStatus,
   updateUserInputSchema,
 } from "@genergi/shared"
+import type { BlueprintQualityFeedbackSlot, BlueprintQualityIssueCategory, ModelFallbackTrigger, ModelRoutingPoliciesDocument, ModelRoutingStrategy, SlotRoutingPolicy, TaskBlueprintRecord, TaskDetail } from "@genergi/shared"
 import { clearSession, getAuthStatus, getSessionUser, loginWithPassword, requireAuth } from "./lib/auth.js"
 import { assertQueueAvailable, cancelTaskJobs, enqueueTask, inspectTaskJobs, QueueUnavailableError, recoverTaskJobs } from "./lib/queue/enqueue.js"
 import {
@@ -86,6 +96,8 @@ import {
   updateStoredUser,
   updateStoredUserPassword,
 } from "./lib/user-store.js"
+import { resolveEffectiveSlots } from "./lib/model-control/resolver.js"
+import { buildUnderstandingPreviewPayload, understandingPreviewInputSchema } from "./lib/understanding-preview.js"
 
 export const app = new Hono()
 app.use("*", cors())
@@ -93,12 +105,17 @@ const loginSchema = z.object({
   username: z.string().min(1),
   password: z.string().min(1),
 })
+const createTestAccountInputSchema = z.object({
+  expiresInHours: z.number().int().positive().max(168).optional().default(24),
+})
 const createProjectInputSchema = z.object({
   name: z.string().trim().min(1),
   description: z.string().trim().optional(),
   brandDirection: z.string().trim().optional(),
   defaultChannelIds: z.array(z.string().trim().min(1)).optional(),
   reusableStyleConstraints: z.array(z.string().trim().min(1)).optional(),
+  defaultVisualSeedInput: z.string().trim().nullable().optional(),
+  defaultKeyframeGenerationMode: z.enum(["batch", "single"]).optional(),
 })
 const createBlueprintInputSchema = z.object({
   blueprint: plannedExecutionBlueprintSchema.omit({
@@ -133,6 +150,11 @@ const taskBulkBodySchema = z.object({
 const blueprintReviewBodySchema = z.object({
   decision: blueprintReviewDecisionSchema,
   note: z.string().trim().min(1).optional(),
+  qualityReasons: z.array(z.object({
+    slotType: blueprintQualityFeedbackSlotSchema.nullable().optional(),
+    issueCategory: blueprintQualityIssueCategorySchema,
+    note: z.string().trim().min(1).optional(),
+  })).max(8).optional(),
 })
 
 function requireAuthNamespace(prefix: string) {
@@ -234,6 +256,144 @@ function buildTaskModelUsage(
   }
 }
 
+function buildTaskModelTrace(
+  taskRunConfig: NonNullable<Awaited<ReturnType<typeof getTaskDetail>>>["taskRunConfig"] | null | undefined,
+) {
+  if (!taskRunConfig) {
+    return null
+  }
+
+  const snapshots = new Map((taskRunConfig.slotSnapshots ?? []).map((slot) => [slot.slotType, slot]))
+  const buildTrace = (slotType: "textModel" | "imageModel" | "videoModel" | "ttsProvider") => {
+    const snapshot = snapshots.get(slotType)
+    if (!snapshot) {
+      if (slotType === "ttsProvider") {
+        return {
+          slotType,
+          label: taskRunConfig.ttsProvider,
+          providerType: taskRunConfig.ttsProvider,
+          providerModelId: taskRunConfig.ttsProvider,
+          wireApi: "tts",
+          requestPath: "provider",
+        }
+      }
+      const model = taskRunConfig[slotType]
+      const routingProfile = buildModelRoutingProfile({
+        slotType,
+        providerModelId: model.id,
+        providerType: model.provider,
+        capabilityJson: {},
+      })
+      return {
+        slotType,
+        label: model.label,
+        providerType: model.provider,
+        providerModelId: model.id,
+        wireApi: routingProfile.wireApi,
+        requestPath: routingProfile.endpointPath,
+      }
+    }
+
+    const routingProfile = snapshot.routingProfile ?? buildModelRoutingProfile({
+      slotType,
+      providerModelId: snapshot.providerModelId,
+      providerType: snapshot.providerType,
+      capabilityJson: snapshot.capabilityJson,
+    })
+    return {
+      slotType,
+      label: snapshot.displayName,
+      providerId: snapshot.providerId,
+      providerKey: snapshot.providerKey,
+      providerType: snapshot.providerType,
+      modelId: snapshot.modelId,
+      modelKey: snapshot.modelKey,
+      providerModelId: snapshot.providerModelId,
+      wireApi: routingProfile.wireApi,
+      requestPath: routingProfile.endpointPath,
+      transport: routingProfile.transport,
+      smokeProbe: routingProfile.smokeProbe,
+      validatedAt: snapshot.validatedAt,
+      selectionReason: snapshot.selectionReason,
+      routingStrategy: snapshot.routingStrategy,
+      routingPolicyNote: snapshot.routingPolicyNote,
+      fallbackCandidates: (snapshot.fallbackCandidates ?? []).map((candidate) => ({
+        displayName: candidate.displayName,
+        providerType: candidate.providerType,
+        providerModelId: candidate.providerModelId,
+        fallbackTriggers: candidate.fallbackTriggers,
+      })),
+    }
+  }
+
+  return {
+    textModel: buildTrace("textModel"),
+    imageModel: buildTrace("imageModel"),
+    videoModel: buildTrace("videoModel"),
+    ttsProvider: buildTrace("ttsProvider"),
+  }
+}
+
+type TaskModelTrace = NonNullable<ReturnType<typeof buildTaskModelTrace>>
+
+function getAssetModelTraceStage(assetType: string): keyof TaskModelTrace | null {
+  switch (assetType) {
+    case "planning_prompt":
+    case "planning_response":
+    case "planning_audit":
+    case "visual_plan":
+    case "storyboard":
+    case "script":
+    case "source_script":
+      return "textModel"
+    case "keyframe_prompt_summary":
+    case "keyframe_bundle":
+    case "keyframe_image":
+      return "imageModel"
+    case "scene_video":
+    case "video_bundle":
+      return "videoModel"
+    case "audio":
+    case "subtitles":
+      return "ttsProvider"
+    default:
+      return null
+  }
+}
+
+function enrichAssetsWithModelTrace(
+  assets: Awaited<ReturnType<typeof getTaskAssets>>,
+  taskRunConfig: NonNullable<Awaited<ReturnType<typeof getTaskDetail>>>["taskRunConfig"] | null | undefined,
+) {
+  const trace = buildTaskModelTrace(taskRunConfig)
+  if (!trace) {
+    return assets
+  }
+
+  return assets.map((asset) => {
+    const stage = getAssetModelTraceStage(asset.assetType)
+    const keyframeIndexMatch =
+      asset.assetType === "keyframe_image"
+        ? asset.id.match(/scene_(\d+)/) ?? asset.path.match(/scene-(\d+)/)
+        : null
+    const keyframeIndex = keyframeIndexMatch?.[1] ? Number(keyframeIndexMatch[1]) : null
+    const keyframePlan =
+      keyframeIndex && Number.isFinite(keyframeIndex)
+        ? taskRunConfig?.executionBrief?.keyframePlan.find((plan) => plan.index === keyframeIndex) ?? null
+        : null
+    return {
+      ...asset,
+      label: keyframePlan?.narrativeRole ? `关键画面 ${keyframePlan.index} · ${keyframePlan.narrativeRole}` : asset.label,
+      modelTrace: stage
+        ? {
+            stage,
+            ...trace[stage],
+          }
+        : null,
+    }
+  })
+}
+
 async function enrichSummary(task: Awaited<ReturnType<typeof listTasks>>[number]) {
   const detail = await getTaskDetail(task.id)
   const cached = taskPlanningState.get(task.id)
@@ -246,21 +406,93 @@ async function enrichSummary(task: Awaited<ReturnType<typeof listTasks>>[number]
       task.generationRoute,
       task.routeReason,
     )
-  return { ...task, planning, modelUsage: buildTaskModelUsage(detail?.taskRunConfig) }
+  return { ...task, planning, modelUsage: buildTaskModelUsage(detail?.taskRunConfig), modelTrace: buildTaskModelTrace(detail?.taskRunConfig) }
 }
 
 function enrichDetail(detail: NonNullable<Awaited<ReturnType<typeof getTaskDetail>>>) {
+  const alignedDetail = alignDetailScenesWithExecutionBrief(detail)
   const cached = taskPlanningState.get(detail.taskId)
   const planning =
     cached ??
     buildPlanningSnapshot(
-      detail.taskRunConfig.targetDurationSec,
-      detail.scenes.length,
-      detail.taskRunConfig.generationMode,
-      detail.taskRunConfig.generationRoute,
-      detail.taskRunConfig.routeReason,
+      alignedDetail.taskRunConfig.targetDurationSec,
+      alignedDetail.scenes.length,
+      alignedDetail.taskRunConfig.generationMode,
+      alignedDetail.taskRunConfig.generationRoute,
+      alignedDetail.taskRunConfig.routeReason,
     )
-  return { ...detail, planning }
+  return { ...alignedDetail, planning, modelTrace: buildTaskModelTrace(alignedDetail.taskRunConfig) }
+}
+
+function alignDetailScenesWithExecutionBrief<T extends NonNullable<Awaited<ReturnType<typeof getTaskDetail>>>>(detail: T): T {
+  const executionBrief = detail.taskRunConfig.executionBrief
+  if (!executionBrief?.keyframePlan?.length) {
+    return detail
+  }
+
+  return {
+    ...detail,
+    scenes: detail.scenes.map((scene) => {
+      const keyframe =
+        executionBrief.keyframePlan.find((plan) => plan.index === scene.index + 1) ??
+        executionBrief.keyframePlan.find((plan) => plan.index === scene.index) ??
+        executionBrief.keyframePlan[scene.index] ??
+        null
+
+      if (!keyframe) {
+        return scene
+      }
+
+      return {
+        ...scene,
+        title: keyframe.narrativeRole || scene.title,
+        sceneGoal: keyframe.narrativeRole || scene.sceneGoal,
+        startFrameDescription: keyframe.visualGoal || scene.startFrameDescription,
+        imagePrompt: keyframe.imagePrompt || scene.imagePrompt,
+        videoPrompt: keyframe.videoPrompt || scene.videoPrompt,
+        startFrameIntent: keyframe.visualGoal || scene.startFrameIntent,
+        endFrameIntent: keyframe.visualGoal || scene.endFrameIntent,
+      }
+    }),
+  }
+}
+
+function alignBlueprintSceneContractsWithExecutionBrief(
+  record: TaskBlueprintRecord,
+  fallbackExecutionBrief?: NonNullable<Awaited<ReturnType<typeof getTaskDetail>>>["taskRunConfig"]["executionBrief"] | null,
+): TaskBlueprintRecord {
+  const executionBrief = record.blueprint.englishExecutionBrief ?? fallbackExecutionBrief
+  if (!executionBrief?.keyframePlan?.length) {
+    return record
+  }
+
+  return {
+    ...record,
+    blueprint: {
+      ...record.blueprint,
+      sceneContracts: record.blueprint.sceneContracts.map((scene) => {
+        const keyframe =
+          executionBrief.keyframePlan.find((plan) => plan.index === scene.index + 1) ??
+          executionBrief.keyframePlan.find((plan) => plan.index === scene.index) ??
+          executionBrief.keyframePlan[scene.index] ??
+          null
+
+        if (!keyframe) {
+          return scene
+        }
+
+        return {
+          ...scene,
+          sceneGoal: keyframe.narrativeRole || scene.sceneGoal,
+          startFrameDescription: keyframe.visualGoal || scene.startFrameDescription,
+          imagePrompt: keyframe.imagePrompt || scene.imagePrompt,
+          videoPrompt: keyframe.videoPrompt || scene.videoPrompt,
+          startFrameIntent: keyframe.visualGoal || scene.startFrameIntent,
+          endFrameIntent: keyframe.visualGoal || scene.endFrameIntent,
+        }
+      }),
+    },
+  }
 }
 
 function getLivenessTimestamp(
@@ -773,6 +1005,8 @@ type ModelControlProviderRecord = {
   providerType: string
   displayName: string
   endpointUrl: string
+  encryptedEndpoint: string | null
+  endpointHint: string | null
   authType: ProviderAuthType
   encryptedSecret: string | null
   secretPreview: string | null
@@ -860,6 +1094,40 @@ const updateDefaultsInputSchema = z.object({
   modes: modeAssignmentsSchema.optional(),
 })
 
+const routingPolicyPatchSchema = slotRoutingPolicySchema.partial().extend({
+  enabled: z.boolean().optional(),
+})
+
+const slotRoutingPolicyPatchSchema = z.object({
+  textModel: routingPolicyPatchSchema.optional(),
+  imageModel: routingPolicyPatchSchema.optional(),
+  videoModel: routingPolicyPatchSchema.optional(),
+  ttsProvider: routingPolicyPatchSchema.optional(),
+})
+
+const updateRoutingPoliciesInputSchema = z.object({
+  global: slotRoutingPolicyPatchSchema.optional(),
+  modes: z.object({
+    mass_production: slotRoutingPolicyPatchSchema.optional(),
+    high_quality: slotRoutingPolicyPatchSchema.optional(),
+  }).optional(),
+})
+
+const modelSmokeModeInputSchema = z.enum(["config", "connectivity", "minimal_generation"])
+type ModelSmokeMode = z.infer<typeof modelSmokeModeInputSchema>
+type ModelDiagnosticErrorCategory =
+  | "auth_error"
+  | "quota_exceeded"
+  | "model_not_found"
+  | "request_format_incompatible"
+  | "timeout"
+  | "empty_result"
+  | "safety_refusal"
+  | "provider_error"
+  | "worker_local_failure"
+  | "config_error"
+  | "unknown"
+
 const MODEL_CONTROL_SLOTS = modelControlSlotSchema.options
 const MODEL_CONTROL_MODES = modelControlModeSchema.options
 const TTS_PROVIDER_TYPES = new Set(["edge-tts", "azure-tts"])
@@ -888,6 +1156,39 @@ function nowIso() {
   return new Date().toISOString()
 }
 
+function getPreviewSlotWarning(error: unknown, slotType: ModelControlSlot) {
+  const message = error instanceof Error ? error.message : String(error)
+  if (!message.includes(slotType)) {
+    return "当前无法完整预览这一路线，请先检查模型管理里的默认模型和路由策略。"
+  }
+  if (message.includes("DEFAULT_NOT_CONFIGURED")) {
+    return "这个环节还没有配置默认模型，提交后会卡在任务创建前。"
+  }
+  if (message.includes("DEFAULT_TARGET_NOT_SELECTABLE")) {
+    return "这个环节配置的默认模型现在不可用，请先换成可用模型。"
+  }
+  if (message.includes("PROVIDER_NOT_RESOLVED")) {
+    return "这个环节的接入方不可用，请先检查接入方状态和密钥。"
+  }
+  if (message.includes("TASK_OVERRIDE_NOT_SELECTABLE")) {
+    return "这个环节的临时指定模型不可用，请清除覆盖或换一个可用模型。"
+  }
+  return "这个环节的模型路线没有准备好，请先检查模型管理配置。"
+}
+
+function buildRoutePreviewUnavailableSlots(error: unknown) {
+  return MODEL_CONTROL_SLOTS.map((slotType) => ({
+    slotType,
+    displayName: "未准备好",
+    provider: "待检查",
+    wireApi: "待确认",
+    requestPath: "待确认",
+    selectionReason: "系统暂时不能确认这个环节会使用哪一个模型。",
+    fallbackCandidates: [],
+    warnings: [getPreviewSlotWarning(error, slotType)],
+  }))
+}
+
 function maskSecretPreview(secret: string) {
   const tail = secret.slice(-4)
   return `${"*".repeat(Math.max(secret.length - tail.length, 4))}${tail}`
@@ -906,6 +1207,113 @@ function encryptSecret(secret: string) {
   return `enc:${iv.toString("base64url")}:${tag.toString("base64url")}:${encrypted.toString("base64url")}`
 }
 
+function decryptLegacyControlPlaneSecret(ciphertext: string) {
+  const payload = Buffer.from(ciphertext, "base64")
+  if (payload.length <= 28) {
+    throw new Error("MODEL_CONTROL_LEGACY_SECRET_FORMAT_INVALID")
+  }
+  const iv = payload.subarray(0, 12)
+  const tag = payload.subarray(12, 28)
+  const encrypted = payload.subarray(28)
+  const decipher = createDecipheriv("aes-256-gcm", getModelControlMasterKey(), iv)
+  decipher.setAuthTag(tag)
+  const decrypted = Buffer.concat([decipher.update(encrypted), decipher.final()])
+  return decrypted.toString("utf8")
+}
+
+function decryptSecret(ciphertext: string) {
+  if (!ciphertext.startsWith("enc:")) {
+    return decryptLegacyControlPlaneSecret(ciphertext)
+  }
+
+  const [prefix, ivEncoded, tagEncoded, payloadEncoded] = ciphertext.split(":")
+  if (prefix !== "enc" || !ivEncoded || !tagEncoded || !payloadEncoded) {
+    throw new Error("MODEL_CONTROL_SECRET_FORMAT_INVALID")
+  }
+
+  const decipher = createDecipheriv(
+    "aes-256-gcm",
+    getModelControlMasterKey(),
+    Buffer.from(ivEncoded, "base64url"),
+  )
+  decipher.setAuthTag(Buffer.from(tagEncoded, "base64url"))
+  const decrypted = Buffer.concat([
+    decipher.update(Buffer.from(payloadEncoded, "base64url")),
+    decipher.final(),
+  ])
+  return decrypted.toString("utf8")
+}
+
+function tryDecryptLegacyValue(value: string | null | undefined) {
+  if (!value?.trim()) {
+    return ""
+  }
+
+  try {
+    return decryptSecret(value).trim()
+  } catch {
+    return ""
+  }
+}
+
+function inferHistoricalProviderEndpoint(input: { providerKey: string; displayName: string }) {
+  const key = `${input.providerKey} ${input.displayName}`.trim().toLowerCase()
+  if (key.includes("anhesea-openai-text")) {
+    return "https://api.anhesea.top:9443/v1"
+  }
+  if (key.includes("anhesea-gpt-image2") || key.includes("gpt-image2")) {
+    return "https://api.anhesea.top:9443"
+  }
+  if (key.includes("xiaojingai")) {
+    return "https://open.xiaojingai.com/v1"
+  }
+  if (key.includes("77code")) {
+    return "https://code.77code.fun/v1"
+  }
+  return ""
+}
+
+function isSeedModelControlProvider(providerKey: string, providerId: string) {
+  return providerKey.startsWith("seed-") || providerId.startsWith("seed-")
+}
+
+function normalizeProviderValidationError(value: string | null) {
+  if (!value?.trim()) {
+    return null
+  }
+
+  const normalized = value.trim()
+  if (normalized === "endpointUrl is required for non-TTS providers" || normalized === "PROVIDER_ENDPOINT_MISSING") {
+    return "接口地址未配置：非 TTS 接入方必须填写 http:// 或 https:// 开头的接口地址。"
+  }
+  if (normalized === "endpointUrl must start with http:// or https://") {
+    return "接口地址格式不正确：请填写 http:// 或 https:// 开头的接口地址。"
+  }
+  if (normalized === "provider secret is required for authenticated providers" || normalized === "PROVIDER_SECRET_MISSING") {
+    return "密钥未配置：当前鉴权方式需要先保存 API Key / Token。"
+  }
+  return normalized
+}
+
+function getProviderConfigurationIssue(provider: Pick<ModelControlProviderRecord, "providerKey" | "providerType" | "endpointUrl" | "authType" | "encryptedSecret">) {
+  const normalizedProviderType = provider.providerType.trim().toLowerCase()
+  const normalizedEndpoint = provider.endpointUrl.trim()
+
+  if (normalizedEndpoint && !/^https?:\/\//i.test(normalizedEndpoint)) {
+    return "接口地址格式不正确：请填写 http:// 或 https:// 开头的接口地址。"
+  }
+
+  if (!normalizedEndpoint && !TTS_PROVIDER_TYPES.has(normalizedProviderType)) {
+    return "接口地址未配置：非 TTS 接入方必须填写 http:// 或 https:// 开头的接口地址。"
+  }
+
+  if (provider.authType !== "none" && !provider.encryptedSecret) {
+    return "密钥未配置：当前鉴权方式需要先保存 API Key / Token。"
+  }
+
+  return null
+}
+
 function normalizeProviderRecord(raw: unknown): ModelControlProviderRecord | null {
   if (!raw || typeof raw !== "object") {
     return null
@@ -919,30 +1327,72 @@ function normalizeProviderRecord(raw: unknown): ModelControlProviderRecord | nul
   const status = providerStatusSchema.safeParse(record.status).success
     ? providerStatusSchema.parse(record.status)
     : "draft"
-
-  return {
-    id: typeof record.id === "string" && record.id.trim() ? record.id : randomUUID(),
-    providerKey:
-      typeof record.providerKey === "string" && record.providerKey.trim()
-        ? record.providerKey.trim()
-        : `provider-${slugifyModelControlValue(String(record.providerType ?? "unknown"))}`,
-    providerType: typeof record.providerType === "string" && record.providerType.trim() ? record.providerType.trim() : "unknown",
-    displayName:
-      typeof record.displayName === "string" && record.displayName.trim()
-        ? record.displayName.trim()
-        : typeof record.providerType === "string" && record.providerType.trim()
-          ? record.providerType.trim()
-          : "Unknown Provider",
-    endpointUrl: typeof record.endpointUrl === "string" ? record.endpointUrl.trim() : "",
+  const encryptedEndpoint =
+    typeof (record as { encryptedEndpoint?: unknown }).encryptedEndpoint === "string" &&
+    (record as { encryptedEndpoint: string }).encryptedEndpoint.trim()
+      ? (record as { encryptedEndpoint: string }).encryptedEndpoint.trim()
+      : null
+  const endpointHint =
+    typeof (record as { endpointHint?: unknown }).endpointHint === "string" &&
+    (record as { endpointHint: string }).endpointHint.trim()
+      ? (record as { endpointHint: string }).endpointHint.trim()
+      : null
+  const id = typeof record.id === "string" && record.id.trim() ? record.id : randomUUID()
+  const providerKey =
+    typeof record.providerKey === "string" && record.providerKey.trim()
+      ? record.providerKey.trim()
+      : `provider-${slugifyModelControlValue(String(record.providerType ?? "unknown"))}`
+  const displayName =
+    typeof record.displayName === "string" && record.displayName.trim()
+      ? record.displayName.trim()
+      : typeof record.providerType === "string" && record.providerType.trim()
+        ? record.providerType.trim()
+        : "Unknown Provider"
+  const hintedEndpoint = endpointHint && /^https?:\/\//i.test(endpointHint) ? endpointHint : ""
+  const rawEndpointUrl = typeof record.endpointUrl === "string" ? record.endpointUrl.trim() : ""
+  const inferredEndpoint = inferHistoricalProviderEndpoint({ providerKey, displayName })
+  const endpointUrl = rawEndpointUrl && /^https?:\/\//i.test(rawEndpointUrl)
+    ? rawEndpointUrl
+    : tryDecryptLegacyValue(encryptedEndpoint) ||
+      hintedEndpoint ||
+      inferredEndpoint ||
+      rawEndpointUrl
+  const providerType = typeof record.providerType === "string" && record.providerType.trim() ? record.providerType.trim() : "unknown"
+  const encryptedSecret = typeof record.encryptedSecret === "string" && record.encryptedSecret.trim() ? record.encryptedSecret : null
+  const secretPreview =
+    typeof record.secretPreview === "string" && record.secretPreview.trim()
+      ? record.secretPreview
+      : typeof (record as { secretHint?: unknown }).secretHint === "string" && (record as { secretHint: string }).secretHint.trim()
+        ? (record as { secretHint: string }).secretHint.trim()
+        : null
+  const initial: ModelControlProviderRecord = {
+    id,
+    providerKey,
+    providerType,
+    displayName,
+    endpointUrl,
+    encryptedEndpoint,
+    endpointHint,
     authType,
-    encryptedSecret: typeof record.encryptedSecret === "string" && record.encryptedSecret.trim() ? record.encryptedSecret : null,
-    secretPreview: typeof record.secretPreview === "string" && record.secretPreview.trim() ? record.secretPreview : null,
+    encryptedSecret,
+    secretPreview,
     status,
     lastValidatedAt: typeof record.lastValidatedAt === "string" && record.lastValidatedAt.trim() ? record.lastValidatedAt : null,
-    lastValidationError:
+    lastValidationError: normalizeProviderValidationError(
       typeof record.lastValidationError === "string" && record.lastValidationError.trim() ? record.lastValidationError : null,
+    ),
     createdAt: typeof record.createdAt === "string" && record.createdAt.trim() ? record.createdAt : now,
     updatedAt: typeof record.updatedAt === "string" && record.updatedAt.trim() ? record.updatedAt : now,
+  }
+  const configurationIssue =
+    initial.status === "available" && !isSeedModelControlProvider(initial.providerKey, initial.id)
+      ? getProviderConfigurationIssue(initial)
+      : null
+
+  return {
+    ...initial,
+    status: configurationIssue ? "invalid" : initial.status,
+    lastValidationError: configurationIssue ?? initial.lastValidationError,
   }
 }
 
@@ -1110,6 +1560,8 @@ function buildModelControlSeedState(): {
       providerType: normalizedType,
       displayName: buildProviderSeedDisplayName(normalizedType),
       endpointUrl: "",
+      encryptedEndpoint: null,
+      endpointHint: null,
       authType: TTS_PROVIDER_TYPES.has(normalizedType.toLowerCase()) ? "none" : "bearer_token",
       encryptedSecret: null,
       secretPreview: null,
@@ -1227,6 +1679,10 @@ async function ensureModelControlState() {
         defaults: normalizeDefaultsDocument(rawDefaults),
       }
 
+      if (state.providers.length > 0 && JSON.stringify(rawProviders) !== JSON.stringify(state.providers)) {
+        await replaceProviderRecords(state.providers as never[])
+      }
+
       const hasDefaults = MODEL_CONTROL_SLOTS.some(
         (slot) =>
           state.defaults.globalDefaults[slot] ||
@@ -1333,6 +1789,230 @@ function sanitizeModelRecord(model: ModelControlModelRecord, providers: ModelCon
   }
 }
 
+function classifyModelCallError(input: { statusCode?: number | null; message?: string | null }): ModelDiagnosticErrorCategory {
+  const message = (input.message ?? "").toLowerCase()
+  const statusCode = input.statusCode ?? null
+  if (statusCode === 401 || statusCode === 403 || /api key|apikey|auth|unauthorized|forbidden|credential|secret|token/.test(message)) {
+    return "auth_error"
+  }
+  if (statusCode === 402 || statusCode === 429 || /quota|credit|billing|insufficient|rate limit|too many requests/.test(message)) {
+    return "quota_exceeded"
+  }
+  if (statusCode === 404 || /model.*not.*found|unknown model|does not exist|invalid model/.test(message)) {
+    return "model_not_found"
+  }
+  if (statusCode === 400 || statusCode === 422 || /schema|format|invalid request|bad request|unsupported|malformed/.test(message)) {
+    return "request_format_incompatible"
+  }
+  if (statusCode === 408 || statusCode === 504 || /timeout|timed out|abort/.test(message)) {
+    return "timeout"
+  }
+  if (/empty|no output|no content|blank/.test(message)) {
+    return "empty_result"
+  }
+  if (/safety|policy|moderation|refusal|refused|blocked/.test(message)) {
+    return "safety_refusal"
+  }
+  if (statusCode && statusCode >= 500) {
+    return "provider_error"
+  }
+  return message ? "provider_error" : "unknown"
+}
+
+function redactSensitiveText(value: string) {
+  return value
+    .replace(/bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [已隐藏]")
+    .replace(/sk-[A-Za-z0-9_-]{6,}/gi, "sk-[已隐藏]")
+    .replace(/(authorization\s*[:=]\s*)([^\s,;]+)/gi, "$1[已隐藏]")
+    .replace(/((?:api[_-]?key|access[_-]?token|refresh[_-]?token|secret|password|token|key)\s*[:=]\s*)([^\s,;&]+)/gi, "$1[已隐藏]")
+    .replace(/([?&](?:api[_-]?key|access[_-]?token|refresh[_-]?token|secret|password|token|key)=)([^&#\s]+)/gi, "$1[已隐藏]")
+}
+
+function toOperatorModelError(category: ModelDiagnosticErrorCategory, message: string) {
+  const labels: Record<ModelDiagnosticErrorCategory, string> = {
+    auth_error: "密钥错误",
+    quota_exceeded: "额度不足或限流",
+    model_not_found: "模型不存在",
+    request_format_incompatible: "请求格式不兼容",
+    timeout: "调用超时",
+    empty_result: "供应商返回空结果",
+    safety_refusal: "内容安全/策略拒绝",
+    provider_error: "供应商错误",
+    worker_local_failure: "worker 本地处理失败",
+    config_error: "配置错误",
+    unknown: "未知错误",
+  }
+  return `${labels[category]}: ${redactSensitiveText(message)}`
+}
+
+function buildModelSmokeUrl(endpointUrl: string, requestPath: string) {
+  const trimmedEndpoint = endpointUrl.trim().replace(/\/+$/, "")
+  const base = requestPath.startsWith("/v1/") ? trimmedEndpoint.replace(/\/v1$/i, "") : trimmedEndpoint
+  return `${base}${requestPath.startsWith("/") ? requestPath : `/${requestPath}`}`
+}
+
+function buildProviderAuthHeaders(provider: ModelControlProviderRecord): Record<string, string> {
+  if (provider.authType === "none") {
+    return {}
+  }
+  if (!provider.encryptedSecret) {
+    throw new Error("provider secret is required for authenticated providers")
+  }
+
+  const secret = decryptSecret(provider.encryptedSecret)
+  if (provider.authType === "x_api_key") {
+    return { "x-api-key": secret }
+  }
+  if (provider.authType === "api_key_header" || provider.authType === "custom_header") {
+    return { Authorization: secret }
+  }
+  return { Authorization: `Bearer ${secret}` }
+}
+
+function buildMinimalTextSmokePayload(wireApi: string, providerModelId: string) {
+  const prompt = "Return exactly {} as a compact JSON object."
+  if (wireApi === "responses") {
+    return {
+      model: providerModelId,
+      input: [{ role: "user", content: prompt }],
+      max_output_tokens: 16,
+    }
+  }
+  if (wireApi === "messages") {
+    return {
+      model: providerModelId,
+      messages: [{ role: "user", content: prompt }],
+      max_tokens: 16,
+    }
+  }
+  return {
+    model: providerModelId,
+    messages: [{ role: "user", content: prompt }],
+    max_tokens: 16,
+  }
+}
+
+function buildMinimalImageSmokePayload(wireApi: string, providerModelId: string) {
+  const prompt = "A tiny plain white square with the word OK."
+  if (wireApi === "gemini_generate_content") {
+    return {
+      contents: [
+        {
+          role: "user",
+          parts: [{ text: prompt }],
+        },
+      ],
+      generationConfig: {
+        responseModalities: ["IMAGE"],
+      },
+    }
+  }
+
+  return {
+    model: providerModelId,
+    prompt,
+    size: "256x256",
+    n: 1,
+  }
+}
+
+async function readProviderErrorBody(response: Response) {
+  try {
+    const payload = await response.json()
+    const error = (payload as { error?: { message?: unknown } })?.error
+    if (typeof error?.message === "string" && error.message.trim()) {
+      return redactSensitiveText(error.message.trim())
+    }
+    return redactSensitiveText(JSON.stringify(payload).slice(0, 500))
+  } catch {
+    try {
+      return redactSensitiveText((await response.text()).slice(0, 500))
+    } catch {
+      return response.statusText || `HTTP ${response.status}`
+    }
+  }
+}
+
+async function probeModelSmoke(input: {
+  model: ModelControlModelRecord
+  provider: ModelControlProviderRecord
+  smokeMode: ModelSmokeMode
+}) {
+  const routingProfile = buildModelRoutingProfile({
+    slotType: input.model.slotType,
+    providerModelId: input.model.providerModelId,
+    providerType: input.provider.providerType,
+    capabilityJson: input.model.capabilityJson,
+  })
+
+  if (input.smokeMode === "config" || routingProfile.wireApi === "video_generation") {
+    return {
+      routingProfile,
+      status: "skipped" as const,
+      statusCode: null,
+      errorCategory: null,
+      errorMessage: null,
+    }
+  }
+
+  if (input.model.slotType !== "textModel" && input.model.slotType !== "imageModel") {
+    return {
+      routingProfile,
+      status: "skipped" as const,
+      statusCode: null,
+      errorCategory: null,
+      errorMessage: null,
+    }
+  }
+
+  if (input.model.slotType === "imageModel" && input.smokeMode !== "minimal_generation") {
+    return {
+      routingProfile,
+      status: "skipped" as const,
+      statusCode: null,
+      errorCategory: null,
+      errorMessage: null,
+    }
+  }
+
+  const response = await fetch(buildModelSmokeUrl(input.provider.endpointUrl, routingProfile.endpointPath), {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...buildProviderAuthHeaders(input.provider),
+    },
+    body: JSON.stringify(
+      input.model.slotType === "imageModel"
+        ? buildMinimalImageSmokePayload(routingProfile.wireApi, input.model.providerModelId)
+        : buildMinimalTextSmokePayload(routingProfile.wireApi, input.model.providerModelId),
+    ),
+    signal: AbortSignal.timeout(Math.min(routingProfile.timeoutMs, 30_000)),
+  })
+
+  if (!response.ok) {
+    const errorMessage = await readProviderErrorBody(response)
+    const errorCategory = classifyModelCallError({
+      statusCode: response.status,
+      message: errorMessage,
+    })
+    return {
+      routingProfile,
+      status: "failed" as const,
+      statusCode: response.status,
+      errorCategory,
+      errorMessage: toOperatorModelError(errorCategory, errorMessage),
+    }
+  }
+
+  return {
+    routingProfile,
+    status: "success" as const,
+    statusCode: response.status,
+    errorCategory: null,
+    errorMessage: null,
+  }
+}
+
 function validateProviderForAvailability(provider: ModelControlProviderRecord) {
   const normalizedProviderType = provider.providerType.trim().toLowerCase()
   const normalizedEndpoint = provider.endpointUrl.trim()
@@ -1354,17 +2034,21 @@ function validateProviderForAvailability(provider: ModelControlProviderRecord) {
   }
 
   if (normalizedEndpoint && !/^https?:\/\//i.test(normalizedEndpoint)) {
-    return { ok: false as const, error: "endpointUrl must start with http:// or https://" }
+    return { ok: false as const, error: "接口地址格式不正确：请填写 http:// 或 https:// 开头的接口地址。" }
   }
 
   if (!normalizedEndpoint && !TTS_PROVIDER_TYPES.has(normalizedProviderType)) {
-    return { ok: false as const, error: "endpointUrl is required for non-TTS providers" }
+    return { ok: false as const, error: "接口地址未配置：非 TTS 接入方必须填写 http:// 或 https:// 开头的接口地址。" }
   }
 
   return { ok: true as const }
 }
 
-function validateModelForAvailability(model: ModelControlModelRecord, providers: ModelControlProviderRecord[]) {
+async function validateModelForAvailability(
+  model: ModelControlModelRecord,
+  providers: ModelControlProviderRecord[],
+  options: { smokeMode?: ModelSmokeMode } = {},
+) {
   const provider = providers.find((item) => item.id === model.providerId) ?? null
   if (!provider) {
     return { ok: false as const, error: "linked provider does not exist" }
@@ -1387,10 +2071,86 @@ function validateModelForAvailability(model: ModelControlModelRecord, providers:
   }
 
   if (TTS_PROVIDER_TYPES.has(provider.providerType.trim().toLowerCase())) {
+    await appendModelDiagnosticRecord({
+      providerId: provider.id,
+      providerDisplayName: provider.displayName,
+      providerType: provider.providerType,
+      modelId: model.id,
+      modelDisplayName: model.displayName,
+      slotType: model.slotType,
+      providerModelId: model.providerModelId,
+      transport: provider.providerType,
+      wireApi: "custom_http",
+      requestPath: "slot/provider compatibility",
+      smokeMode: "config",
+      status: "failed",
+      statusCode: null,
+      durationMs: 0,
+      errorCategory: "config_error",
+      errorMessage: "槽位不匹配：TTS 接入方不能绑定为文案/图片/视频模型。",
+    })
     return { ok: false as const, error: "TTS providers cannot validate non-TTS model slots" }
   }
 
-  return { ok: true as const }
+  const routingProfile = buildModelRoutingProfile({
+    slotType: model.slotType,
+    providerModelId: model.providerModelId,
+    providerType: provider.providerType,
+    capabilityJson: model.capabilityJson,
+  })
+  const smokeMode = options.smokeMode ?? routingProfile.smokeProbe
+  const startedAt = Date.now()
+
+  try {
+    const smoke = await probeModelSmoke({ model, provider, smokeMode })
+    await appendModelDiagnosticRecord({
+      providerId: provider.id,
+      providerDisplayName: provider.displayName,
+      providerType: provider.providerType,
+      modelId: model.id,
+      modelDisplayName: model.displayName,
+      slotType: model.slotType,
+      providerModelId: model.providerModelId,
+      transport: smoke.routingProfile.transport,
+      wireApi: smoke.routingProfile.wireApi,
+      requestPath: smoke.routingProfile.endpointPath,
+      smokeMode,
+      status: smoke.status,
+      statusCode: smoke.statusCode,
+      durationMs: Date.now() - startedAt,
+      errorCategory: smoke.errorCategory,
+      errorMessage: smoke.errorMessage,
+    })
+
+    if (smoke.status === "failed") {
+      return { ok: false as const, error: smoke.errorMessage ?? "model smoke failed" }
+    }
+
+    return { ok: true as const }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    const category = classifyModelCallError({ message })
+    const operatorMessage = toOperatorModelError(category, message)
+    await appendModelDiagnosticRecord({
+      providerId: provider.id,
+      providerDisplayName: provider.displayName,
+      providerType: provider.providerType,
+      modelId: model.id,
+      modelDisplayName: model.displayName,
+      slotType: model.slotType,
+      providerModelId: model.providerModelId,
+      transport: routingProfile.transport,
+      wireApi: routingProfile.wireApi,
+      requestPath: routingProfile.endpointPath,
+      smokeMode,
+      status: "failed",
+      statusCode: null,
+      durationMs: Date.now() - startedAt,
+      errorCategory: category,
+      errorMessage: operatorMessage,
+    })
+    return { ok: false as const, error: operatorMessage }
+  }
 }
 
 function buildSelectablePools(state: {
@@ -1566,6 +2326,200 @@ function buildDefaultsResponse(
   }
 }
 
+const routingStrategyCopy: Record<ModelRoutingStrategy, string> = {
+  balanced: "均衡",
+  quality_first: "高质量优先",
+  speed_first: "速度优先",
+  cost_first: "成本优先",
+}
+
+const fallbackTriggerCopy: Record<ModelFallbackTrigger, string> = {
+  timeout: "调用超时",
+  rate_limit: "限流",
+  provider_error: "接入方错误",
+  empty_result: "没有返回结果",
+  invalid_response: "返回内容不完整",
+}
+
+function getRoutingSelectionValue(slotType: ModelControlSlot, selection: SlotRoutingPolicy["primary"] | undefined | null) {
+  if (!selection) {
+    return null
+  }
+  return slotType === "ttsProvider"
+    ? selection.providerId ?? selection.modelId ?? null
+    : selection.modelId ?? null
+}
+
+function getRoutingSelectionView(
+  slotType: ModelControlSlot,
+  selection: SlotRoutingPolicy["primary"] | undefined | null,
+  selectable: ReturnType<typeof buildSelectablePools>,
+) {
+  const valueId = getRoutingSelectionValue(slotType, selection)
+  if (!valueId) {
+    return null
+  }
+  const matched = selectable[slotType].find((entry) => entry.valueId === valueId) ?? null
+  return matched
+    ? {
+        recordId: valueId,
+        valueId,
+        displayName: typeof matched.displayName === "string" ? matched.displayName : valueId,
+        providerDisplayName:
+          typeof matched.providerDisplayName === "string"
+            ? matched.providerDisplayName
+            : typeof matched.providerType === "string"
+              ? matched.providerType
+              : null,
+        providerType: typeof matched.providerType === "string" ? matched.providerType : null,
+        providerModelId: typeof matched.providerModelId === "string" ? matched.providerModelId : null,
+      }
+    : {
+        recordId: valueId,
+        valueId,
+        displayName: valueId,
+        providerDisplayName: null,
+        providerType: null,
+        providerModelId: null,
+        warning: "这个模型现在不可用，请重新选择。",
+      }
+}
+
+function buildRoutingSlotView(
+  policy: SlotRoutingPolicy,
+  slotType: ModelControlSlot,
+  selectable: ReturnType<typeof buildSelectablePools>,
+  sourceLabel: string,
+) {
+  const primary = getRoutingSelectionView(slotType, policy.primary, selectable)
+  const fallbacks = policy.fallbacks.flatMap((fallback) => {
+    const view = getRoutingSelectionView(slotType, fallback, selectable)
+    return view ? [view] : []
+  })
+  const triggerLabels = policy.fallbackTriggers.map((trigger) => fallbackTriggerCopy[trigger] ?? trigger)
+  const warnings = [
+    policy.enabled && !primary ? "已启用策略，但主模型不可用或未选择。" : "",
+    ...fallbacks.filter((item) => "warning" in item).map((item) => `${item.displayName}: ${item.warning}`),
+  ].filter(Boolean)
+
+  return {
+    enabled: policy.enabled,
+    strategy: policy.strategy,
+    strategyLabel: routingStrategyCopy[policy.strategy],
+    primary,
+    fallbacks,
+    fallbackTriggers: policy.fallbackTriggers,
+    fallbackTriggerLabels: triggerLabels,
+    operatorNote: policy.operatorNote,
+    warnings,
+    summary: policy.enabled
+      ? `${sourceLabel}启用${routingStrategyCopy[policy.strategy]}，主模型${primary?.displayName ?? "未设置"}${
+          fallbacks.length ? `，备用${fallbacks.length}个` : "，暂无备用模型"
+        }。`
+      : `${sourceLabel}未启用路由策略，将继续使用默认模型。`,
+  }
+}
+
+function buildModelRoutingPoliciesResponse(
+  policies: ModelRoutingPoliciesDocument,
+  state: {
+    providers: ModelControlProviderRecord[]
+    models: ModelControlModelRecord[]
+  },
+) {
+  const selectable = buildSelectablePools(state)
+  const resolved = {
+    global: Object.fromEntries(
+      MODEL_CONTROL_SLOTS.map((slotType) => [
+        slotType,
+        buildRoutingSlotView(policies.global[slotType], slotType, selectable, "全局"),
+      ]),
+    ),
+    mass_production: Object.fromEntries(
+      MODEL_CONTROL_SLOTS.map((slotType) => [
+        slotType,
+        buildRoutingSlotView(policies.modes.mass_production[slotType], slotType, selectable, "量产模式"),
+      ]),
+    ),
+    high_quality: Object.fromEntries(
+      MODEL_CONTROL_SLOTS.map((slotType) => [
+        slotType,
+        buildRoutingSlotView(policies.modes.high_quality[slotType], slotType, selectable, "高质量模式"),
+      ]),
+    ),
+  }
+
+  return {
+    policies,
+    resolved,
+    strategyOptions: Object.entries(routingStrategyCopy).map(([value, label]) => ({ value, label })),
+    triggerOptions: Object.entries(fallbackTriggerCopy).map(([value, label]) => ({ value, label })),
+    updatedAt: policies.updatedAt,
+  }
+}
+
+function assertRoutingPolicyTargetsAreSelectable(
+  policies: ModelRoutingPoliciesDocument,
+  state: {
+    providers: ModelControlProviderRecord[]
+    models: ModelControlModelRecord[]
+  },
+) {
+  const selectable = buildSelectablePools(state)
+  const scopes: Array<{ label: string; slots: ModelRoutingPoliciesDocument["global"] }> = [
+    { label: "global", slots: policies.global },
+    { label: "mass_production", slots: policies.modes.mass_production },
+    { label: "high_quality", slots: policies.modes.high_quality },
+  ]
+
+  for (const scope of scopes) {
+    for (const slotType of MODEL_CONTROL_SLOTS) {
+      const policy = scope.slots[slotType]
+      const selections = [policy.primary, ...policy.fallbacks]
+      for (const selection of selections) {
+        const valueId = getRoutingSelectionValue(slotType, selection)
+        if (valueId && !selectable[slotType].some((entry) => entry.valueId === valueId)) {
+          return `ROUTING_TARGET_NOT_SELECTABLE:${scope.label}:${slotType}:${valueId}`
+        }
+      }
+    }
+  }
+
+  return null
+}
+
+function mergeRoutingPolicies(
+  current: ModelRoutingPoliciesDocument,
+  patch: z.infer<typeof updateRoutingPoliciesInputSchema>,
+) {
+  const merged: ModelRoutingPoliciesDocument = modelRoutingPoliciesDocumentSchema.parse(current)
+
+  for (const slotType of MODEL_CONTROL_SLOTS) {
+    if (patch.global?.[slotType]) {
+      merged.global[slotType] = slotRoutingPolicySchema.parse({
+        ...merged.global[slotType],
+        ...patch.global[slotType],
+      })
+    }
+  }
+
+  for (const modeId of MODEL_CONTROL_MODES) {
+    for (const slotType of MODEL_CONTROL_SLOTS) {
+      if (patch.modes?.[modeId]?.[slotType]) {
+        merged.modes[modeId][slotType] = slotRoutingPolicySchema.parse({
+          ...merged.modes[modeId][slotType],
+          ...patch.modes[modeId]?.[slotType],
+        })
+      }
+    }
+  }
+
+  return modelRoutingPoliciesDocumentSchema.parse({
+    ...merged,
+    updatedAt: nowIso(),
+  })
+}
+
 function isSelectableTarget(
   slotType: ModelControlSlot,
   valueId: string,
@@ -1681,6 +2635,33 @@ app.get("/api/users", async (c) => {
   return c.json({ users })
 })
 
+app.post("/api/users/test-account", zValidator("json", createTestAccountInputSchema), async (c) => {
+  const payload = c.req.valid("json")
+  const timestamp = Date.now()
+  const username = `test-operator-${timestamp}`
+  const password = `genergi-test-${randomBytes(12).toString("base64url")}`
+  const expiresAt = new Date(timestamp + payload.expiresInHours * 60 * 60 * 1000).toISOString()
+
+  try {
+    const user = await createStoredUser({
+      username,
+      password,
+      displayName: "测试运营账号",
+      status: "active",
+      purpose: "test_operator",
+      expiresAt,
+    })
+    return c.json({ user: toPublicUser(user, "file"), password, expiresAt }, 201)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "UNKNOWN_ERROR"
+    if (message === "USERNAME_TAKEN") {
+      return c.json({ message }, 409)
+    }
+
+    throw error
+  }
+})
+
 app.post("/api/users", zValidator("json", createUserInputSchema), async (c) => {
   const payload = c.req.valid("json")
   try {
@@ -1786,6 +2767,8 @@ app.post("/api/model-control/providers", zValidator("json", createProviderInputS
     providerType: payload.providerType,
     displayName: payload.displayName,
     endpointUrl: payload.endpointUrl.trim(),
+    encryptedEndpoint: null,
+    endpointHint: payload.endpointUrl.trim() || null,
     authType: payload.authType,
     encryptedSecret: payload.secret ? encryptSecret(payload.secret) : null,
     secretPreview: payload.secret ? maskSecretPreview(payload.secret) : null,
@@ -1816,6 +2799,8 @@ app.patch("/api/model-control/providers/:providerId", zValidator("json", updateP
     providerType: payload.providerType ?? current.providerType,
     displayName: payload.displayName ?? current.displayName,
     endpointUrl: payload.endpointUrl ?? current.endpointUrl,
+    encryptedEndpoint: payload.endpointUrl !== undefined ? null : current.encryptedEndpoint,
+    endpointHint: payload.endpointUrl !== undefined ? payload.endpointUrl.trim() || null : current.endpointHint,
     authType: payload.authType ?? current.authType,
     encryptedSecret: payload.secret ? encryptSecret(payload.secret) : current.encryptedSecret,
     secretPreview: payload.secret ? maskSecretPreview(payload.secret) : current.secretPreview,
@@ -1835,6 +2820,236 @@ app.get("/api/model-control/models", async (c) => {
   return c.json({
     models: state.models.map((model) => sanitizeModelRecord(model, state.providers)),
   })
+})
+
+app.get("/api/model-control/diagnostics", async (c) => {
+  const providerId = c.req.query("providerId")?.trim()
+  const modelId = c.req.query("modelId")?.trim()
+  const limit = Math.min(Math.max(Number.parseInt(c.req.query("limit") ?? "50", 10) || 50, 1), 200)
+  const records = await readModelDiagnosticRecords()
+  const diagnostics = records
+    .filter((record) => !providerId || record.providerId === providerId)
+    .filter((record) => !modelId || record.modelId === modelId)
+    .slice(0, limit)
+
+  return c.json({ diagnostics })
+})
+
+const qualitySummarySlotLabels: Record<BlueprintQualityFeedbackSlot, string> = {
+  textModel: "文案规划",
+  imageModel: "图片模型",
+  videoModel: "视频模型",
+  ttsProvider: "系统配音",
+}
+
+function getQualitySummaryModel(detail: TaskDetail | null, slotType: BlueprintQualityFeedbackSlot) {
+  const snapshot = detail?.taskRunConfig.slotSnapshots?.find((item) => item.slotType === slotType) ?? null
+  const configured = detail?.taskRunConfig[slotType]
+
+  if (snapshot) {
+    return {
+      modelId:
+        typeof snapshot.modelId === "string" && snapshot.modelId.trim()
+          ? snapshot.modelId
+          : typeof snapshot.providerModelId === "string" && snapshot.providerModelId.trim()
+            ? snapshot.providerModelId
+            : "unknown",
+      modelDisplayName:
+        typeof snapshot.displayName === "string" && snapshot.displayName.trim()
+          ? snapshot.displayName
+          : typeof snapshot.modelId === "string" && snapshot.modelId.trim()
+            ? snapshot.modelId
+            : "未记录模型",
+      providerModelId:
+        typeof snapshot.providerModelId === "string" && snapshot.providerModelId.trim()
+          ? snapshot.providerModelId
+          : null,
+      providerDisplayName:
+        typeof snapshot.providerId === "string" && snapshot.providerId.trim()
+          ? snapshot.providerId
+          : null,
+    }
+  }
+
+  if (configured && typeof configured === "object") {
+    const model = configured as { id?: unknown; label?: unknown; provider?: unknown }
+    return {
+      modelId: typeof model.id === "string" && model.id.trim() ? model.id : "unknown",
+      modelDisplayName:
+        typeof model.label === "string" && model.label.trim()
+          ? model.label
+          : typeof model.id === "string" && model.id.trim()
+            ? model.id
+            : "未记录模型",
+      providerModelId: null,
+      providerDisplayName: typeof model.provider === "string" && model.provider.trim() ? model.provider : null,
+    }
+  }
+
+  if (slotType === "ttsProvider" && typeof configured === "string" && configured.trim()) {
+    return {
+      modelId: configured,
+      modelDisplayName: configured,
+      providerModelId: configured,
+      providerDisplayName: configured,
+    }
+  }
+
+  return {
+    modelId: "unknown",
+    modelDisplayName: "未记录模型",
+    providerModelId: null,
+    providerDisplayName: null,
+  }
+}
+
+app.get("/api/model-control/quality-summary", async (c) => {
+  const limit = Math.min(Math.max(Number.parseInt(c.req.query("limit") ?? "50", 10) || 50, 1), 200)
+  const reviewsByTask = await readTaskBlueprintReviewRecords()
+  const feedback = Object.values(reviewsByTask)
+    .flatMap((reviews) => reviews.flatMap((review) => review.qualityFeedback ?? []))
+    .filter((item) => item.slotType)
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+    .slice(0, limit)
+
+  const detailCache = new Map<string, TaskDetail | null>()
+  async function readCachedDetail(taskId: string) {
+    if (!detailCache.has(taskId)) {
+      detailCache.set(taskId, await getTaskDetail(taskId))
+    }
+    return detailCache.get(taskId) ?? null
+  }
+
+  const groups = new Map<string, {
+    slotType: BlueprintQualityFeedbackSlot
+    slotLabel: string
+    modelId: string
+    modelDisplayName: string
+    providerModelId: string | null
+    providerDisplayName: string | null
+    issueCategory: BlueprintQualityIssueCategory
+    reasonLabel: string
+    count: number
+    latestAt: string
+  }>()
+
+  for (const item of feedback) {
+    const slotType = item.slotType
+    if (!slotType) {
+      continue
+    }
+    const model = getQualitySummaryModel(await readCachedDetail(item.taskId), slotType)
+    const key = [slotType, model.modelId, item.issueCategory].join("::")
+    const current = groups.get(key)
+    if (current) {
+      current.count += 1
+      if (item.createdAt.localeCompare(current.latestAt) > 0) {
+        current.latestAt = item.createdAt
+      }
+      continue
+    }
+    groups.set(key, {
+      slotType,
+      slotLabel: qualitySummarySlotLabels[slotType],
+      modelId: model.modelId,
+      modelDisplayName: model.modelDisplayName,
+      providerModelId: model.providerModelId,
+      providerDisplayName: model.providerDisplayName,
+      issueCategory: item.issueCategory,
+      reasonLabel: item.reasonLabel,
+      count: 1,
+      latestAt: item.createdAt,
+    })
+  }
+
+  const items = [...groups.values()].sort((left, right) => {
+    if (right.count !== left.count) {
+      return right.count - left.count
+    }
+    return right.latestAt.localeCompare(left.latestAt)
+  })
+
+  return c.json({
+    totalCount: feedback.length,
+    items,
+    updatedAt: feedback[0]?.createdAt ?? null,
+  })
+})
+
+app.get("/api/model-control/route-preview", async (c) => {
+  const modeIdQuery = c.req.query("modeId")
+  const selectedMode = modelControlModeSchema.safeParse(modeIdQuery).success ? (modeIdQuery as ModelControlMode) : "high_quality"
+  const state = await ensureModelControlState()
+  const providersById = new Map(state.providers.map((provider) => [provider.id, provider]))
+
+  try {
+    const resolvedSlots = await resolveEffectiveSlots({ modeId: selectedMode })
+    const slots = MODEL_CONTROL_SLOTS.map((slotType) => {
+      const snapshot = resolvedSlots.find((slot) => slot.slotType === slotType)
+      if (!snapshot) {
+        return {
+          slotType,
+          displayName: "未准备好",
+          provider: "待检查",
+          wireApi: "待确认",
+          requestPath: "待确认",
+          selectionReason: "系统暂时不能确认这个环节会使用哪一个模型。",
+          fallbackCandidates: [],
+          warnings: ["这个环节没有返回模型路线，请先检查模型管理配置。"],
+        }
+      }
+
+      const provider = providersById.get(snapshot.providerId)
+      const routingProfile = snapshot.routingProfile ?? buildModelRoutingProfile({
+        slotType,
+        providerModelId: snapshot.providerModelId,
+        providerType: snapshot.providerType,
+        capabilityJson: snapshot.capabilityJson,
+      })
+
+      return {
+        slotType,
+        displayName: snapshot.displayName,
+        provider: provider?.displayName ?? snapshot.providerType,
+        wireApi: routingProfile.wireApi,
+        requestPath: routingProfile.endpointPath,
+        selectionReason: snapshot.selectionReason ?? "系统按当前默认配置选择了这个模型。",
+        routingStrategy: snapshot.routingStrategy,
+        fallbackCandidates: (snapshot.fallbackCandidates ?? []).map((candidate) => {
+          const fallbackProvider = providersById.get(candidate.providerId)
+          const fallbackRoutingProfile = candidate.routingProfile ?? buildModelRoutingProfile({
+            slotType: candidate.slotType,
+            providerModelId: candidate.providerModelId,
+            providerType: candidate.providerType,
+            capabilityJson: candidate.capabilityJson,
+          })
+          return {
+            displayName: candidate.displayName,
+            provider: fallbackProvider?.displayName ?? candidate.providerType,
+            wireApi: fallbackRoutingProfile.wireApi,
+            requestPath: fallbackRoutingProfile.endpointPath,
+            fallbackTriggers: candidate.fallbackTriggers ?? [],
+          }
+        }),
+        warnings: [],
+      }
+    })
+
+    return c.json({
+      modeId: selectedMode,
+      summary: `本次会按${selectedMode === "high_quality" ? "高质量模式" : "量产模式"}使用 4 个模型槽位，当前没有明显配置风险。`,
+      slots,
+      warnings: [],
+    })
+  } catch (error) {
+    const slots = buildRoutePreviewUnavailableSlots(error)
+    return c.json({
+      modeId: selectedMode,
+      summary: "本次模型路线还没有准备好，请先处理下面的配置风险再提交任务。",
+      slots,
+      warnings: Array.from(new Set(slots.flatMap((slot) => slot.warnings))),
+    })
+  }
 })
 
 app.post("/api/model-control/models", zValidator("json", createModelInputSchema), async (c) => {
@@ -1885,7 +3100,7 @@ app.patch("/api/model-control/models/:modelId", zValidator("json", updateModelIn
   const validationReset = shouldResetModelValidation(changedKeys)
   const nextLifecycleStatus =
     payload.lifecycleStatus ??
-    (validationReset && current.lifecycleStatus === "available" ? "draft" : current.lifecycleStatus)
+    (validationReset ? "draft" : current.lifecycleStatus)
   const next: ModelControlModelRecord = {
     ...current,
     modelKey: payload.modelKey ?? current.modelKey,
@@ -2018,6 +3233,26 @@ app.put("/api/model-control/defaults/modes/:modeId", zValidator("json", z.object
   return c.json(buildDefaultsResponse(nextDefaults, state))
 })
 
+app.get("/api/model-control/routing", async (c) => {
+  const state = await ensureModelControlState()
+  const policies = modelRoutingPoliciesDocumentSchema.parse(await readModelRoutingPolicies())
+  return c.json(buildModelRoutingPoliciesResponse(policies, state))
+})
+
+app.put("/api/model-control/routing", zValidator("json", updateRoutingPoliciesInputSchema), async (c) => {
+  const payload = c.req.valid("json")
+  const state = await ensureModelControlState()
+  const current = modelRoutingPoliciesDocumentSchema.parse(await readModelRoutingPolicies())
+  const nextPolicies = mergeRoutingPolicies(current, payload)
+  const targetError = assertRoutingPolicyTargetsAreSelectable(nextPolicies, state)
+  if (targetError) {
+    return c.json({ message: targetError }, 400)
+  }
+
+  await replaceModelRoutingPolicies(nextPolicies)
+  return c.json(buildModelRoutingPoliciesResponse(nextPolicies, state))
+})
+
 app.post("/api/model-control/validation/providers/:providerId", async (c) => {
   const providerId = c.req.param("providerId")
   const state = await ensureModelControlState()
@@ -2038,11 +3273,40 @@ app.post("/api/model-control/validation/providers/:providerId", async (c) => {
   const providers = [...state.providers]
   providers[index] = next
   await replaceProviderRecords(providers as never[])
+  if (validation.ok && TTS_PROVIDER_TYPES.has(next.providerType.trim().toLowerCase())) {
+    await appendModelDiagnosticRecord({
+      providerId: next.id,
+      providerDisplayName: next.displayName,
+      providerType: next.providerType,
+      modelId: null,
+      modelDisplayName: null,
+      slotType: "ttsProvider",
+      providerModelId: next.providerKey,
+      transport: next.providerType,
+      wireApi: "tts",
+      requestPath: "provider",
+      smokeMode: "connectivity",
+      status: "success",
+      statusCode: null,
+      durationMs: 0,
+      errorCategory: null,
+      errorMessage: null,
+    })
+  }
   return c.json({ provider: sanitizeProviderRecord(next) })
 })
 
 app.post("/api/model-control/validation/models/:modelId", async (c) => {
   const modelId = c.req.param("modelId")
+  let requestedSmokeMode: ModelSmokeMode | undefined
+  if (c.req.header("content-type")?.includes("application/json")) {
+    try {
+      const parsed = z.object({ smokeMode: modelSmokeModeInputSchema.optional() }).safeParse(await c.req.json())
+      requestedSmokeMode = parsed.success ? parsed.data.smokeMode : undefined
+    } catch {
+      requestedSmokeMode = undefined
+    }
+  }
   const state = await ensureModelControlState()
   const index = state.models.findIndex((item) => item.id === modelId)
   if (index < 0) {
@@ -2050,7 +3314,9 @@ app.post("/api/model-control/validation/models/:modelId", async (c) => {
   }
 
   const current = state.models[index]
-  const validation = validateModelForAvailability(current, state.providers)
+  const validation = await validateModelForAvailability(current, state.providers, {
+    smokeMode: requestedSmokeMode,
+  })
   const next: ModelControlModelRecord = {
     ...current,
     lifecycleStatus: validation.ok ? "available" : "invalid",
@@ -2496,7 +3762,7 @@ app.get("/api/tasks/:taskId/delivery", async (c) => {
     return c.json({ message: "TASK_NOT_FOUND" }, 404)
   }
 
-  return c.json({ delivery: await buildTaskDelivery(task, detail) })
+  return c.json({ delivery: await buildTaskDelivery(task, alignDetailScenesWithExecutionBrief(detail)) })
 })
 
 app.get("/api/tasks/:taskId/delivery/manifest", async (c) => {
@@ -2507,7 +3773,7 @@ app.get("/api/tasks/:taskId/delivery/manifest", async (c) => {
     return c.json({ message: "TASK_NOT_FOUND" }, 404)
   }
 
-  const delivery = await buildTaskDelivery(task, detail)
+  const delivery = await buildTaskDelivery(task, alignDetailScenesWithExecutionBrief(detail))
   const manifest = {
     generatedAt: new Date().toISOString(),
     delivery,
@@ -2559,14 +3825,19 @@ app.post(
       }, 409)
     }
 
-    if (task.status !== "failed") {
+    const scope = payload.scope ?? (scene ? "scene" : "task")
+    const canRetryReviewKeyframe =
+      task.status === "waiting_review" &&
+      scope === "keyframe" &&
+      Boolean(scene)
+
+    if (task.status !== "failed" && !canRetryReviewKeyframe) {
       return c.json({
         message: "TASK_RETRY_NOT_RECOVERABLE",
         status: task.status,
       }, 409)
     }
 
-    const scope = payload.scope ?? (scene ? "scene" : "task")
     const retryRequest = await appendTaskRetryRequest(taskId, {
       scope,
       sceneId: scene?.id ?? null,
@@ -2635,8 +3906,16 @@ app.post(
 )
 
 app.get("/api/tasks/:taskId/blueprints", async (c) => {
-  const blueprints = await listTaskBlueprints(c.req.param("taskId"))
-  return c.json({ blueprints })
+  const taskId = c.req.param("taskId")
+  const [blueprints, detail] = await Promise.all([
+    listTaskBlueprints(taskId),
+    getTaskDetail(taskId),
+  ])
+  return c.json({
+    blueprints: blueprints.map((blueprint) =>
+      alignBlueprintSceneContractsWithExecutionBrief(blueprint, detail?.taskRunConfig.executionBrief),
+    ),
+  })
 })
 
 app.post(
@@ -2668,7 +3947,10 @@ app.post(
 
 app.get("/api/tasks/:taskId/blueprints/current", async (c) => {
   const taskId = c.req.param("taskId")
-  const blueprint = await getCurrentTaskBlueprint(taskId)
+  const [blueprint, detail] = await Promise.all([
+    getCurrentTaskBlueprint(taskId),
+    getTaskDetail(taskId),
+  ])
   if (!blueprint) {
     return c.json({ message: "TASK_BLUEPRINT_NOT_FOUND" }, 404)
   }
@@ -2676,15 +3958,19 @@ app.get("/api/tasks/:taskId/blueprints/current", async (c) => {
   const review = await getLatestTaskBlueprintReview(taskId, blueprint.version)
 
   return c.json({
-    blueprint,
+    blueprint: alignBlueprintSceneContractsWithExecutionBrief(blueprint, detail?.taskRunConfig.executionBrief),
     review,
     nextStage: buildBlueprintNextStage(taskId, blueprint.status),
   })
 })
 
 app.get("/api/tasks/:taskId/assets", async (c) => {
-  const assets = await getTaskAssets(c.req.param("taskId"))
-  return c.json({ assets })
+  const taskId = c.req.param("taskId")
+  const [assets, detail] = await Promise.all([
+    getTaskAssets(taskId),
+    getTaskDetail(taskId),
+  ])
+  return c.json({ assets: enrichAssetsWithModelTrace(assets, detail?.taskRunConfig) })
 })
 
 app.delete("/api/tasks/:taskId", async (c) => {
@@ -2995,6 +4281,8 @@ app.post(
       blueprintVersion: version,
       decision: payload.decision,
       note: payload.note,
+      operator: String((c as unknown as { get: (key: string) => unknown }).get("operator") ?? "system"),
+      qualityReasons: payload.qualityReasons,
     })
 
     if (payload.decision === "approved") {
@@ -3114,6 +4402,16 @@ app.get("/api/tasks/:taskId/keyframes/:sceneId/preview", async (c) => {
 
     return c.json({ message: "KEYFRAME_PREVIEW_UNAVAILABLE", sceneId }, 409)
   }
+})
+
+app.post("/api/tasks/understanding-preview", async (c) => {
+  const rawBody = await c.req.json().catch(() => null)
+  const parsed = understandingPreviewInputSchema.safeParse(rawBody)
+  if (!parsed.success) {
+    return c.json({ message: "INVALID_UNDERSTANDING_PREVIEW_PAYLOAD" }, 400)
+  }
+
+  return c.json(buildUnderstandingPreviewPayload(parsed.data))
 })
 
 app.post("/api/tasks", async (c) => {

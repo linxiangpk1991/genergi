@@ -9,12 +9,15 @@ import {
   writeTaskBlueprintRecords,
   writeTaskBlueprintReviewRecords,
   writeTaskSummaries,
+  type BlueprintQualityFeedbackSlot,
+  type BlueprintQualityIssueCategory,
   type BlueprintReviewDecision,
   type ExecutionBlueprint,
   type PlannedExecutionBlueprint,
   type ProjectApprovedBlueprintRecord,
   type StoryboardScene,
   type TaskBlueprintRecord,
+  type TaskBlueprintQualityFeedbackRecord,
   type TaskBlueprintReviewRecord,
   type TaskDetail,
   type TaskSummary,
@@ -24,21 +27,63 @@ function now() {
   return new Date().toISOString()
 }
 
+const qualityIssueLabels: Record<BlueprintQualityIssueCategory, string> = {
+  script_off_track: "文案跑偏",
+  image_inconsistent: "画面不一致",
+  character_unstable: "人物不稳定",
+  low_image_quality: "画质不够",
+  poor_motion: "动作不自然",
+  subtitle_issue: "字幕问题",
+  voice_issue: "配音问题",
+  other: "其他",
+}
+
+const qualityIssueDefaultSlots: Record<BlueprintQualityIssueCategory, BlueprintQualityFeedbackSlot | null> = {
+  script_off_track: "textModel",
+  image_inconsistent: "imageModel",
+  character_unstable: "imageModel",
+  low_image_quality: "imageModel",
+  poor_motion: "videoModel",
+  subtitle_issue: "ttsProvider",
+  voice_issue: "ttsProvider",
+  other: null,
+}
+
+const sensitiveQualityNotePattern =
+  /(bearer\s+[A-Za-z0-9._~+/=-]+|sk-[A-Za-z0-9_-]{8,}|(?:api[_-]?key|access[_-]?token|refresh[_-]?token|secret|password|token)=\S+)/gi
+
+function sanitizeQualityFeedbackNote(value: string | null | undefined) {
+  const normalized = value?.trim()
+  if (!normalized) {
+    return null
+  }
+  return normalized.replace(sensitiveQualityNotePattern, "[REDACTED]").slice(0, 500)
+}
+
 function buildSceneContractsFromTaskDetail(detail: TaskDetail): ExecutionBlueprint["sceneContracts"] {
-  return detail.scenes.map((scene: StoryboardScene) => ({
-    id: scene.id,
-    index: scene.index,
-    sceneGoal: scene.sceneGoal ?? scene.title,
-    voiceoverScript: scene.voiceoverScript ?? scene.script,
-    startFrameDescription: scene.startFrameDescription ?? scene.title,
-    imagePrompt: scene.imagePrompt,
-    videoPrompt: scene.videoPrompt,
-    startFrameIntent: scene.startFrameIntent ?? scene.title,
-    endFrameIntent: scene.endFrameIntent ?? scene.title,
-    durationSec: scene.durationSec,
-    transitionHint: "cut",
-    continuityConstraints: scene.continuityConstraints ?? [],
-  }))
+  const executionBrief = detail.taskRunConfig.executionBrief
+  return detail.scenes.map((scene: StoryboardScene, sceneIndex) => {
+    const keyframePlan =
+      executionBrief?.keyframePlan?.find((plan) => plan.index === scene.index + 1) ??
+      executionBrief?.keyframePlan?.find((plan) => plan.index === scene.index) ??
+      executionBrief?.keyframePlan?.[sceneIndex] ??
+      null
+    const visualGoal = keyframePlan?.visualGoal
+    return {
+      id: scene.id,
+      index: scene.index,
+      sceneGoal: visualGoal || scene.sceneGoal || scene.title,
+      voiceoverScript: scene.voiceoverScript ?? scene.script,
+      startFrameDescription: visualGoal || scene.startFrameDescription || scene.title,
+      imagePrompt: keyframePlan?.imagePrompt || scene.imagePrompt,
+      videoPrompt: keyframePlan?.videoPrompt || scene.videoPrompt,
+      startFrameIntent: visualGoal || scene.startFrameIntent || scene.title,
+      endFrameIntent: scene.endFrameIntent ?? scene.title,
+      durationSec: scene.durationSec,
+      transitionHint: "cut",
+      continuityConstraints: scene.continuityConstraints ?? [],
+    }
+  })
 }
 
 export function buildInitialBlueprintFromTaskDetail(detail: TaskDetail): ExecutionBlueprint {
@@ -57,6 +102,8 @@ export function buildInitialBlueprintFromTaskDetail(detail: TaskDetail): Executi
     backgroundConstraints: [],
     negativeConstraints: ["无字幕", "无水印", "无界面元素"],
     totalVoiceoverScript: detail.script,
+    bilingualUnderstandingPreview: detail.taskRunConfig.understandingPreview,
+    englishExecutionBrief: detail.taskRunConfig.executionBrief,
     sceneContracts: buildSceneContractsFromTaskDetail(detail),
   }
 }
@@ -207,14 +254,34 @@ export async function recordTaskBlueprintReview(input: {
   blueprintVersion: number
   decision: BlueprintReviewDecision
   note?: string
+  operator?: string
+  qualityReasons?: Array<{
+    slotType?: BlueprintQualityFeedbackSlot | null
+    issueCategory: BlueprintQualityIssueCategory
+    note?: string | null
+  }>
 }): Promise<TaskBlueprintReviewRecord> {
   const records = await readTaskBlueprintReviewRecords()
+  const decidedAt = now()
+  const qualityFeedback: TaskBlueprintQualityFeedbackRecord[] = input.decision === "rejected"
+    ? (input.qualityReasons ?? []).map((reason) => ({
+        taskId: input.taskId,
+        blueprintVersion: input.blueprintVersion,
+        slotType: reason.slotType ?? qualityIssueDefaultSlots[reason.issueCategory],
+        issueCategory: reason.issueCategory,
+        reasonLabel: qualityIssueLabels[reason.issueCategory],
+        note: sanitizeQualityFeedbackNote(reason.note),
+        operator: input.operator?.trim() || "system",
+        createdAt: decidedAt,
+      }))
+    : []
   const nextRecord: TaskBlueprintReviewRecord = {
     taskId: input.taskId,
     blueprintVersion: input.blueprintVersion,
     decision: input.decision,
     note: input.note?.trim() || null,
-    decidedAt: now(),
+    qualityFeedback,
+    decidedAt,
   }
   records[input.taskId] = [...(records[input.taskId] ?? []), nextRecord]
   await writeTaskBlueprintReviewRecords(records)

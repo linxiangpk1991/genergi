@@ -242,4 +242,134 @@ describe("API task blueprint routes", () => {
       stage: "video_generation",
     })
   }, 10000)
+
+  it("persists plain-language quality reasons when rejecting a blueprint", async () => {
+    const { app, taskId, cookie } = await createAuthenticatedTask()
+
+    await app.request(`/api/tasks/${taskId}/blueprints`, {
+      method: "POST",
+      body: JSON.stringify({
+        blueprint: {
+          globalTheme: "Desk setup refresh",
+          visualStyleGuide: "Premium silver, soft daylight, crisp desk reflections",
+          subjectProfile: "Single hero product",
+          productProfile: "Fast charging dock",
+          backgroundConstraints: ["clean desk"],
+          negativeConstraints: ["no subtitles"],
+          totalVoiceoverScript: "Show the clutter, reveal the product, end with the clean setup.",
+          sceneContracts: [
+            {
+              id: "scene_1",
+              index: 0,
+              sceneGoal: "Open on desk clutter",
+              voiceoverScript: "Your desk starts like this.",
+              startFrameDescription: "Cable clutter on desk",
+              imagePrompt: "Vertical product ad frame, cable clutter on desk",
+              videoPrompt: "Slow push-in over the clutter before the product appears",
+              startFrameIntent: "Introduce the problem",
+              endFrameIntent: "Hold the problem state",
+              durationSec: 5,
+              transitionHint: "hard cut",
+              continuityConstraints: ["product hidden"],
+            },
+          ],
+        },
+      }),
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: cookie,
+      },
+    })
+
+    const response = await app.request(`/api/tasks/${taskId}/blueprints/2/review`, {
+      method: "POST",
+      body: JSON.stringify({
+        decision: "rejected",
+        note: "重做画面",
+        qualityReasons: [
+          {
+            issueCategory: "image_inconsistent",
+            slotType: "imageModel",
+            note: "不要保存 sk-test-secret-123456",
+          },
+          {
+            issueCategory: "poor_motion",
+          },
+        ],
+      }),
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: cookie,
+      },
+    })
+
+    expect(response.status).toBe(200)
+    const payload = (await response.json()) as {
+      blueprint: { status: string }
+      review: {
+        decision: string
+        qualityFeedback: Array<{
+          taskId: string
+          slotType: string | null
+          issueCategory: string
+          reasonLabel: string
+          note: string | null
+          operator: string
+          createdAt: string
+        }>
+      }
+    }
+
+    expect(payload.blueprint.status).toBe("rejected")
+    expect(payload.review.decision).toBe("rejected")
+    expect(payload.review.qualityFeedback).toEqual([
+      expect.objectContaining({
+        taskId,
+        slotType: "imageModel",
+        issueCategory: "image_inconsistent",
+        reasonLabel: "画面不一致",
+        operator: "admin",
+      }),
+      expect.objectContaining({
+        taskId,
+        slotType: "videoModel",
+        issueCategory: "poor_motion",
+        reasonLabel: "动作不自然",
+        operator: "admin",
+      }),
+    ])
+    expect(JSON.stringify(payload.review.qualityFeedback)).not.toContain("sk-test-secret")
+
+    const summaryResponse = await app.request("/api/model-control/quality-summary", {
+      headers: { Cookie: cookie },
+    })
+    expect(summaryResponse.status).toBe(200)
+    const summaryPayload = (await summaryResponse.json()) as {
+      totalCount: number
+      items: Array<{
+        slotType: string
+        modelDisplayName: string
+        issueCategory: string
+        reasonLabel: string
+        count: number
+      }>
+    }
+    expect(summaryPayload.totalCount).toBeGreaterThanOrEqual(2)
+    expect(summaryPayload.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          slotType: "imageModel",
+          issueCategory: "image_inconsistent",
+          reasonLabel: "画面不一致",
+          count: 1,
+        }),
+        expect.objectContaining({
+          slotType: "videoModel",
+          issueCategory: "poor_motion",
+          reasonLabel: "动作不自然",
+          count: 1,
+        }),
+      ]),
+    )
+  }, 10000)
 })

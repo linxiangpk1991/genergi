@@ -25,6 +25,8 @@ const emptyForm: CreateModelProviderPayload = {
   status: "draft",
 }
 
+const TTS_PROVIDER_TYPES = new Set(["edge-tts", "azure-tts"])
+
 function formatDateTime(value?: string | null) {
   if (!value) {
     return "尚未记录"
@@ -36,6 +38,45 @@ function formatDateTime(value?: string | null) {
   }
 
   return parsed.toLocaleString("zh-CN")
+}
+
+function providerNeedsEndpoint(provider: ProviderRegistryRecord) {
+  return !TTS_PROVIDER_TYPES.has(provider.providerType.trim().toLowerCase())
+}
+
+function normalizeProviderValidationError(value: string | null | undefined) {
+  if (!value?.trim()) {
+    return null
+  }
+
+  const normalized = value.trim()
+  if (normalized === "endpointUrl is required for non-TTS providers" || normalized === "PROVIDER_ENDPOINT_MISSING") {
+    return "接口地址未配置：非 TTS 接入方必须填写 http:// 或 https:// 开头的接口地址。"
+  }
+  if (normalized === "endpointUrl must start with http:// or https://") {
+    return "接口地址格式不正确：请填写 http:// 或 https:// 开头的接口地址。"
+  }
+  if (normalized === "provider secret is required for authenticated providers" || normalized === "PROVIDER_SECRET_MISSING") {
+    return "密钥未配置：当前鉴权方式需要先保存 API Key / Token。"
+  }
+  return normalized
+}
+
+function getEndpointIssue(provider: ProviderRegistryRecord) {
+  if (!providerNeedsEndpoint(provider)) {
+    return ""
+  }
+
+  const endpoint = provider.endpointUrl.trim()
+  if (!endpoint) {
+    return "接口地址未配置：请先点击“载入编辑”，填写 http:// 或 https:// 开头的接口地址后再检查配置。"
+  }
+
+  if (!/^https?:\/\//i.test(endpoint)) {
+    return "接口地址格式不正确：请先点击“载入编辑”，填写 http:// 或 https:// 开头的接口地址后再检查配置。"
+  }
+
+  return ""
 }
 
 export function ModelProvidersPage() {
@@ -134,6 +175,29 @@ export function ModelProvidersPage() {
   }
 
   async function handleValidate(providerId: string) {
+    const provider = providers.find((item) => item.id === providerId)
+    if (provider && editingProviderId === provider.id) {
+      const hasUnsavedChanges =
+        form.providerKey.trim() !== provider.providerKey ||
+        form.providerType.trim() !== provider.providerType ||
+        form.displayName.trim() !== provider.displayName ||
+        form.endpointUrl.trim() !== provider.endpointUrl ||
+        form.authType.trim() !== provider.authType ||
+        Boolean(form.secret?.trim()) ||
+        form.status !== provider.status
+      if (hasUnsavedChanges) {
+        setError("当前接入方有未保存改动：请先点击“保存接入方”，再检查配置。")
+        setNotice("")
+        return
+      }
+    }
+    const endpointIssue = provider ? getEndpointIssue(provider) : ""
+    if (endpointIssue) {
+      setError(endpointIssue)
+      setNotice("")
+      return
+    }
+
     setActionProviderId(providerId)
     setError("")
     setNotice("")
@@ -395,8 +459,8 @@ export function ModelProvidersPage() {
                       <td>
                         <ModelStatusBadge status={provider.status} />
                         <div className="muted">最近校验：{formatDateTime(provider.lastValidatedAt)}</div>
-                        {provider.lastValidationError ? (
-                          <div className="inline-error-text">{provider.lastValidationError}</div>
+                        {normalizeProviderValidationError(provider.lastValidationError) ? (
+                          <div className="inline-error-text">{normalizeProviderValidationError(provider.lastValidationError)}</div>
                         ) : null}
                       </td>
                       <td>

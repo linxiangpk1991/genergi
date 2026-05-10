@@ -1,4 +1,8 @@
 import { z } from "zod"
+import {
+  bilingualUnderstandingPreviewSchema,
+  englishExecutionBriefSchema,
+} from "./understanding-preview.js"
 
 export const executionModeSchema = z.enum(["automated", "review_required"])
 export type ExecutionMode = z.infer<typeof executionModeSchema>
@@ -46,6 +50,20 @@ export const blueprintSceneContractSchema = z.object({
 })
 export type BlueprintSceneContract = z.infer<typeof blueprintSceneContractSchema>
 
+export const visualPlanSchema = z.object({
+  sourceBrief: z.string().trim().nullable().default(null),
+  keyframeCount: z.number().int().positive(),
+  generationMode: z.enum(["batch", "single"]),
+  characterConsistency: z.boolean().default(true),
+  subjectProfile: z.string().min(1),
+  setting: z.string().min(1),
+  style: z.string().min(1),
+  mood: z.string().min(1),
+  negativePrompt: z.string().min(1),
+  continuityRules: z.array(z.string().min(1)).default([]),
+})
+export type VisualPlan = z.infer<typeof visualPlanSchema>
+
 export const blueprintStatusSchema = z.enum([
   "pending_generation",
   "ready_for_review",
@@ -66,10 +84,13 @@ export const executionBlueprintSchema = z.object({
   renderSpec: renderSpecSchema,
   globalTheme: z.string().min(1),
   visualStyleGuide: z.string().min(1),
+  bilingualUnderstandingPreview: bilingualUnderstandingPreviewSchema.nullable().optional(),
+  englishExecutionBrief: englishExecutionBriefSchema.nullable().optional(),
   subjectProfile: z.string().min(1),
   productProfile: z.string().min(1),
   backgroundConstraints: z.array(z.string().min(1)).default([]),
   negativeConstraints: z.array(z.string().min(1)).default([]),
+  visualPlan: visualPlanSchema.nullable().optional(),
   totalVoiceoverScript: z.string().min(1),
   sceneContracts: z.array(blueprintSceneContractSchema).min(1),
 })
@@ -97,11 +118,44 @@ export type TaskBlueprintRecord = z.infer<typeof taskBlueprintRecordSchema>
 export const blueprintReviewDecisionSchema = z.enum(["approved", "rejected"])
 export type BlueprintReviewDecision = z.infer<typeof blueprintReviewDecisionSchema>
 
+export const blueprintQualityIssueCategorySchema = z.enum([
+  "script_off_track",
+  "image_inconsistent",
+  "character_unstable",
+  "low_image_quality",
+  "poor_motion",
+  "subtitle_issue",
+  "voice_issue",
+  "other",
+])
+export type BlueprintQualityIssueCategory = z.infer<typeof blueprintQualityIssueCategorySchema>
+
+export const blueprintQualityFeedbackSlotSchema = z.enum([
+  "textModel",
+  "imageModel",
+  "videoModel",
+  "ttsProvider",
+])
+export type BlueprintQualityFeedbackSlot = z.infer<typeof blueprintQualityFeedbackSlotSchema>
+
+export const taskBlueprintQualityFeedbackRecordSchema = z.object({
+  taskId: z.string().min(1),
+  blueprintVersion: z.number().int().positive(),
+  slotType: blueprintQualityFeedbackSlotSchema.nullable(),
+  issueCategory: blueprintQualityIssueCategorySchema,
+  reasonLabel: z.string().trim().min(1),
+  note: z.string().trim().min(1).nullable().optional(),
+  operator: z.string().trim().min(1),
+  createdAt: z.string().min(1),
+})
+export type TaskBlueprintQualityFeedbackRecord = z.infer<typeof taskBlueprintQualityFeedbackRecordSchema>
+
 export const taskBlueprintReviewRecordSchema = z.object({
   taskId: z.string().min(1),
   blueprintVersion: z.number().int().positive(),
   decision: blueprintReviewDecisionSchema,
   note: z.string().trim().min(1).nullable().optional(),
+  qualityFeedback: z.array(taskBlueprintQualityFeedbackRecordSchema).optional().default([]),
   decidedAt: z.string().min(1),
 })
 export type TaskBlueprintReviewRecord = z.infer<typeof taskBlueprintReviewRecordSchema>
@@ -113,6 +167,8 @@ export const projectRecordSchema = z.object({
   brandDirection: z.string().trim().nullable().optional(),
   defaultChannelIds: z.array(z.string().min(1)).default([]),
   reusableStyleConstraints: z.array(z.string().min(1)).default([]),
+  defaultVisualSeedInput: z.string().trim().nullable().optional(),
+  defaultKeyframeGenerationMode: z.enum(["batch", "single"]).default("batch"),
   createdAt: z.string().min(1),
   updatedAt: z.string().min(1),
 })

@@ -58,4 +58,32 @@ describe("storyboard planner", () => {
     expect(scenes.at(-1)?.script).toContain("Beat four")
     expect(scenes[0].videoPrompt).toContain("Ending intent:")
   })
+
+  it("resolves default keyframe counts from final video duration", async () => {
+    const planner = await import("../../../packages/shared/src/storyboard-planner")
+
+    expect(planner.resolveDefaultKeyframeCount(15)).toBe(1)
+    expect(planner.resolveDefaultKeyframeCount(30)).toBe(2)
+    expect(planner.resolveDefaultKeyframeCount(45)).toBe(3)
+    expect(planner.resolveDefaultKeyframeCount(60)).toBe(4)
+    expect(planner.resolveDefaultKeyframeCount(90)).toBe(6)
+  })
+
+  it("builds a fixed number of visual keyframe scenes when requested", async () => {
+    const planner = await import("../../../packages/shared/src/storyboard-planner")
+
+    const scenes = planner.buildStoryboardScenes({
+      script:
+        "Hook with the late night office. Show the effort not moving. Explain the luck cycle conflict. Close on the report CTA.",
+      targetDurationSec: 60,
+      maxSceneDurationSec: 8,
+      visualKeyframeCount: 4,
+      aspectRatio: "9:16",
+    })
+
+    expect(scenes).toHaveLength(4)
+    expect(scenes.reduce((total: number, scene: { durationSec: number }) => total + scene.durationSec, 0)).toBe(60)
+    expect(scenes[0].startLabel).toBe("00:00")
+    expect(scenes.at(-1)?.endLabel).toBe("01:00")
+  })
 })

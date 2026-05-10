@@ -220,6 +220,72 @@ describe("API retry, delivery, and production schedule routes", () => {
     expect(requests[0]?.sceneId).toBe("scene_2")
   })
 
+  it("allows a waiting-review task to redo one keyframe without marking the whole task failed", async () => {
+    const { app, shared, taskId, cookie } = await createAuthenticatedFailedTask("Review keyframe retry")
+    await shared.updateTaskSummary(taskId, (task: any) => ({
+      ...task,
+      status: "waiting_review",
+      failureReason: null,
+      statusDetail: "等待审核",
+      blueprintStatus: "ready_for_review",
+    }))
+    const detail = await shared.readTaskDetail(taskId)
+    await shared.upsertTaskDetail({
+      ...detail!,
+      failureReason: null,
+      statusDetail: "等待审核",
+      blueprintStatus: "ready_for_review",
+      taskRunConfig: {
+        ...detail!.taskRunConfig,
+        blueprintStatus: "ready_for_review",
+      },
+    })
+    enqueueTaskMock.mockResolvedValueOnce({
+      queued: true,
+      jobId: "job_retry_keyframe_1",
+      reason: "retry_failed_keyframe",
+      continueExecution: false,
+      blueprintVersion: 1,
+      stage: "retry_keyframe",
+      resumeFrom: "scene_2",
+    })
+
+    const response = await app.request(`http://localhost/api/tasks/${taskId}/retry`, {
+      method: "POST",
+      headers: {
+        Cookie: cookie,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        scope: "keyframe",
+        sceneId: "scene_2",
+        reason: "审核时重做单张关键画面",
+      }),
+    })
+
+    expect(response.status).toBe(202)
+    const payload = (await response.json()) as {
+      retryRequest: { scope: string; sceneId: string | null; queue?: { stage: string; resumeFrom: string } | null }
+      task: { status: string }
+    }
+    expect(payload.retryRequest).toMatchObject({
+      scope: "keyframe",
+      sceneId: "scene_2",
+      queue: {
+        stage: "retry_keyframe",
+        resumeFrom: "scene_2",
+      },
+    })
+    expect(payload.task.status).toBe("queued")
+    expect(enqueueTaskMock).toHaveBeenCalledWith(taskId, {
+      reason: "retry_failed_keyframe",
+      continueExecution: false,
+      blueprintVersion: 1,
+      stage: "retry_keyframe",
+      resumeFrom: "scene_2",
+    })
+  })
+
   it("returns an explicit scene validation error without enqueueing", async () => {
     const { app, taskId, cookie } = await createAuthenticatedFailedTask()
 

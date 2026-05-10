@@ -130,6 +130,19 @@ export function normalizeModelCapability(
       capability.imageTransport = capability.imageTransport ?? "gemini-generate-content"
       capability.endpointStyle = capability.endpointStyle ?? "gemini-generate-content"
     }
+
+    if (capability.imageTransport === "openai-images-generations") {
+      capability.supportsBatchKeyframes = capability.supportsBatchKeyframes ?? true
+      const maxBatchImages = Number(capability.maxBatchImages ?? capability.max_batch_images ?? 4)
+      capability.maxBatchImages = Number.isFinite(maxBatchImages) && maxBatchImages > 0 ? Math.floor(maxBatchImages) : 4
+      if (providerModelId.trim().toLowerCase() === "gpt-image-2") {
+        capability.batchReturnMode = capability.batchReturnMode ?? "composite_grid"
+        capability.supportsCompositeGrid = capability.supportsCompositeGrid ?? true
+        capability.compositeGridMaxSize = capability.compositeGridMaxSize ?? "2048x3072"
+      }
+    } else {
+      capability.supportsBatchKeyframes = capability.supportsBatchKeyframes ?? false
+    }
   }
 
   return normalizeRoutingCapability({
@@ -257,6 +270,87 @@ export type ModelControlDefaults = z.infer<typeof modelControlDefaultsSchema>
 export const taskModelOverrideSchema = globalModelDefaultsSchema
 export type TaskModelOverride = z.infer<typeof taskModelOverrideSchema>
 
+export const modelFallbackTriggerSchema = z.enum([
+  "timeout",
+  "rate_limit",
+  "provider_error",
+  "empty_result",
+  "invalid_response",
+])
+export type ModelFallbackTrigger = z.infer<typeof modelFallbackTriggerSchema>
+
+export const modelRoutingStrategySchema = z.enum([
+  "balanced",
+  "quality_first",
+  "speed_first",
+  "cost_first",
+])
+export type ModelRoutingStrategy = z.infer<typeof modelRoutingStrategySchema>
+
+const defaultFallbackTriggers = ["timeout", "rate_limit", "provider_error"] satisfies ModelFallbackTrigger[]
+const defaultSlotRoutingPolicy = {
+  enabled: false,
+  strategy: "balanced" as const,
+  primary: null,
+  fallbacks: [],
+  fallbackTriggers: defaultFallbackTriggers,
+  operatorNote: "",
+}
+
+export const slotRoutingPolicySchema = z.object({
+  enabled: z.boolean().default(false),
+  strategy: modelRoutingStrategySchema.default("balanced"),
+  primary: slotSelectionSchema.nullable().optional().default(null),
+  fallbacks: z.array(slotSelectionSchema).max(4).default([]),
+  fallbackTriggers: z.array(modelFallbackTriggerSchema).default(defaultFallbackTriggers),
+  operatorNote: z.string().trim().max(500).optional().default(""),
+})
+export type SlotRoutingPolicy = z.infer<typeof slotRoutingPolicySchema>
+
+const defaultSlotRoutingPolicies = {
+  textModel: defaultSlotRoutingPolicy,
+  imageModel: defaultSlotRoutingPolicy,
+  videoModel: defaultSlotRoutingPolicy,
+  ttsProvider: defaultSlotRoutingPolicy,
+}
+
+export const slotRoutingPoliciesSchema = z.object({
+  textModel: slotRoutingPolicySchema.default(defaultSlotRoutingPolicy),
+  imageModel: slotRoutingPolicySchema.default(defaultSlotRoutingPolicy),
+  videoModel: slotRoutingPolicySchema.default(defaultSlotRoutingPolicy),
+  ttsProvider: slotRoutingPolicySchema.default(defaultSlotRoutingPolicy),
+})
+export type SlotRoutingPolicies = z.infer<typeof slotRoutingPoliciesSchema>
+
+export const modelRoutingPoliciesDocumentSchema = z.object({
+  global: slotRoutingPoliciesSchema.default(defaultSlotRoutingPolicies),
+  modes: z.object({
+    mass_production: slotRoutingPoliciesSchema.default(defaultSlotRoutingPolicies),
+    high_quality: slotRoutingPoliciesSchema.default(defaultSlotRoutingPolicies),
+  }).default({
+    mass_production: defaultSlotRoutingPolicies,
+    high_quality: defaultSlotRoutingPolicies,
+  }),
+  updatedAt: z.string().nullable().default(null),
+})
+export type ModelRoutingPoliciesDocument = z.infer<typeof modelRoutingPoliciesDocumentSchema>
+
+export const resolvedFallbackCandidateSchema = z.object({
+  slotType: modelSlotTypeSchema,
+  providerId: z.string().min(1),
+  providerKey: z.string().min(1),
+  providerType: providerTypeSchema,
+  modelId: z.string().min(1),
+  modelKey: z.string().min(1),
+  providerModelId: z.string().min(1),
+  displayName: z.string().min(1),
+  capabilityJson: modelCapabilitySchema,
+  routingProfile: modelRoutingProfileSchema.optional(),
+  fallbackTriggers: z.array(modelFallbackTriggerSchema).default([]),
+  validatedAt: z.string().nullable(),
+})
+export type ResolvedFallbackCandidate = z.infer<typeof resolvedFallbackCandidateSchema>
+
 export const resolvedSlotSnapshotSchema = z.object({
   slotType: modelSlotTypeSchema,
   providerId: z.string().min(1),
@@ -269,6 +363,17 @@ export const resolvedSlotSnapshotSchema = z.object({
   capabilityJson: modelCapabilitySchema,
   routingProfile: modelRoutingProfileSchema.optional(),
   validatedAt: z.string().nullable(),
+  selectionSource: z.enum([
+    "task_override",
+    "mode_policy",
+    "global_policy",
+    "mode_default",
+    "global_default",
+  ]).optional(),
+  selectionReason: z.string().optional(),
+  routingStrategy: modelRoutingStrategySchema.optional(),
+  routingPolicyNote: z.string().optional(),
+  fallbackCandidates: z.array(resolvedFallbackCandidateSchema).default([]).optional(),
 })
 export type ResolvedSlotSnapshot = z.infer<typeof resolvedSlotSnapshotSchema>
 

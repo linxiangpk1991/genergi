@@ -14,6 +14,7 @@ vi.mock("../../../apps/web/src/api", async () => {
       listTasks: vi.fn(),
       listProjects: vi.fn(),
       getSelectableModelPools: vi.fn(),
+      getModelRoutePreview: vi.fn(),
       createTask: vi.fn(),
     },
   }
@@ -23,6 +24,7 @@ import {
   api,
   type BootstrapResponse,
   type ProjectRecord,
+  type ModelRoutePreviewResponse,
   type SelectableModelPoolsResponse,
 } from "../../../apps/web/src/api"
 import { HomePage } from "../../../apps/web/src/pages/HomePage"
@@ -150,6 +152,65 @@ function createHomeSelectablePools(): SelectableModelPoolsResponse {
   }
 }
 
+function createHomeRoutePreview(): ModelRoutePreviewResponse {
+  return {
+    modeId: "high_quality",
+    summary: "本次会按高质量模式使用 4 个模型槽位，当前没有明显配置风险。",
+    warnings: [],
+    slots: [
+      {
+        slotType: "textModel",
+        displayName: "GPT-5.5",
+        provider: "OpenAI",
+        wireApi: "responses",
+        requestPath: "/v1/responses",
+        selectionReason: "文案规划来自高质量模式默认模型。",
+        routingStrategy: "quality_first",
+        fallbackCandidates: [],
+        warnings: [],
+      },
+      {
+        slotType: "imageModel",
+        displayName: "GPT Image",
+        provider: "OpenAI",
+        wireApi: "images",
+        requestPath: "/v1/images/generations",
+        selectionReason: "图片模型按高质量模式路由策略选择：高质量优先。",
+        routingStrategy: "quality_first",
+        fallbackCandidates: [
+          {
+            displayName: "Image Backup",
+            provider: "Backup Provider",
+            wireApi: "images",
+            requestPath: "/v1/images/generations",
+          },
+        ],
+        warnings: [],
+      },
+      {
+        slotType: "videoModel",
+        displayName: "Veo 3.1",
+        provider: "Google",
+        wireApi: "video",
+        requestPath: "/v1/videos",
+        selectionReason: "视频模型来自高质量模式默认模型。",
+        fallbackCandidates: [],
+        warnings: [],
+      },
+      {
+        slotType: "ttsProvider",
+        displayName: "Edge TTS",
+        provider: "Edge",
+        wireApi: "tts",
+        requestPath: "provider",
+        selectionReason: "系统配音来自高质量模式默认模型。",
+        fallbackCandidates: [],
+        warnings: ["系统配音还没有最近一次连通检查，提交前请确认服务可用。"],
+      },
+    ],
+  }
+}
+
 describe("HomePage project and terminal preset flow", () => {
   let container: HTMLDivElement
   let root: Root
@@ -165,6 +226,7 @@ describe("HomePage project and terminal preset flow", () => {
     vi.mocked(api.listTasks).mockResolvedValue({ tasks: [] })
     vi.mocked(api.listProjects).mockResolvedValue({ projects: createProjects() })
     vi.mocked(api.getSelectableModelPools).mockResolvedValue(createHomeSelectablePools())
+    vi.mocked(api.getModelRoutePreview).mockResolvedValue(createHomeRoutePreview())
     vi.mocked(api.createTask).mockResolvedValue({
       task: {
         id: "task_created",
@@ -220,7 +282,7 @@ describe("HomePage project and terminal preset flow", () => {
     })
 
     const titleInput = container.querySelector('input[placeholder*="夏季新品种草短视频"]') as HTMLInputElement | null
-    const scriptInput = container.querySelector('textarea[placeholder*="直接写要表达的内容"]') as HTMLTextAreaElement | null
+    const scriptInput = container.querySelector('textarea[placeholder*="直接写你想表达的内容"]') as HTMLTextAreaElement | null
     expect(titleInput).toBeTruthy()
     expect(scriptInput).toBeTruthy()
 
@@ -267,6 +329,13 @@ describe("HomePage project and terminal preset flow", () => {
       expect(text).toContain("4:3")
       expect(text).toContain("审核优先")
       expect(text).toContain("单一路径")
+      expect(text).toContain("本次模型路线")
+      expect(text).toContain("GPT-5.5")
+      expect(text).toContain("GPT Image")
+      expect(text).toContain("Veo 3.1")
+      expect(text).toContain("Edge TTS")
+      expect(text).toContain("备用 1")
+      expect(text).toContain("还没有最近一次连通检查")
       expect(text).toContain("从成片音频识别字幕")
     })
 
@@ -331,7 +400,7 @@ describe("HomePage project and terminal preset flow", () => {
     })
 
     const titleInput = container.querySelector('input[placeholder*="夏季新品种草短视频"]') as HTMLInputElement | null
-    const scriptInput = container.querySelector('textarea[placeholder*="直接写要表达的内容"]') as HTMLTextAreaElement | null
+    const scriptInput = container.querySelector('textarea[placeholder*="直接写你想表达的内容"]') as HTMLTextAreaElement | null
     expect(titleInput).toBeTruthy()
     expect(scriptInput).toBeTruthy()
 
@@ -424,6 +493,7 @@ describe("HomePage P0-P2 launch console behavior", () => {
     vi.mocked(api.listTasks).mockResolvedValue({ tasks: [] })
     vi.mocked(api.listProjects).mockResolvedValue({ projects: createProjects() })
     vi.mocked(api.getSelectableModelPools).mockResolvedValue(createHomeSelectablePools())
+    vi.mocked(api.getModelRoutePreview).mockResolvedValue(createHomeRoutePreview())
     vi.mocked(api.createTask).mockResolvedValue({
       task: createRecentHomeTask({
         id: "task_created",
@@ -457,7 +527,8 @@ describe("HomePage P0-P2 launch console behavior", () => {
 
     const text = container.textContent ?? ""
     expect(text).toContain("项目与输出")
-    expect(text).toContain("原始文案")
+    expect(text).toContain("视频内容")
+    expect(text).toContain("画面参考（可选）")
     expect(text).toContain("启动前确认")
     expect(text).toMatch(/启动前检查|启动前确认|预检/)
   })
@@ -479,7 +550,7 @@ describe("HomePage P0-P2 launch console behavior", () => {
       const text = container.textContent ?? ""
       expect(text).toMatch(/提交，先生成审核内容|确认流程/)
       expect(text).toMatch(/任务名称.*(必填|不能为空|请填写任务名称)/)
-      expect(text).toMatch(/(原始文案|文案).*(必填|不能为空|请填写原始文案)/)
+      expect(text).toMatch(/视频内容.*(必填|不能为空|请填写视频内容)/)
     })
     expect(vi.mocked(api.createTask)).not.toHaveBeenCalled()
   })
@@ -488,7 +559,7 @@ describe("HomePage P0-P2 launch console behavior", () => {
     await renderHomePage()
 
     const titleInput = container.querySelector('input[placeholder*="夏季新品种草短视频"]') as HTMLInputElement | null
-    const scriptInput = container.querySelector('textarea[placeholder*="直接写要表达的内容"]') as HTMLTextAreaElement | null
+    const scriptInput = container.querySelector('textarea[placeholder*="直接写你想表达的内容"]') as HTMLTextAreaElement | null
     expect(titleInput).toBeTruthy()
     expect(scriptInput).toBeTruthy()
 
@@ -498,7 +569,7 @@ describe("HomePage P0-P2 launch console behavior", () => {
     })
 
     await waitFor(() => {
-      expect(container.textContent ?? "").toMatch(/文案偏短|建议补充|原始文案.*偏短/)
+      expect(container.textContent ?? "").toMatch(/文案偏短|建议补充|视频内容.*偏短/)
     })
   })
 
@@ -506,7 +577,7 @@ describe("HomePage P0-P2 launch console behavior", () => {
     await renderHomePage()
 
     const titleInput = container.querySelector('input[placeholder*="夏季新品种草短视频"]') as HTMLInputElement | null
-    const scriptInput = container.querySelector('textarea[placeholder*="直接写要表达的内容"]') as HTMLTextAreaElement | null
+    const scriptInput = container.querySelector('textarea[placeholder*="直接写你想表达的内容"]') as HTMLTextAreaElement | null
     expect(titleInput).toBeTruthy()
     expect(scriptInput).toBeTruthy()
 

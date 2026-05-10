@@ -79,6 +79,17 @@ function canCancelTask(task: TaskSummary | null) {
   return task?.status === "queued" || task?.status === "running"
 }
 
+function formatFailureModelRoute(task: TaskSummary | null) {
+  if (!task?.modelTrace) {
+    return ""
+  }
+
+  return Object.values(task.modelTrace)
+    .filter(Boolean)
+    .map((trace) => `${trace.label}${trace.requestPath ? `（${trace.requestPath}）` : ""}`)
+    .join(" · ")
+}
+
 function canResumeFailedTask(task: TaskSummary | null) {
   return task?.status === "failed"
 }
@@ -244,9 +255,21 @@ const RETRY_IMPACT_COPY: Record<DeliveryRetryKind, string> = {
 }
 
 const RETRY_BUTTON_LABELS: Record<DeliveryRetryKind, string> = {
-  keyframe: "关键画面",
-  video: "视频段",
-  scene: "整段重做",
+  keyframe: "只重做关键画面",
+  video: "只重做视频段",
+  scene: "关键画面和视频都重做",
+}
+
+const ASSET_TYPE_LABELS: Partial<Record<AssetRecord["assetType"], string>> = {
+  video_bundle: "成片文件",
+  subtitles: "字幕文件",
+  script: "脚本文件",
+  audio: "音频文件",
+  keyframe_image: "关键画面",
+  scene_video: "视频分段",
+  keyframe_bundle: "关键画面包",
+  keyframe_prompt_summary: "画面提示词",
+  source_script: "原始文案",
 }
 
 const ASSET_TYPE_BY_CHECK: Partial<Record<DeliveryCheckKey, AssetRecord["assetType"]>> = {
@@ -514,6 +537,61 @@ function isReadyAsset(asset: AssetRecord) {
   return asset.exists && asset.status === "ready"
 }
 
+function getAssetTypeLabel(assetType: AssetRecord["assetType"] | string | null | undefined) {
+  if (!assetType) {
+    return "暂无缺口"
+  }
+  return ASSET_TYPE_LABELS[assetType as AssetRecord["assetType"]] ?? normalizeOperatorCopy(String(assetType))
+}
+
+function getAssetSourceLabel(asset: AssetRecord) {
+  if (asset.assetType === "keyframe_image") {
+    return `来自：${normalizeOperatorCopy(asset.label)}`
+  }
+
+  if (asset.assetType === "scene_video") {
+    return `来自：${normalizeOperatorCopy(asset.label)} 对应的视频段`
+  }
+
+  if (asset.assetType === "keyframe_bundle" || asset.assetType === "keyframe_prompt_summary") {
+    return "来自：关键画面生成记录"
+  }
+
+  return `来自：${normalizeOperatorCopy(asset.label)}`
+}
+
+function getAssetModelLabel(asset: AssetRecord) {
+  return asset.modelTrace?.label ? `使用模型：${asset.modelTrace.label}` : "使用模型：这条素材没有留下模型记录"
+}
+
+function getAssetBasisLabel(asset: AssetRecord) {
+  if (asset.assetType === "keyframe_image") {
+    return "生成依据：按这段分镜的英文提示词生成，完整提示词可在关键画面提示词摘要里查看。"
+  }
+
+  if (asset.assetType === "scene_video") {
+    return "生成依据：沿用对应关键画面和视频段提示词生成。"
+  }
+
+  if (asset.assetType === "keyframe_prompt_summary") {
+    return "生成依据：这里保存了关键画面的英文提示词摘要。"
+  }
+
+  return "生成依据：来自当前任务的脚本、分镜和生成设置。"
+}
+
+function getAssetReadableStatus(asset: AssetRecord) {
+  if (!asset.exists) {
+    return "缺图：记录还在，但文件现在打不开。"
+  }
+
+  if (asset.status !== "ready") {
+    return "状态：还在生成或等待刷新。"
+  }
+
+  return "状态：文件已生成，可以预览或下载。"
+}
+
 function findAssetForCheck(assets: AssetRecord[], key: DeliveryCheckKey) {
   const assetType = ASSET_TYPE_BY_CHECK[key]
   if (!assetType) {
@@ -684,10 +762,12 @@ function sortAssetsForDelivery(assets: AssetRecord[]) {
     planning_prompt: 5,
     planning_response: 6,
     planning_audit: 7,
-    storyboard: 8,
-    keyframe_bundle: 9,
-    keyframe_image: 10,
-    scene_video: 11,
+    visual_plan: 8,
+    keyframe_prompt_summary: 9,
+    storyboard: 10,
+    keyframe_bundle: 11,
+    keyframe_image: 12,
+    scene_video: 13,
   }
 
   return [...assets].sort((left, right) => {
@@ -995,7 +1075,7 @@ export function AssetsPage() {
 
     const impact = RETRY_IMPACT_COPY[kind]
     const targetLabel = sceneId ? `分段 ${sceneId}` : "当前任务"
-    if (!window.confirm(`确认发起 ${RETRY_BUTTON_LABELS[kind]} 局部重试吗？\n\n影响提示：${impact}\n\n目标：${targetLabel}`)) {
+    if (!window.confirm(`确认${RETRY_BUTTON_LABELS[kind]}吗？\n\n影响：${impact}\n\n目标：${targetLabel}`)) {
       return
     }
 
@@ -1011,7 +1091,7 @@ export function AssetsPage() {
         sceneId,
       })
       await loadTaskWorkData(selectedTaskId)
-      setActionSuccess(`已提交 ${RETRY_BUTTON_LABELS[kind]} 局部重试：${targetLabel}`)
+      setActionSuccess(`已提交${RETRY_BUTTON_LABELS[kind]}：${targetLabel}`)
     } catch (error) {
       setActionError(error instanceof Error ? error.message : "局部重试失败")
     } finally {
@@ -1063,6 +1143,11 @@ export function AssetsPage() {
   const durationDeltaLabel = durationDelta == null ? "待成片" : `${durationDelta > 0 ? "+" : ""}${durationDelta.toFixed(1)}s`
   const toleranceLabel = getToleranceLabel(durationDelta)
   const sortedAssets = useMemo(() => sortAssetsForDelivery(assets), [assets])
+  const visibleKeyframeCount = Math.max(
+    assets.filter((asset) => asset.assetType === "keyframe_image").length,
+    selectedTask?.keyframeCount ?? 0,
+    selectedTask ? Math.max(1, Math.ceil(selectedTask.targetDurationSec / 15)) : 0,
+  )
   const deliverableAssets = sortedAssets.filter((asset) => ["video_bundle", "subtitles", "script", "audio"].includes(asset.assetType))
   const supportingAssets = sortedAssets.filter((asset) => !["video_bundle", "subtitles", "script", "audio"].includes(asset.assetType))
   const assetDeleteLocked = !canDeleteTaskAssets(selectedTask)
@@ -1169,7 +1254,7 @@ export function AssetsPage() {
                 <div>
                   <div className="asset-item-title">{normalizeOperatorCopy(asset.label)}</div>
                   <div className="asset-item-tags">
-                    <span className="pill pill--sm">{asset.assetType}</span>
+                    <span className="pill pill--sm">{getAssetTypeLabel(asset.assetType)}</span>
                     <span className="pill pill--sm">
                       {asset.previewKind === "directory" ? "目录" : asset.previewKind === "json" ? "结构化预览" : asset.previewKind === "media" ? "媒体预览" : asset.previewKind === "text" ? "文本预览" : "二进制"}
                     </span>
@@ -1202,10 +1287,26 @@ export function AssetsPage() {
                   <div className="field-label" style={{ marginTop: 0 }}>目录</div>
                   <div className="muted">{asset.directoryName ?? "根目录"}</div>
                 </div>
+                <div>
+                  <div className="field-label" style={{ marginTop: 0 }}>生成模型</div>
+                  <div className="muted">
+                    {asset.modelTrace
+                      ? `${asset.modelTrace.label}，用于${asset.assetType === "scene_video" ? "生成视频段" : asset.assetType === "keyframe_image" ? "生成关键画面" : "生成这个素材"}`
+                      : "这条素材没有留下模型记录"}
+                  </div>
+                </div>
               </div>
+              {asset.assetType === "keyframe_image" || asset.assetType === "scene_video" || asset.assetType === "keyframe_prompt_summary" ? (
+                <div className="asset-origin-card">
+                  <span>{getAssetSourceLabel(asset)}</span>
+                  <span>{getAssetModelLabel(asset)}</span>
+                  <span>{getAssetBasisLabel(asset)}</span>
+                  <span className={!asset.exists ? "asset-origin-card__warning" : undefined}>{getAssetReadableStatus(asset)}</span>
+                </div>
+              ) : null}
               <div className="asset-item-footer">
                 <div className="muted" style={{ fontSize: 13 }}>
-                  {asset.exists ? "记录已绑定真实文件" : "该记录当前没有可访问的文件"}
+                  {asset.exists ? "记录已绑定真实文件" : "这个文件现在打不开，可能还没生成完成，也可能已被清理。"}
                 </div>
                 <div className="asset-item-actions">
                   {asset.previewable ? (
@@ -1299,8 +1400,8 @@ export function AssetsPage() {
           <p>先确认成片、字幕、脚本和封面是否齐全，再检查关键画面、分段视频和排查文件。</p>
         </div>
         <div className="topbar-actions">
-          <span className="pill">{selectedTask?.planning?.generationRouteLabel ?? "待预判"}</span>
-          <span className="pill pill--accent">{selectedTask?.planning?.generationPreferenceLabel ?? "待接入"}</span>
+          <span className="pill">{selectedTask?.planning?.generationRouteLabel ?? "等待同步"}</span>
+          <span className="pill pill--accent">{selectedTask?.planning?.generationPreferenceLabel ?? "等待同步"}</span>
         </div>
       </header>
 
@@ -1318,7 +1419,7 @@ export function AssetsPage() {
             >
               {tasks.map((task) => (
                 <option key={task.id} value={task.id}>
-                  {task.title} · {task.targetDurationSec}s · {task.planning?.generationRouteLabel ?? "待预判"}
+                  {task.title} · {task.targetDurationSec}s · {task.planning?.generationRouteLabel ?? "等待同步"}
                 </option>
               ))}
             </select>
@@ -1327,26 +1428,29 @@ export function AssetsPage() {
           )}
 
           <div className="planning-summary-card">
-            <strong>{selectedTask?.planning?.generationRouteLabel ?? "待预判"}</strong>
+            <strong>{selectedTask?.planning?.generationRouteLabel ?? "等待同步"}</strong>
             <span>{selectedTask?.planning?.planningSummary ?? "这里会展示视频结构、目标时长和生成原则的摘要。"}</span>
             <div className="planning-summary-tags">
-              <span className="pill pill--sm">{selectedTask?.planning?.generationPreferenceLabel ?? "待接入"}</span>
+              <span className="pill pill--sm">{selectedTask?.planning?.generationPreferenceLabel ?? "等待同步"}</span>
               <span className="pill pill--sm">{getAudioStrategyLabel(selectedTask?.audioStrategy)}</span>
               <span className="pill pill--sm">目标 {selectedTask?.targetDurationSec ?? 0}s</span>
+              <span className="pill pill--sm">
+                关键画面 {visibleKeyframeCount} 张 · {selectedTask?.keyframeGenerationMode === "single" ? "单张" : "批量"}
+              </span>
               {selectedTask?.actualDurationSec ? (
                 <span className="pill pill--sm">实际 {selectedTask.actualDurationSec.toFixed(1)}s</span>
               ) : null}
             </div>
           </div>
 
-          <ModelUsageSummary source={selectedTask?.modelUsage} />
+          <ModelUsageSummary source={selectedTask?.modelUsage} trace={selectedTask?.modelTrace} />
 
           <div className="route-context-card">
-            <strong>当前任务已写入链接</strong>
+            <strong>正在查看这条任务</strong>
             <span>
               {selectedTaskId
-                ? `任务 ${selectedTaskId} 已同步到 URL，可直接收藏这个素材视角，再从侧栏回到对应处理页。`
-                : "选择任务后，地址会自动同步当前素材视角。"}
+                ? `任务 ${selectedTaskId}。可以从右侧返回审核页或生产看板。`
+                : "选择任务后，这里会显示当前素材视角。"}
             </span>
           </div>
 
@@ -1462,6 +1566,10 @@ export function AssetsPage() {
             ) : null}
 
             <div className="delivery-retry-guide">
+              <div className="delivery-retry-guide__intro">
+                <strong>重做入口</strong>
+                <span>优先选影响最小的动作；“恢复生成”只用于失败或卡住的任务。</span>
+              </div>
               {(Object.keys(RETRY_IMPACT_COPY) as DeliveryRetryKind[]).map((kind) => (
                 <div key={kind}>
                   <strong>{RETRY_BUTTON_LABELS[kind]}</strong>
@@ -1755,7 +1863,7 @@ export function AssetsPage() {
               </div>
               <div className="task-item">
                 <strong>下一步缺口</strong>
-                <span>{diagnostics ? diagnostics.assets.expectedNextAssetType ?? "暂无缺口" : "等待诊断同步"}</span>
+                <span>{diagnostics ? getAssetTypeLabel(diagnostics.assets.expectedNextAssetType) : "等待诊断同步"}</span>
               </div>
             </div>
           </section>
@@ -1789,6 +1897,9 @@ export function AssetsPage() {
             <div className="task-list compact-list">
               {selectedTask?.status === "failed" && selectedTask?.failureReason ? (
                 <div className="task-item"><strong>失败原因</strong><span>{selectedTask.failureReason}</span></div>
+              ) : null}
+              {selectedTask?.status === "failed" && formatFailureModelRoute(selectedTask) ? (
+                <div className="task-item"><strong>失败时使用的模型</strong><span>{formatFailureModelRoute(selectedTask)}</span></div>
               ) : null}
               <div className="task-item"><strong>视频结构依据</strong><span>{selectedTask?.routeReason ?? "待同步"}</span></div>
               <div className="task-item"><strong>生成原则</strong><span>{selectedTask?.planning?.generationPreferenceLabel ?? "待同步"}</span></div>

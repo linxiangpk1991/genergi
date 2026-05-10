@@ -7,7 +7,10 @@ import type {
   GlobalModelDefaults,
   ModelControlStatus,
   ModelControlDefaults,
+  ModelDiagnosticRecord,
+  ModelDiagnosticRecordInput,
   ModelDefaultsDocument,
+  ModelRoutingPoliciesDocument,
   ModelRecord,
   ProviderRegistryRecord,
   ReviewStageId,
@@ -34,10 +37,12 @@ import {
   normalizeVideoProviderModelId,
 } from "./provider-model-ids.js"
 import { normalizeModelCapability } from "./model-control.js"
+import { modelRoutingPoliciesDocumentSchema } from "./model-control.js"
 import { renderSpecSchema } from "./video-blueprint.js"
 
 const subtitleStrategyValues = new Set(["tts_aligned", "whisper_cpp"])
 const MAX_TASK_TIMELINE_EVENTS = 200
+const MAX_MODEL_DIAGNOSTIC_RECORDS = 500
 
 function resolveDataDir() {
   return process.env.GENERGI_DATA_DIR
@@ -71,6 +76,10 @@ function resolveFiles() {
     tempModelsFile: path.join(dataDir, "models.tmp.json"),
     modelDefaultsFile: path.join(dataDir, "model-defaults.json"),
     tempModelDefaultsFile: path.join(dataDir, "model-defaults.tmp.json"),
+    modelRoutingPoliciesFile: path.join(dataDir, "model-routing-policies.json"),
+    tempModelRoutingPoliciesFile: path.join(dataDir, "model-routing-policies.tmp.json"),
+    modelDiagnosticsFile: path.join(dataDir, "model-diagnostics.json"),
+    tempModelDiagnosticsFile: path.join(dataDir, "model-diagnostics.tmp.json"),
   }
 }
 
@@ -257,6 +266,55 @@ function normalizeTaskTimelineEvent(record: TaskTimelineEvent, fallbackSequence:
 
 function normalizeNonNegativeInteger(value: unknown) {
   return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : 0
+}
+
+function normalizeNullableDiagnosticString(value: unknown) {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null
+}
+
+function normalizeModelDiagnosticRecord(record: Partial<ModelDiagnosticRecord>, fallbackIndex: number): ModelDiagnosticRecord {
+  const smokeMode = record.smokeMode === "connectivity" || record.smokeMode === "minimal_generation"
+    ? record.smokeMode
+    : "config"
+  const status = record.status === "failed" || record.status === "skipped" ? record.status : "success"
+  const categoryValues = new Set([
+    "auth_error",
+    "quota_exceeded",
+    "model_not_found",
+    "request_format_incompatible",
+    "timeout",
+    "empty_result",
+    "safety_refusal",
+    "provider_error",
+    "worker_local_failure",
+    "config_error",
+    "unknown",
+  ])
+  const slotValues = new Set(["textModel", "imageModel", "videoModel", "ttsProvider"])
+
+  return {
+    id: normalizeNullableDiagnosticString(record.id) ?? `model_diagnostic_${fallbackIndex}`,
+    providerId: normalizeNullableDiagnosticString(record.providerId) ?? "provider_unknown",
+    providerDisplayName: normalizeNullableDiagnosticString(record.providerDisplayName) ?? "Unknown Provider",
+    providerType: normalizeNullableDiagnosticString(record.providerType) ?? "unknown",
+    modelId: normalizeNullableDiagnosticString(record.modelId),
+    modelDisplayName: normalizeNullableDiagnosticString(record.modelDisplayName),
+    slotType: slotValues.has(String(record.slotType)) ? record.slotType as ModelDiagnosticRecord["slotType"] : null,
+    providerModelId: normalizeNullableDiagnosticString(record.providerModelId),
+    transport: normalizeNullableDiagnosticString(record.transport) ?? "unknown",
+    wireApi: normalizeNullableDiagnosticString(record.wireApi) ?? "unknown",
+    requestPath: normalizeNullableDiagnosticString(record.requestPath) ?? "config",
+    smokeMode,
+    status,
+    statusCode: typeof record.statusCode === "number" && Number.isInteger(record.statusCode) ? record.statusCode : null,
+    durationMs: normalizeNonNegativeInteger(record.durationMs),
+    errorCategory:
+      record.errorCategory && categoryValues.has(record.errorCategory)
+        ? record.errorCategory
+        : null,
+    errorMessage: normalizeNullableDiagnosticString(record.errorMessage),
+    createdAt: normalizeNullableDiagnosticString(record.createdAt) ?? now(),
+  }
 }
 
 function normalizeNullableNonNegativeInteger(value: unknown) {
@@ -721,6 +779,18 @@ export function normalizeTaskSummaryRecord(
     renderSpecJson: normalizeRenderSpec(task.renderSpecJson, normalizeTerminalPresetId(task.terminalPresetId)),
     targetDurationSec: task.targetDurationSec ?? 30,
     generationMode: task.generationMode ?? "user_locked",
+    visualSeedInput: normalizeNullableString((task as TaskSummary & { visualSeedInput?: string | null }).visualSeedInput),
+    keepCharacterConsistent:
+      typeof (task as TaskSummary & { keepCharacterConsistent?: unknown }).keepCharacterConsistent === "boolean"
+        ? (task as TaskSummary & { keepCharacterConsistent: boolean }).keepCharacterConsistent
+        : true,
+    keyframeGenerationMode:
+      (task as TaskSummary & { keyframeGenerationMode?: string }).keyframeGenerationMode === "single" ? "single" : "batch",
+    keyframeCount:
+      typeof (task as TaskSummary & { keyframeCount?: number }).keyframeCount === "number" &&
+      Number.isFinite((task as TaskSummary & { keyframeCount?: number }).keyframeCount)
+        ? Math.max(1, Math.floor((task as TaskSummary & { keyframeCount?: number }).keyframeCount as number))
+        : Math.max(1, Math.ceil((task.targetDurationSec ?? 30) / 15)),
     audioStrategy: task.audioStrategy ?? "tts_only",
     subtitleStrategy: subtitleStrategyValues.has((task as TaskSummary & { subtitleStrategy?: string }).subtitleStrategy)
       ? (task as TaskSummary & { subtitleStrategy?: "tts_aligned" | "whisper_cpp" }).subtitleStrategy
@@ -780,6 +850,32 @@ export function normalizeTaskDetailRecord(
       executionMode: normalizeExecutionMode(taskRunConfig.executionMode),
       terminalPresetId: normalizedTerminalPresetId,
       renderSpecJson: normalizeRenderSpec(taskRunConfig.renderSpecJson, normalizedTerminalPresetId),
+      visualSeedInput: normalizeNullableString(
+        (taskRunConfig as TaskDetail["taskRunConfig"] & { visualSeedInput?: string | null }).visualSeedInput,
+      ),
+      keepCharacterConsistent:
+        typeof (taskRunConfig as TaskDetail["taskRunConfig"] & { keepCharacterConsistent?: unknown }).keepCharacterConsistent ===
+        "boolean"
+          ? (taskRunConfig as TaskDetail["taskRunConfig"] & { keepCharacterConsistent: boolean }).keepCharacterConsistent
+          : true,
+      keyframeGenerationMode:
+        (taskRunConfig as TaskDetail["taskRunConfig"] & { keyframeGenerationMode?: string }).keyframeGenerationMode ===
+        "single"
+          ? "single"
+          : "batch",
+      keyframeCount:
+        typeof (taskRunConfig as TaskDetail["taskRunConfig"] & { keyframeCount?: number }).keyframeCount === "number" &&
+        Number.isFinite((taskRunConfig as TaskDetail["taskRunConfig"] & { keyframeCount?: number }).keyframeCount)
+          ? Math.max(
+              1,
+              Math.floor(
+                (taskRunConfig as TaskDetail["taskRunConfig"] & { keyframeCount?: number }).keyframeCount as number,
+              ),
+            )
+          : Math.max(1, Math.ceil((taskRunConfig.targetDurationSec ?? 30) / 15)),
+      understandingPreview: taskRunConfig.understandingPreview ?? null,
+      executionBrief: taskRunConfig.executionBrief ?? null,
+      executionBriefVersion: "execution-brief-v1",
       imageModel: {
         ...taskRunConfig.imageModel,
         id: normalizeTaskRuntimeModelId("imageModel", taskRunConfig.imageModel.id),
@@ -850,6 +946,13 @@ export function seedTaskSummaries(): TaskSummary[] {
       renderSpecJson: createDefaultRenderSpec("phone_portrait"),
       targetDurationSec: 30,
       generationMode: "user_locked",
+      visualSeedInput: null,
+      keepCharacterConsistent: true,
+      keyframeGenerationMode: "batch",
+      keyframeCount: 2,
+      understandingPreview: null,
+      executionBrief: null,
+      executionBriefVersion: "execution-brief-v1",
       audioStrategy: "tts_only",
       subtitleStrategy: "tts_aligned",
       generationRoute: "multi_scene",
@@ -880,6 +983,13 @@ export function seedTaskSummaries(): TaskSummary[] {
       renderSpecJson: createDefaultRenderSpec("phone_portrait"),
       targetDurationSec: 45,
       generationMode: "user_locked",
+      visualSeedInput: null,
+      keepCharacterConsistent: true,
+      keyframeGenerationMode: "batch",
+      keyframeCount: 3,
+      understandingPreview: null,
+      executionBrief: null,
+      executionBriefVersion: "execution-brief-v1",
       audioStrategy: "tts_only",
       subtitleStrategy: "tts_aligned",
       generationRoute: "multi_scene",
@@ -1473,6 +1583,46 @@ export async function readModelRegistryRecords() {
   return readModelRecords()
 }
 
+async function writeModelDiagnosticRecords(records: ModelDiagnosticRecord[]) {
+  const { dataDir, modelDiagnosticsFile, tempModelDiagnosticsFile } = resolveFiles()
+  await mkdir(dataDir, { recursive: true })
+  await commitTempFile(tempModelDiagnosticsFile, modelDiagnosticsFile, JSON.stringify(records, null, 2))
+}
+
+export async function readModelDiagnosticRecords(): Promise<ModelDiagnosticRecord[]> {
+  const { dataDir, modelDiagnosticsFile } = resolveFiles()
+  await mkdir(dataDir, { recursive: true })
+  try {
+    const content = await readFile(modelDiagnosticsFile, "utf8")
+    if (!content.trim()) {
+      await writeModelDiagnosticRecords([])
+      return []
+    }
+
+    const parsed = JSON.parse(content) as Array<Partial<ModelDiagnosticRecord>>
+    const normalized = parsed.map((record, index) => normalizeModelDiagnosticRecord(record, index + 1))
+    if (JSON.stringify(parsed) !== JSON.stringify(normalized)) {
+      await writeModelDiagnosticRecords(normalized)
+    }
+    return normalized
+  } catch {
+    await writeModelDiagnosticRecords([])
+    return []
+  }
+}
+
+export async function appendModelDiagnosticRecord(input: ModelDiagnosticRecordInput) {
+  const records = await readModelDiagnosticRecords()
+  const record: ModelDiagnosticRecord = {
+    ...input,
+    id: `model_diagnostic_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    createdAt: now(),
+  }
+  const next = [record, ...records].slice(0, MAX_MODEL_DIAGNOSTIC_RECORDS)
+  await writeModelDiagnosticRecords(next)
+  return record
+}
+
 function createDefaultModelDefaults(): ModelDefaultsDocument {
   return {
     globalDefaults: {} satisfies GlobalModelDefaults,
@@ -1568,4 +1718,42 @@ export async function readModelControlDefaults(): Promise<ModelControlDefaults> 
 
 export async function replaceModelControlDefaults(document: ModelControlDefaults) {
   await replaceModelDefaults(fromControlPlaneDefaults(document))
+}
+
+function createDefaultModelRoutingPolicies(): ModelRoutingPoliciesDocument {
+  return modelRoutingPoliciesDocumentSchema.parse({})
+}
+
+async function writeModelRoutingPolicies(document: ModelRoutingPoliciesDocument) {
+  const { dataDir, modelRoutingPoliciesFile, tempModelRoutingPoliciesFile } = resolveFiles()
+  await mkdir(dataDir, { recursive: true })
+  await commitTempFile(tempModelRoutingPoliciesFile, modelRoutingPoliciesFile, JSON.stringify(document, null, 2))
+}
+
+export async function readModelRoutingPolicies(): Promise<ModelRoutingPoliciesDocument> {
+  const { dataDir, modelRoutingPoliciesFile } = resolveFiles()
+  await mkdir(dataDir, { recursive: true })
+  try {
+    const content = await readFile(modelRoutingPoliciesFile, "utf8")
+    if (!content.trim()) {
+      const policies = createDefaultModelRoutingPolicies()
+      await writeModelRoutingPolicies(policies)
+      return policies
+    }
+
+    const parsed = JSON.parse(content) as unknown
+    const normalized = modelRoutingPoliciesDocumentSchema.parse(parsed)
+    if (JSON.stringify(parsed) !== JSON.stringify(normalized)) {
+      await writeModelRoutingPolicies(normalized)
+    }
+    return normalized
+  } catch {
+    const policies = createDefaultModelRoutingPolicies()
+    await writeModelRoutingPolicies(policies)
+    return policies
+  }
+}
+
+export async function replaceModelRoutingPolicies(document: ModelRoutingPoliciesDocument) {
+  await writeModelRoutingPolicies(modelRoutingPoliciesDocumentSchema.parse(document))
 }

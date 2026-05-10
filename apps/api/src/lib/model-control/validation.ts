@@ -19,12 +19,14 @@ type ModelProbeInput = {
   providerModelId: string
 }
 
+const TTS_PROVIDER_TYPES = new Set(["edge-tts", "azure-tts"])
+
 function requiresSecret(provider: ProviderRecord) {
-  return provider.providerType !== "edge-tts" && provider.authType !== "none"
+  return !TTS_PROVIDER_TYPES.has(provider.providerType.trim().toLowerCase()) && provider.authType !== "none"
 }
 
 function requiresEndpoint(provider: ProviderRecord) {
-  return provider.providerType !== "edge-tts"
+  return !TTS_PROVIDER_TYPES.has(provider.providerType.trim().toLowerCase())
 }
 
 async function resolveProviderRecord(provider: ProviderRecord | string) {
@@ -52,6 +54,19 @@ function assertModelCapability(model: ModelRecord) {
       throw new Error("MODEL_CAPABILITY_MISSING:maxSingleShotSec")
     }
   }
+}
+
+function redactSensitiveText(value: string) {
+  return value
+    .replace(/bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [已隐藏]")
+    .replace(/sk-[A-Za-z0-9_-]{6,}/gi, "sk-[已隐藏]")
+    .replace(/(authorization\s*[:=]\s*)([^\s,;]+)/gi, "$1[已隐藏]")
+    .replace(/((?:api[_-]?key|access[_-]?token|refresh[_-]?token|secret|password|token|key)\s*[:=]\s*)([^\s,;&]+)/gi, "$1[已隐藏]")
+    .replace(/([?&](?:api[_-]?key|access[_-]?token|refresh[_-]?token|secret|password|token|key)=)([^&#\s]+)/gi, "$1[已隐藏]")
+}
+
+function getSafeErrorMessage(error: unknown) {
+  return redactSensitiveText(error instanceof Error ? error.message : String(error))
 }
 
 export async function validateProviderRecord(
@@ -105,7 +120,7 @@ export async function validateProviderRecord(
     const updated = await updateProviderRecord(providerRecord.id, {
       status: "invalid",
       lastValidatedAt: new Date().toISOString(),
-      lastValidationError: error instanceof Error ? error.message : String(error),
+      lastValidationError: getSafeErrorMessage(error),
     })
     if (updated) {
       return updated
@@ -163,7 +178,7 @@ export async function validateModelRecord(
     const updated = await updateModelRecord(modelRecord.id, {
       lifecycleStatus: "invalid",
       lastValidatedAt: new Date().toISOString(),
-      lastValidationError: error instanceof Error ? error.message : String(error),
+      lastValidationError: getSafeErrorMessage(error),
     })
     if (updated) {
       return updated

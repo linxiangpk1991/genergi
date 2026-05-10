@@ -4,6 +4,7 @@ import {
   MODEL_CONTROL_SLOT_LABELS,
   MODEL_CONTROL_SLOT_ORDER,
   type CreateModelRegistryEntryPayload,
+  type ModelDiagnosticRecord,
   type ModelControlLifecycleStatus,
   type ModelRegistryRecord,
   type ProviderRegistryRecord,
@@ -48,6 +49,26 @@ function formatDateTime(value?: string | null) {
   return parsed.toLocaleString("zh-CN")
 }
 
+function formatSmokeMode(value: ModelDiagnosticRecord["smokeMode"]) {
+  if (value === "minimal_generation") {
+    return "真实小样本"
+  }
+  if (value === "connectivity") {
+    return "真实连通"
+  }
+  return "配置检查"
+}
+
+function formatDiagnosticStatus(value: ModelDiagnosticRecord["status"]) {
+  if (value === "success") {
+    return "通过"
+  }
+  if (value === "skipped") {
+    return "跳过真实调用"
+  }
+  return "失败"
+}
+
 function stringifyCapabilityJson(value: Record<string, unknown>) {
   return JSON.stringify(value, null, 2)
 }
@@ -79,6 +100,7 @@ function isCapabilityTextValid(value: string) {
 
 export function ModelRegistryPage() {
   const [models, setModels] = useState<ModelRegistryRecord[]>([])
+  const [diagnostics, setDiagnostics] = useState<ModelDiagnosticRecord[]>([])
   const [providers, setProviders] = useState<ProviderRegistryRecord[]>([])
   const [form, setForm] = useState<CreateModelRegistryEntryPayload>(emptyForm)
   const [capabilityText, setCapabilityText] = useState("{}")
@@ -100,8 +122,10 @@ export function ModelRegistryPage() {
         api.listModelRegistry(),
         api.listModelProviders(),
       ])
+      const diagnosticResponse = await api.listModelDiagnostics({ limit: 100 }).catch(() => ({ diagnostics: [] }))
 
       setModels(modelResponse.models)
+      setDiagnostics(diagnosticResponse.diagnostics)
       setProviders(providerResponse.providers)
       setForm((current) => ({
         ...current,
@@ -130,6 +154,26 @@ export function ModelRegistryPage() {
       ),
     [form.providerId, providers],
   )
+
+  const latestDiagnosticByModelId = useMemo(() => {
+    const records = new Map<string, ModelDiagnosticRecord>()
+    diagnostics.forEach((diagnostic) => {
+      if (diagnostic.modelId && !records.has(diagnostic.modelId)) {
+        records.set(diagnostic.modelId, diagnostic)
+      }
+    })
+    return records
+  }, [diagnostics])
+
+  const latestSuccessByModelId = useMemo(() => {
+    const records = new Map<string, ModelDiagnosticRecord>()
+    diagnostics.forEach((diagnostic) => {
+      if (diagnostic.modelId && diagnostic.status === "success" && !records.has(diagnostic.modelId)) {
+        records.set(diagnostic.modelId, diagnostic)
+      }
+    })
+    return records
+  }, [diagnostics])
 
   function resetForm() {
     setEditingModelId(null)
@@ -232,7 +276,7 @@ export function ModelRegistryPage() {
 
     try {
       await api.validateModelRegistryEntry(modelId)
-      setNotice("已完成配置检查：通过后会进入默认模型可选池；真实小样本试跑会在 smoke probe 接入后单独触发。")
+      setNotice("已完成配置检查：通过后会进入默认模型可选池；真实小样本试跑会在检查功能里单独触发。")
       await loadRegistry()
     } catch (err) {
       setError(err instanceof Error ? err.message : "模型校验失败")
@@ -458,35 +502,58 @@ export function ModelRegistryPage() {
                 ) : null}
 
                 {form.slotType === "imageModel" ? (
-                  <label>
-                    <span className="field-label">图片接口</span>
-                    <select
-                      className="input"
-                      value={String(parseCapabilityText(capabilityText).imageTransport ?? "")}
-                      onChange={(event) => {
-                        const option = IMAGE_TRANSPORT_OPTIONS.find((item) => item.value === event.target.value)
-                        applyCapabilityPatch({
-                          imageTransport: event.target.value,
-                          endpointStyle:
-                            event.target.value === "openai-images-generations"
-                              ? "images-generations"
-                              : event.target.value === "gemini-generate-content"
-                                ? "gemini-generate-content"
-                                : "chat-completions",
-                        })
-                        if (option?.value === "openai-images-generations") {
-                          applyCapabilityPatch({ family: "gpt-image", usage: "image-generation" })
+                  <div className="modal-grid">
+                    <label>
+                      <span className="field-label">图片接口</span>
+                      <select
+                        className="input"
+                        value={String(parseCapabilityText(capabilityText).imageTransport ?? "")}
+                        onChange={(event) => {
+                          const option = IMAGE_TRANSPORT_OPTIONS.find((item) => item.value === event.target.value)
+                          applyCapabilityPatch({
+                            imageTransport: event.target.value,
+                            endpointStyle:
+                              event.target.value === "openai-images-generations"
+                                ? "images-generations"
+                                : event.target.value === "gemini-generate-content"
+                                  ? "gemini-generate-content"
+                                  : "chat-completions",
+                            supportsBatchKeyframes: event.target.value === "openai-images-generations",
+                            maxBatchImages: event.target.value === "openai-images-generations"
+                              ? Number(parseCapabilityText(capabilityText).maxBatchImages ?? 4)
+                              : undefined,
+                          })
+                          if (option?.value === "openai-images-generations") {
+                            applyCapabilityPatch({ family: "gpt-image", usage: "image-generation" })
+                          }
+                        }}
+                      >
+                        <option value="">待选择</option>
+                        {IMAGE_TRANSPORT_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label} ({option.endpoint})
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      <span className="field-label">最大批量张数</span>
+                      <input
+                        className="input"
+                        min={1}
+                        max={8}
+                        type="number"
+                        value={String(parseCapabilityText(capabilityText).maxBatchImages ?? "")}
+                        onChange={(event) =>
+                          applyCapabilityPatch({
+                            supportsBatchKeyframes: true,
+                            maxBatchImages: Number(event.target.value) || undefined,
+                          })
                         }
-                      }}
-                    >
-                      <option value="">待选择</option>
-                      {IMAGE_TRANSPORT_OPTIONS.map((option) => (
-                        <option key={option.value} value={option.value}>
-                          {option.label} ({option.endpoint})
-                        </option>
-                      ))}
-                    </select>
-                  </label>
+                        placeholder="例如：4"
+                      />
+                    </label>
+                  </div>
                 ) : null}
 
                 {form.slotType === "videoModel" ? (
@@ -632,6 +699,38 @@ export function ModelRegistryPage() {
                       </strong>
                     </div>
                   </div>
+
+                  {(() => {
+                    const diagnostic = latestDiagnosticByModelId.get(model.id)
+                    const latestSuccess = latestSuccessByModelId.get(model.id)
+                    return diagnostic ? (
+                      <div className="model-diagnostic-summary">
+                        <div className="model-diagnostic-summary__header">
+                          <strong>最近检查</strong>
+                          <span className={diagnostic.status === "failed" ? "status-text--danger" : "status-text--success"}>
+                            {formatDiagnosticStatus(diagnostic.status)}
+                          </span>
+                        </div>
+                        <div className="model-diagnostic-summary__grid">
+                          <span>{formatSmokeMode(diagnostic.smokeMode)}</span>
+                          <span>{diagnostic.wireApi === "responses" ? "Responses API" : diagnostic.wireApi}</span>
+                          <span>{diagnostic.requestPath}</span>
+                          <span>{diagnostic.durationMs}ms</span>
+                        </div>
+                        <div className="model-diagnostic-summary__success">
+                          最近一次成功：{latestSuccess ? formatDateTime(latestSuccess.createdAt) : "尚无成功记录"}
+                        </div>
+                        {diagnostic.errorMessage ? (
+                          <div className="inline-error-text">{diagnostic.errorMessage}</div>
+                        ) : null}
+                      </div>
+                    ) : (
+                      <div className="model-diagnostic-summary model-diagnostic-summary--empty">
+                        <strong>最近检查</strong>
+                        <span>暂无调用诊断记录</span>
+                      </div>
+                    )
+                  })()}
 
                   <CapabilityTags value={model.capabilityJson} />
 

@@ -64,6 +64,7 @@ export type HealthResponse = {
 export type GenerationPreferenceId = "user_locked" | "system_enhanced"
 export type AudioStrategy = "tts_only" | "native_plus_tts_ducked"
 export type SubtitleStrategy = "tts_aligned" | "whisper_cpp"
+export type KeyframeGenerationMode = "batch" | "single"
 
 export type GenerationRouteId = "single_shot" | "multi_scene"
 
@@ -88,7 +89,22 @@ export type ReviewDecision = "approved" | "rejected"
 export type ReviewDecisionPayload = {
   decision: ReviewDecision
   note?: string
+  qualityReasons?: Array<{
+    slotType?: ModelControlSlotType | null
+    issueCategory: QualityIssueCategory
+    note?: string
+  }>
 }
+
+export type QualityIssueCategory =
+  | "script_off_track"
+  | "image_inconsistent"
+  | "character_unstable"
+  | "low_image_quality"
+  | "poor_motion"
+  | "subtitle_issue"
+  | "voice_issue"
+  | "other"
 
 export type TaskPlanningSnapshot = {
   generationMode: GenerationPreferenceId | null
@@ -150,6 +166,8 @@ export type ProjectRecord = {
   brandDirection?: string | null
   defaultChannelIds: string[]
   reusableStyleConstraints: string[]
+  defaultVisualSeedInput?: string | null
+  defaultKeyframeGenerationMode?: KeyframeGenerationMode
   createdAt: string
   updatedAt: string
 }
@@ -171,6 +189,9 @@ export type UserRecord = {
   displayName: string
   password?: string
   status: UserStatus
+  source?: "file" | "env"
+  purpose?: "operator" | "test_operator"
+  expiresAt?: string | null
 }
 
 export type UsersResponse = {
@@ -216,6 +237,34 @@ export type TaskModelUsage = {
   ttsProvider?: string | null
 }
 
+export type TaskModelTraceEntry = {
+  slotType: ModelControlSlotType
+  stage?: ModelControlSlotType
+  label: string
+  providerId?: string
+  providerKey?: string
+  providerType: string
+  modelId?: string
+  modelKey?: string
+  providerModelId: string
+  wireApi: string
+  requestPath: string
+  transport?: string
+  smokeProbe?: string
+  validatedAt?: string | null
+  selectionReason?: string
+  routingStrategy?: ModelRoutingStrategy
+  routingPolicyNote?: string
+  fallbackCandidates?: Array<{
+    displayName: string
+    providerType: string
+    providerModelId: string
+    fallbackTriggers?: ModelFallbackTrigger[]
+  }>
+}
+
+export type TaskModelTrace = Partial<Record<ModelControlSlotType, TaskModelTraceEntry>>
+
 export type TaskSummary = {
   id: string
   projectId: string
@@ -227,6 +276,13 @@ export type TaskSummary = {
   renderSpecJson: RenderSpec
   targetDurationSec: number
   generationMode: GenerationPreferenceId
+  visualSeedInput?: string | null
+  keepCharacterConsistent?: boolean
+  keyframeGenerationMode?: KeyframeGenerationMode
+  keyframeCount?: number
+  understandingPreview?: BilingualUnderstandingPreview | null
+  executionBrief?: EnglishExecutionBrief | null
+  executionBriefVersion?: "execution-brief-v1"
   audioStrategy: "tts_only" | "native_plus_tts_ducked"
   subtitleStrategy: SubtitleStrategy
   generationRoute: GenerationRouteId
@@ -256,6 +312,7 @@ export type TaskSummary = {
   workerId?: string | null
   activeJobId?: string | null
   modelUsage?: TaskModelUsage | null
+  modelTrace?: TaskModelTrace | null
   planning?: TaskPlanningSnapshot
   archivedAt?: string | null
   archivedBy?: string | null
@@ -306,6 +363,13 @@ export type TaskDetail = {
     renderSpecJson: RenderSpec
     targetDurationSec: number
     generationMode: GenerationPreferenceId
+    visualSeedInput?: string | null
+    keepCharacterConsistent?: boolean
+    keyframeGenerationMode?: KeyframeGenerationMode
+    keyframeCount?: number
+    understandingPreview?: BilingualUnderstandingPreview | null
+    executionBrief?: EnglishExecutionBrief | null
+    executionBriefVersion?: "execution-brief-v1"
     audioStrategy: "tts_only" | "native_plus_tts_ducked"
     generationRoute: GenerationRouteId
     routeReason: string
@@ -336,6 +400,7 @@ export type TaskDetail = {
     aspectRatio: string
     slotSnapshots: Array<Record<string, unknown>>
   }
+  modelTrace?: TaskModelTrace | null
   visualStyleGuide?: string
   ctaLine?: string
   actualDurationSec?: number | null
@@ -536,6 +601,8 @@ export type AssetRecord = {
     | "planning_prompt"
     | "planning_response"
     | "planning_audit"
+    | "visual_plan"
+    | "keyframe_prompt_summary"
     | "storyboard"
     | "subtitles"
     | "audio"
@@ -560,6 +627,7 @@ export type AssetRecord = {
   previewKind: "text" | "json" | "media" | "directory" | "binary"
   modifiedAt: string | null
   downloadFileName: string
+  modelTrace?: TaskModelTraceEntry | null
 }
 
 export type PlannedExecutionBlueprint = {
@@ -567,10 +635,24 @@ export type PlannedExecutionBlueprint = {
   renderSpec: RenderSpec
   globalTheme: string
   visualStyleGuide: string
+  bilingualUnderstandingPreview?: BilingualUnderstandingPreview | null
+  englishExecutionBrief?: EnglishExecutionBrief | null
   subjectProfile: string
   productProfile: string
   backgroundConstraints: string[]
   negativeConstraints: string[]
+  visualPlan?: {
+    sourceBrief?: string | null
+    keyframeCount: number
+    generationMode: KeyframeGenerationMode
+    characterConsistency: boolean
+    subjectProfile: string
+    setting: string
+    style: string
+    mood: string
+    negativePrompt: string
+    continuityRules: string[]
+  } | null
   totalVoiceoverScript: string
   sceneContracts: Array<{
     id: string
@@ -608,6 +690,16 @@ export type TaskBlueprintReviewRecord = {
   blueprintVersion: number
   decision: ReviewDecision
   note?: string | null
+  qualityFeedback?: Array<{
+    taskId: string
+    blueprintVersion: number
+    slotType: ModelControlSlotType | null
+    issueCategory: QualityIssueCategory
+    reasonLabel: string
+    note?: string | null
+    operator: string
+    createdAt: string
+  }>
   decidedAt: string
 }
 
@@ -672,6 +764,8 @@ export const MODEL_CONTROL_SLOT_ORDER = [
 export type ModelControlSlotType = (typeof MODEL_CONTROL_SLOT_ORDER)[number]
 
 export type ModelControlModeId = "mass_production" | "high_quality"
+export type ModelRoutingStrategy = "balanced" | "quality_first" | "speed_first" | "cost_first"
+export type ModelFallbackTrigger = "timeout" | "rate_limit" | "provider_error" | "empty_result" | "invalid_response"
 
 export const MODEL_CONTROL_SLOT_LABELS: Record<ModelControlSlotType, string> = {
   textModel: "文案规划",
@@ -734,6 +828,46 @@ export type ModelRegistryRecord = {
   lastValidationError?: string | null
   createdAt?: string
   updatedAt?: string
+}
+
+export type ModelDiagnosticRecord = {
+  id: string
+  providerId: string
+  providerDisplayName: string
+  providerType: string
+  modelId: string | null
+  modelDisplayName: string | null
+  slotType: ModelControlSlotType | null
+  providerModelId: string | null
+  transport: string
+  wireApi: string
+  requestPath: string
+  smokeMode: "config" | "connectivity" | "minimal_generation"
+  status: "success" | "failed" | "skipped"
+  statusCode: number | null
+  durationMs: number
+  errorCategory: string | null
+  errorMessage: string | null
+  createdAt: string
+}
+
+export type ModelQualitySummaryItem = {
+  slotType: ModelControlSlotType
+  slotLabel: string
+  modelId: string
+  modelDisplayName: string
+  providerModelId: string | null
+  providerDisplayName: string | null
+  issueCategory: QualityIssueCategory
+  reasonLabel: string
+  count: number
+  latestAt: string
+}
+
+export type ModelQualitySummaryResponse = {
+  totalCount: number
+  items: ModelQualitySummaryItem[]
+  updatedAt: string | null
 }
 
 export type ModelControlSelection = {
@@ -806,6 +940,152 @@ export type UpdateModelDefaultsPayload = {
   assignments: Partial<Record<ModelControlSlotType, string | null>>
 }
 
+export type ModelRoutingSlotPolicy = {
+  enabled: boolean
+  strategy: ModelRoutingStrategy
+  primary: { modelId?: string; providerId?: string } | null
+  fallbacks: Array<{ modelId?: string; providerId?: string }>
+  fallbackTriggers: ModelFallbackTrigger[]
+  operatorNote: string
+}
+
+export type ModelRoutingPolicies = {
+  global: Record<ModelControlSlotType, ModelRoutingSlotPolicy>
+  modes: Record<ModelControlModeId, Record<ModelControlSlotType, ModelRoutingSlotPolicy>>
+  updatedAt: string | null
+}
+
+export type ModelRoutingSlotResolved = {
+  enabled: boolean
+  strategy: ModelRoutingStrategy
+  strategyLabel: string
+  primary: (ModelControlSelection & {
+    valueId?: string
+    providerType?: string | null
+    providerModelId?: string | null
+    warning?: string
+  }) | null
+  fallbacks: Array<ModelControlSelection & {
+    valueId?: string
+    providerType?: string | null
+    providerModelId?: string | null
+    warning?: string
+  }>
+  fallbackTriggers: ModelFallbackTrigger[]
+  fallbackTriggerLabels: string[]
+  operatorNote: string
+  warnings: string[]
+  summary: string
+}
+
+export type ModelRoutingPoliciesResponse = {
+  policies: ModelRoutingPolicies
+  resolved: {
+    global: Record<ModelControlSlotType, ModelRoutingSlotResolved>
+    mass_production: Record<ModelControlSlotType, ModelRoutingSlotResolved>
+    high_quality: Record<ModelControlSlotType, ModelRoutingSlotResolved>
+  }
+  strategyOptions: Array<{ value: ModelRoutingStrategy; label: string }>
+  triggerOptions: Array<{ value: ModelFallbackTrigger; label: string }>
+  updatedAt: string | null
+}
+
+export type ModelRoutePreviewSlot = {
+  slotType: ModelControlSlotType
+  displayName: string
+  provider: string
+  wireApi: string
+  requestPath: string
+  selectionReason: string
+  routingStrategy?: ModelRoutingStrategy
+  fallbackCandidates: Array<{
+    displayName: string
+    provider: string
+    wireApi: string
+    requestPath: string
+    fallbackTriggers?: ModelFallbackTrigger[]
+  }>
+  warnings: string[]
+}
+
+export type ModelRoutePreviewResponse = {
+  modeId: ModelControlModeId
+  summary: string
+  slots: ModelRoutePreviewSlot[]
+  warnings: string[]
+}
+
+export type UpdateModelRoutingPoliciesPayload = {
+  global?: Partial<Record<ModelControlSlotType, Partial<ModelRoutingSlotPolicy>>>
+  modes?: Partial<Record<ModelControlModeId, Partial<Record<ModelControlSlotType, Partial<ModelRoutingSlotPolicy>>>>>
+}
+
+export type BilingualText = {
+  zh: string
+  en: string
+}
+
+export type BilingualUnderstandingPreview = {
+  version: "understanding-preview-v1"
+  generatedAt: string
+  sourceBriefHash: string
+  topic: BilingualText
+  targetAudience: BilingualText
+  corePainPoint: BilingualText
+  mainPromise: BilingualText
+  conversionGoal: BilingualText
+  emotionalArc: BilingualText
+  recommendedStructure: BilingualText
+  visualBrief: {
+    subject: BilingualText
+    setting: BilingualText
+    style: BilingualText
+    mood: BilingualText
+    negativeRules: BilingualText[]
+    consistencyRules: BilingualText[]
+  }
+  riskWarnings: Array<{
+    severity: "info" | "warning" | "blocking"
+    message: BilingualText
+    suggestedFix?: BilingualText
+  }>
+  status: "draft" | "confirmed" | "edited"
+}
+
+export type EnglishExecutionBrief = {
+  version: "execution-brief-v1"
+  sourceBrief: string
+  topic: string
+  targetAudience: string
+  corePainPoint: string
+  mainPromise: string
+  conversionGoal: string
+  emotionalArc: string
+  visualBrief: {
+    subject: string
+    setting: string
+    style: string
+    mood: string
+    negativeRules: string[]
+    consistencyRules: string[]
+  }
+  narrativeStructure: string[]
+  keyframePlan: Array<{
+    index: number
+    timestampRange: string
+    narrativeRole: string
+    visualGoal: string
+    imagePrompt: string
+    videoPrompt: string
+  }>
+  finalPromptLanguage: "en"
+}
+
+export type UnderstandingPreviewResponse = {
+  understandingPreview: BilingualUnderstandingPreview
+  executionBrief: EnglishExecutionBrief
+}
+
 export type CreateTaskPayload = {
   projectId: string
   modeId?: ModelControlModeId
@@ -813,6 +1093,12 @@ export type CreateTaskPayload = {
   script: string
   terminalPresetId: TerminalPresetId
   targetDurationSec: number
+  visualSeedInput?: string | null
+  keepCharacterConsistent?: boolean
+  keyframeGenerationMode?: KeyframeGenerationMode
+  keyframeCount?: number
+  understandingPreview?: BilingualUnderstandingPreview | null
+  executionBrief?: EnglishExecutionBrief | null
   audioStrategy: AudioStrategy
   subtitleStrategy: SubtitleStrategy
   modelOverrides?: Partial<Record<ModelControlSlotType, { modelId?: string; providerId?: string }>>
@@ -859,7 +1145,7 @@ export function normalizeOperatorCopy(text: string | null | undefined) {
   return text
     .replace(/蓝图/g, "生成方案")
     .replace(/提示词/g, "生成说明")
-    .replace(/母本/g, "原始文案")
+    .replace(/母本/g, "画面参考")
     .replace(/\bworker\b/gi, "生成服务")
     .replace(/\bredis\b/gi, "排队服务")
     .replace(/\bprovider\b/gi, "接入方")
@@ -892,6 +1178,11 @@ export const api = {
     request<{ user: UserRecord }>("/api/users", {
       method: "POST",
       body: JSON.stringify(payload),
+    }),
+  createTestUser: (payload?: { expiresInHours?: number }) =>
+    request<{ user: UserRecord; password: string; expiresAt: string }>("/api/users/test-account", {
+      method: "POST",
+      body: JSON.stringify(payload ?? {}),
     }),
   updateUser: (userId: string, payload: Partial<UserPayload>) =>
     request<{ user: UserRecord }>(`/api/users/${userId}`, {
@@ -1013,6 +1304,17 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify(payload),
     }),
+  createUnderstandingPreview: (payload: {
+    sourceBrief: string
+    visualSeedInput?: string | null
+    targetDurationSec: number
+    keyframeCount?: number
+    keepCharacterConsistent?: boolean
+  }) =>
+    request<UnderstandingPreviewResponse>("/api/tasks/understanding-preview", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
   createTask: (payload: CreateTaskPayload) =>
     request<{ task: TaskSummary }>("/api/tasks", {
       method: "POST",
@@ -1048,6 +1350,16 @@ export const api = {
     request<{ model: ModelRegistryRecord }>(`/api/model-control/validation/models/${modelId}`, {
       method: "POST",
     }),
+  listModelDiagnostics: (options?: { modelId?: string; providerId?: string; limit?: number }) =>
+    request<{ diagnostics: ModelDiagnosticRecord[] }>(buildApiUrl("/api/model-control/diagnostics", {
+      modelId: options?.modelId,
+      providerId: options?.providerId,
+      limit: options?.limit ? String(options.limit) : undefined,
+    })),
+  getModelQualitySummary: (options?: { limit?: number }) =>
+    request<ModelQualitySummaryResponse>(buildApiUrl("/api/model-control/quality-summary", {
+      limit: options?.limit ? String(options.limit) : undefined,
+    })),
   getModelDefaults: () => request<ModelControlDefaults>("/api/model-control/defaults"),
   updateGlobalModelDefaults: (payload: UpdateModelDefaultsPayload) =>
     request<ModelControlDefaults>("/api/model-control/defaults/global", {
@@ -1059,6 +1371,14 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(payload),
     }),
+  getModelRoutingPolicies: () => request<ModelRoutingPoliciesResponse>("/api/model-control/routing"),
+  updateModelRoutingPolicies: (payload: UpdateModelRoutingPoliciesPayload) =>
+    request<ModelRoutingPoliciesResponse>("/api/model-control/routing", {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  getModelRoutePreview: (modeId: ModelControlModeId) =>
+    request<ModelRoutePreviewResponse>(buildApiUrl("/api/model-control/route-preview", { modeId })),
   getSelectableModelPools: (modeId: ModelControlModeId) =>
     request<SelectableModelPoolsResponse>(buildApiUrl("/api/model-control/selectable", { modeId })),
 }

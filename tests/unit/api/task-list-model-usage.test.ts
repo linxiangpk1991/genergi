@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises"
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
@@ -89,5 +89,96 @@ describe("API task list model usage", () => {
     expect(task?.modelUsage?.imageModel?.label).toContain("Gemini")
     expect(task?.modelUsage?.videoModel?.label).toContain("Veo 3.1")
     expect(task?.modelUsage?.ttsProvider).toBe("edge-tts")
+  })
+
+  it("adds frozen routing trace to task details and generated assets", async () => {
+    dataDir = await mkdtemp(path.join(os.tmpdir(), "genergi-task-model-trace-"))
+    process.env.GENERGI_DATA_DIR = dataDir
+
+    const [{ app }, { buildSessionValue }, store, shared] = await Promise.all([
+      import("../../../apps/api/src/index"),
+      import("../../../apps/api/src/lib/auth"),
+      import("../../../apps/api/src/lib/task-store"),
+      import("../../../packages/shared/src/index"),
+    ])
+
+    const created = await store.createTask({
+      projectId: "project_default",
+      title: "Traceable model task",
+      script: "Show the product. Explain the value. End with a CTA.",
+      modeId: "high_quality",
+      channelId: "reels",
+      terminalPresetId: "phone_portrait",
+      aspectRatio: "9:16",
+      targetDurationSec: 30,
+      generationMode: "system_enhanced",
+    })
+    const taskId = created.task.id
+    const assetDir = path.join(dataDir, "assets", taskId)
+    await mkdir(assetDir, { recursive: true })
+    const keyframePath = path.join(assetDir, "scene-1.png")
+    const videoPath = path.join(assetDir, "scene-1.mp4")
+    await writeFile(keyframePath, "image", "utf8")
+    await writeFile(videoPath, "video", "utf8")
+    await shared.upsertTaskAssets(taskId, [
+      {
+        id: "keyframe_1",
+        taskId,
+        assetType: "keyframe_image",
+        label: "关键画面 1",
+        status: "ready",
+        path: keyframePath,
+        createdAt: "2026-05-08T00:00:00.000Z",
+      },
+      {
+        id: "scene_video_1",
+        taskId,
+        assetType: "scene_video",
+        label: "视频片段 1",
+        status: "ready",
+        path: videoPath,
+        createdAt: "2026-05-08T00:00:00.000Z",
+      },
+    ])
+
+    const cookie = `genergi_session=${buildSessionValue("admin", "test-secret")}`
+    const detailResponse = await app.request(`/api/tasks/${taskId}`, { headers: { Cookie: cookie } })
+    const detailPayload = await detailResponse.json() as {
+      detail: {
+        modelTrace?: {
+          textModel?: { label: string; wireApi: string; requestPath: string; providerType: string }
+          imageModel?: { label: string; wireApi: string; requestPath: string; providerType: string }
+          videoModel?: { label: string; wireApi: string; requestPath: string; providerType: string }
+          ttsProvider?: { label: string; wireApi: string; requestPath: string; providerType: string }
+        }
+      }
+    }
+
+    expect(detailPayload.detail.modelTrace?.textModel?.label).toBe("Claude Opus 4.6")
+    expect(detailPayload.detail.modelTrace?.textModel?.wireApi).toBe("messages")
+    expect(detailPayload.detail.modelTrace?.imageModel?.requestPath).toBe(":generateContent")
+    expect(detailPayload.detail.modelTrace?.videoModel?.wireApi).toBe("video_generation")
+    expect(detailPayload.detail.modelTrace?.ttsProvider?.providerType).toBe("edge-tts")
+
+    const assetsResponse = await app.request(`/api/tasks/${taskId}/assets`, { headers: { Cookie: cookie } })
+    const assetsPayload = await assetsResponse.json() as {
+      assets: Array<{
+        id: string
+        modelTrace?: { stage: string; label: string; wireApi: string; requestPath: string }
+      }>
+    }
+    const keyframe = assetsPayload.assets.find((asset) => asset.id === "keyframe_1")
+    const sceneVideo = assetsPayload.assets.find((asset) => asset.id === "scene_video_1")
+
+    expect(keyframe?.modelTrace).toMatchObject({
+      stage: "imageModel",
+      wireApi: "gemini_generate_content",
+      requestPath: ":generateContent",
+    })
+    expect(sceneVideo?.modelTrace).toMatchObject({
+      stage: "videoModel",
+      wireApi: "video_generation",
+      requestPath: "按视频适配器",
+    })
   })
 })

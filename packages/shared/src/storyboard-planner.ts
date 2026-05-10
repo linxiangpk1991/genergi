@@ -65,6 +65,10 @@ export function resolveSceneCountForDurationWithLimit(targetDurationSec: number,
   return Math.max(1, Math.ceil(targetDurationSec / Math.max(maxSceneDurationSec, 1)))
 }
 
+export function resolveDefaultKeyframeCount(targetDurationSec: number) {
+  return Math.max(1, Math.ceil(targetDurationSec / 15))
+}
+
 export function planSceneDurations(targetDurationSec: number, sceneCount: number) {
   const base = Math.floor(targetDurationSec / sceneCount)
   const remainder = targetDurationSec % sceneCount
@@ -235,11 +239,16 @@ export function buildStoryboardScenes(input: {
   script: string
   targetDurationSec: VideoDurationPreset
   maxSceneDurationSec?: number
+  visualKeyframeCount?: number
   aspectRatio: string
   existingScenes?: SceneReviewMetadataCarrier[]
   reviewRequirements?: SceneReviewRequirements
 }): Array<PlannedStoryboardScene & SceneReviewMetadata> {
-  const sceneCount = resolveSceneCountForDurationWithLimit(input.targetDurationSec, input.maxSceneDurationSec ?? 8)
+  const requestedKeyframeCount = input.visualKeyframeCount
+  const sceneCount =
+    typeof requestedKeyframeCount === "number" && Number.isFinite(requestedKeyframeCount)
+      ? Math.max(1, Math.floor(requestedKeyframeCount))
+      : resolveSceneCountForDurationWithLimit(input.targetDurationSec, input.maxSceneDurationSec ?? 8)
   const durations = planSceneDurations(input.targetDurationSec, sceneCount)
   const units = splitScriptIntoUnits(input.script)
   const buckets = distributeUnits(units, sceneCount)

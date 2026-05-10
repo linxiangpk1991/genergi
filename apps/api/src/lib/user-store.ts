@@ -1,5 +1,5 @@
 import { pbkdf2Sync, randomBytes, timingSafeEqual } from "node:crypto"
-import type { PublicUser, StoredUser, UserStatus } from "@genergi/shared"
+import type { PublicUser, StoredUser, UserPurpose, UserStatus } from "@genergi/shared"
 import { readUserRecords, replaceUserRecords } from "@genergi/shared"
 
 const PASSWORD_ALGORITHM = "pbkdf2-sha512"
@@ -95,13 +95,25 @@ function verifyPasswordHash(password: string, passwordHash: string) {
 }
 
 export function toPublicUser(user: StoredUser, source: "file" | "env"): PublicUser {
+  const expired = isStoredUserExpired(user)
   return {
     id: user.id,
     username: user.username,
     displayName: user.displayName,
-    status: user.status,
+    status: user.status === "active" && expired ? "disabled" : user.status,
+    purpose: user.purpose ?? "operator",
+    expiresAt: user.expiresAt ?? null,
     source,
   }
+}
+
+function isStoredUserExpired(user: Pick<StoredUser, "expiresAt">) {
+  if (!user.expiresAt) {
+    return false
+  }
+
+  const expiresAt = Date.parse(user.expiresAt)
+  return Number.isFinite(expiresAt) && expiresAt <= Date.now()
 }
 
 function createStoredUserId(username: string) {
@@ -181,6 +193,8 @@ export async function createStoredUser(input: {
   password: string
   displayName?: string
   status?: UserStatus
+  purpose?: UserPurpose
+  expiresAt?: string | null
 }) {
   const users = await listStoredUsers()
   const username = normalizeUsername(input.username)
@@ -196,6 +210,8 @@ export async function createStoredUser(input: {
     displayName: normalizeDisplayName(input.displayName, username),
     passwordHash: buildPasswordHash(input.password),
     status: input.status ?? "active",
+    purpose: input.purpose ?? "operator",
+    expiresAt: input.expiresAt ?? null,
     createdAt: timestamp,
     updatedAt: timestamp,
     lastLoginAt: null,
@@ -278,7 +294,7 @@ export async function verifyStoredUserPassword(username: string, password: strin
     return null
   }
 
-  if (user.status !== "active") {
+  if (user.status !== "active" || isStoredUserExpired(user)) {
     return { reason: "USER_DISABLED" as const, user: toPublicUser(user, "file") }
   }
 
@@ -299,7 +315,7 @@ export async function resolveLoginCredentials(username: string, password: string
   const normalizedUsername = normalizeUsername(username)
   const storedUser = await findStoredUserByUsername(normalizedUsername)
   if (storedUser) {
-    if (storedUser.status !== "active") {
+    if (storedUser.status !== "active" || isStoredUserExpired(storedUser)) {
       return { ok: false, reason: "USER_DISABLED" }
     }
 

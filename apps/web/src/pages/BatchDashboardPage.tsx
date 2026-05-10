@@ -489,7 +489,7 @@ export function BatchDashboardPage() {
     const redisStatus = runtime?.redis.status ?? "degraded"
     const isDegraded = workerStatus !== "healthy" || redisStatus !== "healthy" || metrics.blockedCount > 0
     const recommendation = isDegraded
-      ? "先处理卡住和失败的任务，再追加新任务；不要重复提交同一条原始文案。"
+      ? "先处理卡住和失败的任务，再追加新任务；不要重复提交同一条视频内容。"
       : metrics.queuedCount > metrics.runningCount + 2
         ? "排队数偏高，先暂停追加大批量任务，等生成服务消化。"
         : "容量可接受，可以继续观察排队任务是否开始生成。"
@@ -606,7 +606,7 @@ export function BatchDashboardPage() {
                       {isFocused ? <span className="pill pill--sm pill--accent">当前定位</span> : null}
                     </div>
                     <span>
-                      {task.targetDurationSec}s · {task.planning?.generationRouteLabel ?? "待预判"} · {task.planning?.generationPreferenceLabel ?? "待接入"} · {getAudioStrategyLabel(task.audioStrategy)}
+                      {task.targetDurationSec}s · 关键画面 {task.keyframeCount ?? Math.max(1, Math.ceil(task.targetDurationSec / 15))} 张 · {task.keyframeGenerationMode === "single" ? "单张" : "批量"} · {task.planning?.generationRouteLabel ?? "等待同步"} · {task.planning?.generationPreferenceLabel ?? "等待同步"} · {getAudioStrategyLabel(task.audioStrategy)}
                       {task.executionMode === "review_required" && task.blueprintStatus === "ready_for_review"
                         ? ` · 待审方案(v${task.blueprintVersion})`
                         : task.executionMode === "review_required" && task.blueprintStatus === "approved"
@@ -735,7 +735,7 @@ export function BatchDashboardPage() {
             <h3>内容结构分布</h3>
             <div className="task-list compact-list">
               <div className="task-item"><strong>多段成片</strong><span>{tasks.filter((task) => task.generationRoute === "multi_scene").length} 条任务</span></div>
-              <div className="task-item"><strong>忠于原始文案</strong><span>{tasks.filter((task) => task.generationMode === "user_locked").length} 条任务</span></div>
+              <div className="task-item"><strong>忠于视频内容</strong><span>{tasks.filter((task) => task.generationMode === "user_locked").length} 条任务</span></div>
               <div className="task-item"><strong>系统整理文案</strong><span>{metrics.legacyEnhancedCount} 条任务</span></div>
             </div>
           </section>

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react"
-import { Link, useLocation } from "react-router-dom"
+import { Link } from "react-router-dom"
 import {
   api,
   MODEL_CONTROL_SLOT_LABELS,
@@ -10,6 +10,7 @@ import {
   type ProviderRegistryRecord,
 } from "../api"
 import { formatProviderType, getModelCallProfile } from "../lib/model-control-display"
+import { ModelControlNav } from "../features/model-control/toolkit"
 
 const ACTIVE_TASK_CREATION_MODE: ModelControlModeId = "high_quality"
 
@@ -30,36 +31,23 @@ function getStatusClass(status: string) {
   return `status-badge status-badge--${status}`
 }
 
-function ModelControlNav() {
-  const location = useLocation()
-
-  const navItems = [
-    { to: "/model-control-center", label: "总览" },
-    { to: "/model-control-center/providers", label: "接入方管理" },
-    { to: "/model-control-center/registry", label: "模型列表" },
-    { to: "/model-control-center/defaults", label: "默认模型" },
-  ]
-
-  return (
-    <div className="model-control-nav">
-      {navItems.map((item) => {
-        const isActive =
-          item.to === "/model-control-center"
-            ? location.pathname === item.to
-            : location.pathname.startsWith(item.to)
-
-        return (
-          <Link
-            key={item.to}
-            className={isActive ? "model-control-nav__item model-control-nav__item--active" : "model-control-nav__item"}
-            to={item.to}
-          >
-            {item.label}
-          </Link>
-        )
-      })}
-    </div>
-  )
+function getLifecycleStatusLabel(status: string) {
+  switch (status) {
+    case "draft":
+      return "未检查"
+    case "validating":
+      return "检查中"
+    case "available":
+      return "可用"
+    case "invalid":
+      return "异常"
+    case "disabled":
+      return "已停用"
+    case "deprecated":
+      return "已弃用"
+    default:
+      return status
+  }
 }
 
 function getDefaultSelection(
@@ -197,7 +185,7 @@ export function ModelControlCenterPage() {
           <div className="stat-card">
             <span>可用模型</span>
             <strong>{modelSummary.available}</strong>
-            <small>仅 `available` 才能进入默认值选择池</small>
+            <small>检查通过后才会进入默认模型选择列表</small>
           </div>
           <div className="stat-card">
             <span>异常 / 已弃用</span>
@@ -312,7 +300,7 @@ export function ModelControlCenterPage() {
                   {formatProviderType(provider.providerType)} · {provider.endpointUrl || "未填接口地址"}
                 </span>
                 <span>
-                  状态 {provider.status} · 最近校验 {formatDateTime(provider.lastValidatedAt)}
+                  状态 {getLifecycleStatusLabel(provider.status)} · 最近校验 {formatDateTime(provider.lastValidatedAt)}
                 </span>
               </div>
             ))}
@@ -335,7 +323,7 @@ export function ModelControlCenterPage() {
                   调用方式：{getModelCallProfile(model).label} · {getModelCallProfile(model).endpoint}
                 </span>
                 <span>
-                  状态 {model.lifecycleStatus} · 最近校验 {formatDateTime(model.lastValidatedAt)}
+                  状态 {getLifecycleStatusLabel(model.lifecycleStatus)} · 最近校验 {formatDateTime(model.lastValidatedAt)}
                 </span>
               </div>
             ))}

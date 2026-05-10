@@ -10,12 +10,29 @@ import {
   getAudioStrategyLabel,
   getBlueprintStatusLabel,
   getExecutionModeLabel,
+  normalizeOperatorCopy,
   type AssetRecord,
+  type QualityIssueCategory,
   type TaskBlueprintRecord,
   type TaskBlueprintReviewRecord,
   type TaskDetail,
   type TaskSummary,
 } from "../api"
+
+const QUALITY_REASON_OPTIONS: Array<{
+  issueCategory: QualityIssueCategory
+  slotType: "textModel" | "imageModel" | "videoModel" | "ttsProvider" | null
+  label: string
+}> = [
+  { issueCategory: "script_off_track", slotType: "textModel", label: "文案跑偏" },
+  { issueCategory: "image_inconsistent", slotType: "imageModel", label: "画面不一致" },
+  { issueCategory: "character_unstable", slotType: "imageModel", label: "人物不稳定" },
+  { issueCategory: "low_image_quality", slotType: "imageModel", label: "画质不够" },
+  { issueCategory: "poor_motion", slotType: "videoModel", label: "动作不自然" },
+  { issueCategory: "subtitle_issue", slotType: "ttsProvider", label: "字幕问题" },
+  { issueCategory: "voice_issue", slotType: "ttsProvider", label: "配音问题" },
+  { issueCategory: "other", slotType: null, label: "其他" },
+]
 
 function formatRenderSpec(detail: TaskDetail | null, blueprint: TaskBlueprintRecord | null) {
   const renderSpec = blueprint?.blueprint.renderSpec ?? detail?.taskRunConfig.renderSpecJson ?? null
@@ -59,6 +76,14 @@ function findAsset(assets: AssetRecord[], assetType: AssetRecord["assetType"]) {
   return assets.find((asset) => asset.assetType === assetType) ?? null
 }
 
+function isTaskBlueprintNotFoundError(error: unknown) {
+  return error instanceof Error && error.message === "TASK_BLUEPRINT_NOT_FOUND"
+}
+
+function getReviewDecisionLabel(decision: TaskBlueprintReviewRecord["decision"]) {
+  return decision === "approved" ? "已通过" : "已驳回"
+}
+
 export function TaskReviewPage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const routeTaskId = searchParams.get("taskId") ?? ""
@@ -73,6 +98,9 @@ export function TaskReviewPage() {
   const [submitting, setSubmitting] = useState(false)
   const [updatingAudioStrategy, setUpdatingAudioStrategy] = useState(false)
   const [error, setError] = useState("")
+  const [failedKeyframeImages, setFailedKeyframeImages] = useState<string[]>([])
+  const [selectedQualityReasons, setSelectedQualityReasons] = useState<QualityIssueCategory[]>([])
+  const [qualityNote, setQualityNote] = useState("")
 
   const selectedTaskId = detail?.taskId ?? routeTaskId
   const selectedTaskOption = useMemo(
@@ -169,18 +197,30 @@ export function TaskReviewPage() {
           syncTaskRoute(selectedTaskId, true)
         }
 
-        const [detailResult, blueprintResult, assetsResult] = await Promise.all([
+        const [detailResult, assetsResult] = await Promise.all([
           api.getTaskDetail(selectedTaskId),
-          api.getTaskCurrentBlueprint(selectedTaskId),
           api.getTaskAssets(selectedTaskId),
         ])
+        let blueprintResult: Awaited<ReturnType<typeof api.getTaskCurrentBlueprint>> | null = null
+        if (detailResult.detail.blueprintStatus !== "pending_generation") {
+          try {
+            blueprintResult = await api.getTaskCurrentBlueprint(selectedTaskId)
+          } catch (blueprintError) {
+            if (!isTaskBlueprintNotFoundError(blueprintError)) {
+              throw blueprintError
+            }
+          }
+        }
         if (!active) {
           return
         }
 
         setDetail(detailResult.detail)
-        setBlueprint(blueprintResult.blueprint)
-        setReview(blueprintResult.review)
+        setBlueprint(blueprintResult?.blueprint ?? null)
+        setReview(blueprintResult?.review ?? null)
+        setFailedKeyframeImages([])
+        setSelectedQualityReasons([])
+        setQualityNote("")
         const sourceAsset = findAsset(assetsResult.assets, "source_script")
         if (sourceAsset) {
           try {
@@ -247,6 +287,9 @@ export function TaskReviewPage() {
 
   const isApproved = blueprint?.status === "approved"
   const isRejected = blueprint?.status === "rejected"
+  const canSubmitReview = blueprint?.status === "ready_for_review"
+  const canResumeApprovedBlueprint = blueprint?.status === "approved"
+  const hasRejectReason = selectedQualityReasons.length > 0
   const canEditAudioStrategy =
     !!detail &&
     !updatingAudioStrategy &&
@@ -254,6 +297,17 @@ export function TaskReviewPage() {
     (detail.blueprintStatus === "ready_for_review" ||
       detail.blueprintStatus === "approved" ||
       detail.blueprintStatus === "rejected")
+  const visibleKeyframeCount = Math.max(
+    blueprint?.blueprint.visualPlan?.keyframeCount ?? 0,
+    blueprint?.blueprint.sceneContracts.length ?? 0,
+    detail?.taskRunConfig.keyframeCount ?? 0,
+  )
+  const visibleKeyframeMode = blueprint?.blueprint.visualPlan?.generationMode ?? detail?.taskRunConfig.keyframeGenerationMode
+  const blueprintPendingNotice = detail && !blueprint
+    ? detail.blueprintStatus === "pending_generation"
+      ? "当前任务还在准备生成方案，生成完成后会自动进入待审核列表。"
+      : "当前任务还没有可审核的生成方案。"
+    : ""
 
   function applyAudioStrategy(taskId: string, strategy: TaskDetail["taskRunConfig"]["audioStrategy"]) {
     setDetail((current) =>
@@ -279,6 +333,14 @@ export function TaskReviewPage() {
     )
   }
 
+  function toggleQualityReason(issueCategory: QualityIssueCategory) {
+    setSelectedQualityReasons((current) =>
+      current.includes(issueCategory)
+        ? current.filter((item) => item !== issueCategory)
+        : [...current, issueCategory],
+    )
+  }
+
   async function submitReview(decision: "approved" | "rejected") {
     if (!detail || !blueprint) {
       return
@@ -288,11 +350,27 @@ export function TaskReviewPage() {
       return
     }
 
+    if (decision === "rejected" && !hasRejectReason) {
+      setError("请先选择一个驳回原因。这样后续才知道该重做文案、画面、视频还是配音。")
+      return
+    }
+
     setSubmitting(true)
     setError("")
     try {
+      const qualityReasons = decision === "rejected"
+        ? selectedQualityReasons.map((issueCategory) => {
+            const option = QUALITY_REASON_OPTIONS.find((item) => item.issueCategory === issueCategory)
+            return {
+              issueCategory,
+              slotType: option?.slotType ?? null,
+              note: qualityNote.trim() || undefined,
+            }
+          })
+        : undefined
       const result = await api.reviewTaskBlueprint(detail.taskId, blueprint.version, {
         decision,
+        qualityReasons,
       })
       setBlueprint(result.blueprint)
       setReview(result.review)
@@ -302,6 +380,10 @@ export function TaskReviewPage() {
     } finally {
       setSubmitting(false)
     }
+  }
+
+  function markKeyframeImageFailed(sceneId: string) {
+    setFailedKeyframeImages((current) => (current.includes(sceneId) ? current : [...current, sceneId]))
   }
 
   async function resumeExecution() {
@@ -317,6 +399,28 @@ export function TaskReviewPage() {
       applyBlueprintStatus(detail.taskId, result.blueprint.status)
     } catch (resumeError) {
       setError(resumeError instanceof Error ? resumeError.message : "继续生成失败")
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  async function retryKeyframe(sceneId: string) {
+    if (!detail) {
+      return
+    }
+
+    setSubmitting(true)
+    setError("")
+    try {
+      const result = await api.retryTask(detail.taskId, {
+        scope: "keyframe",
+        sceneId,
+        reason: "审核时重做单张关键画面",
+      })
+      setDetail(result.detail)
+      setTasks((current) => current.map((task) => (task.id === result.task.id ? result.task : task)))
+    } catch (retryError) {
+      setError(retryError instanceof Error ? retryError.message : "重做关键画面失败")
     } finally {
       setSubmitting(false)
     }
@@ -348,8 +452,8 @@ export function TaskReviewPage() {
       <header className="topbar">
         <div>
           <div className="eyebrow">任务审核</div>
-          <h1>整任务审核工作台</h1>
-          <p>先检查整条视频的生成方案、关键画面和画幅，再决定是否继续生成正片。</p>
+          <h1>任务审核台</h1>
+          <p>先把脚本、关键画面和尺寸看一遍，确认方向对了再继续生成正片。</p>
         </div>
         <div className="topbar-actions">
           {blueprint ? <span className="pill">{`方案 v${blueprint.version}`}</span> : null}
@@ -358,6 +462,7 @@ export function TaskReviewPage() {
       </header>
 
       {error ? <div className="alert">{error}</div> : null}
+      {blueprintPendingNotice ? <div className="alert alert--warning">{blueprintPendingNotice}</div> : null}
 
       <div className="workspace-grid">
         <section className="card card--main">
@@ -415,30 +520,37 @@ export function TaskReviewPage() {
           <div className="section-header">
             <h2>生成方案总览</h2>
             <div className="section-actions">
-              <button
-                className="primary-button"
-                disabled={!blueprint || submitting || isApproved}
-                onClick={() => void submitReview("approved")}
-                type="button"
-              >
-                {isApproved ? "已审核通过" : "审核通过"}
-              </button>
-              <button
-                className="secondary-button"
-                disabled={!blueprint || submitting || isRejected}
-                onClick={() => void submitReview("rejected")}
-                type="button"
-              >
-                {isRejected ? "已驳回当前方案" : "驳回当前方案"}
-              </button>
-              <button
-                className="ghost-button"
-                disabled={blueprint?.status !== "approved" || submitting}
-                onClick={() => void resumeExecution()}
-                type="button"
-              >
-                继续生成正片
-              </button>
+              {canSubmitReview ? (
+                <>
+                  <button
+                    className="primary-button"
+                    disabled={!blueprint || submitting}
+                    onClick={() => void submitReview("approved")}
+                    type="button"
+                  >
+                    审核通过
+                  </button>
+                  <button
+                    className="secondary-button"
+                    disabled={!blueprint || submitting || !hasRejectReason}
+                    onClick={() => void submitReview("rejected")}
+                    type="button"
+                  >
+                    驳回并重做方案
+                  </button>
+                </>
+              ) : canResumeApprovedBlueprint ? (
+                <button
+                  className="primary-button"
+                  disabled={submitting}
+                  onClick={() => void resumeExecution()}
+                  type="button"
+                >
+                  继续生成正片
+                </button>
+              ) : (
+                <span className="pill pill--sm">{isRejected ? "已驳回，等待重做" : "当前没有待审核动作"}</span>
+              )}
             </div>
           </div>
 
@@ -449,14 +561,14 @@ export function TaskReviewPage() {
               <span>{selectedTask?.projectId ?? detail?.projectId ?? "--"}</span>
             </div>
             <div className="planning-chip">
-              <span className="planning-chip__label">终端规格</span>
+              <span className="planning-chip__label">画面尺寸</span>
               <strong>{formatRenderSpec(detail, blueprint)}</strong>
               <span>{blueprint?.blueprint.renderSpec.aspectRatio ?? detail?.taskRunConfig.renderSpecJson.aspectRatio ?? "--"}</span>
             </div>
             <div className="planning-chip">
-              <span className="planning-chip__label">生成流程</span>
+              <span className="planning-chip__label">生成方式</span>
               <strong>{getExecutionModeLabel(blueprint?.blueprint.executionMode ?? detail?.taskRunConfig.executionMode)}</strong>
-              <span>{review ? `最近审核：${review.decision}` : "还没有审核记录"}</span>
+              <span>{review ? `最近审核：${getReviewDecisionLabel(review.decision)}` : "还没有审核记录"}</span>
             </div>
             <div className="planning-chip">
               <span className="planning-chip__label">音频策略</span>
@@ -492,11 +604,11 @@ export function TaskReviewPage() {
             </div>
           </div>
 
-          <ModelUsageSummary source={detail?.taskRunConfig} />
+          <ModelUsageSummary source={detail?.taskRunConfig} trace={detail?.modelTrace} />
 
           <section className="planning-summary-card">
-            <strong>原始文案</strong>
-            <span>{sourceScript || "当前没有留档的原始文案。"}</span>
+            <strong>视频内容</strong>
+            <span>{sourceScript || "当前没有留档的视频内容。"}</span>
           </section>
 
           <section className="planning-summary-card">
@@ -510,58 +622,157 @@ export function TaskReviewPage() {
           </section>
 
           <section className="planning-summary-card">
+            <strong>画面参考（可选）与关键画面</strong>
+            <span>
+              {blueprint?.blueprint.visualPlan?.sourceBrief ??
+                detail?.taskRunConfig.visualSeedInput ??
+                "画面参考不是必填。未填写时，系统会直接根据视频内容生成关键画面。"}
+            </span>
+            <span>
+              {`关键画面：${visibleKeyframeCount} 张 · ${visibleKeyframeMode === "single" ? "单张生成" : "批量生成"}`}
+            </span>
+            {blueprint?.blueprint.visualPlan ? (
+              <span>
+                主角：{blueprint.blueprint.visualPlan.subjectProfile} · 场景：{blueprint.blueprint.visualPlan.setting} · 情绪：{blueprint.blueprint.visualPlan.mood}
+              </span>
+            ) : null}
+          </section>
+
+          <section className="planning-summary-card">
             <strong>一致性要求</strong>
             <span>
-              主体：{blueprint?.blueprint.subjectProfile ?? "--"} ·
-              物料：{blueprint?.blueprint.productProfile ?? "--"}
+              主体：{normalizeOperatorCopy(blueprint?.blueprint.subjectProfile ?? "--")} ·
+              物料：{normalizeOperatorCopy(blueprint?.blueprint.productProfile ?? "--")}
             </span>
             <span>
-              背景约束：{blueprint?.blueprint.backgroundConstraints?.join(" / ") || "无"}
+              背景约束：{blueprint?.blueprint.backgroundConstraints?.map(normalizeOperatorCopy).join(" / ") || "无"}
             </span>
             <span>
-              禁止项：{blueprint?.blueprint.negativeConstraints?.join(" / ") || "无"}
+              禁止项：{blueprint?.blueprint.negativeConstraints?.map(normalizeOperatorCopy).join(" / ") || "无"}
             </span>
+          </section>
+
+          <section className="planning-summary-card quality-reason-panel">
+            <strong>驳回原因</strong>
+            <span>{canSubmitReview ? "如果要驳回，请先选择最贴近的问题；备注可以不写。" : "这里会记录驳回时选择的问题，方便后续判断模型质量。"}</span>
+            <div className="quality-reason-grid">
+              {QUALITY_REASON_OPTIONS.map((option) => (
+                <label key={option.issueCategory} className="quality-reason-option">
+                  <input
+                    checked={selectedQualityReasons.includes(option.issueCategory)}
+                    disabled={!canSubmitReview}
+                    onChange={() => toggleQualityReason(option.issueCategory)}
+                    type="checkbox"
+                  />
+                  <span>{option.label}</span>
+                </label>
+              ))}
+            </div>
+            <label className="field-label" htmlFor="quality-note">可选备注</label>
+            <textarea
+              className="input quality-reason-note"
+              disabled={!canSubmitReview}
+              id="quality-note"
+              maxLength={500}
+              onChange={(event) => setQualityNote(event.target.value)}
+              placeholder="一句话说明哪里不对，方便后续排查。"
+              value={qualityNote}
+            />
           </section>
 
           <div className="task-list">
             {blueprint?.blueprint.sceneContracts.map((scene) => (
-              <section key={scene.id} className="form-section">
+              <section key={scene.id} className="keyframe-review-card">
                 <div className="section-header section-header--stack">
                   <div>
-                    <h3>{`第 ${scene.index + 1} 段`}</h3>
+                    <h3>{`第 ${scene.index + 1} 张关键画面`}</h3>
                     <span className="muted">{scene.sceneGoal}</span>
                   </div>
-                  <span className="pill pill--sm">{`${scene.durationSec}s`}</span>
+                  <span className="pill pill--sm">{getBlueprintStatusLabel(blueprint.status)}</span>
+                </div>
+                <div className="keyframe-review-card__body">
+                  <div className="keyframe-review-card__media">
+                    <img
+                      alt={`第 ${scene.index + 1} 张关键画面预览`}
+                      className="visual-preview__image"
+                      onError={() => markKeyframeImageFailed(scene.id)}
+                      src={buildKeyframePreviewUrl(detail?.taskId ?? blueprint?.taskId ?? "", scene.id)}
+                    />
+                    {failedKeyframeImages.includes(scene.id) ? (
+                      <div className="visual-preview__error" role="status">
+                        这张关键画面暂时打不开，请到素材页确认文件是否生成成功。
+                      </div>
+                    ) : null}
+                  </div>
+                  <div className="keyframe-review-card__details">
+                    <div className="review-block">
+                      <label className="field-label">这张图表达什么</label>
+                      <div className="review-content">{scene.startFrameDescription}</div>
+                    </div>
+                    <div className="review-block">
+                      <label className="field-label">使用模型</label>
+                      <div className="review-content">{detail?.taskRunConfig.imageModel?.label ?? detail?.taskRunConfig.imageModel?.id ?? "未记录图片模型"}</div>
+                    </div>
+                    <div className="review-block">
+                      <label className="field-label">生成依据 / 英文提示词</label>
+                      <div className="review-content">{scene.imagePrompt}</div>
+                    </div>
+                    <div className="review-block">
+                      <label className="field-label">状态</label>
+                      <div className="review-content">
+                        {failedKeyframeImages.includes(scene.id)
+                          ? "预览图加载失败，建议先去素材页确认文件。"
+                          : `画面记录已生成，预计视频片段 ${scene.durationSec}s。`}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div className="review-block">
+                  <label className="field-label">接下来这段视频怎么动</label>
+                  <div className="review-content">{scene.videoPrompt}</div>
                 </div>
                 <div className="review-block">
                   <label className="field-label">旁白</label>
                   <div className="review-content">{scene.voiceoverScript}</div>
                 </div>
                 <div className="review-block">
-                  <label className="field-label">开场画面描述</label>
-                  <div className="review-content">{scene.startFrameDescription}</div>
-                </div>
-                <div className="review-block">
-                  <label className="field-label">关键画面预览</label>
-                  <img
-                    alt={`关键画面 ${scene.id}`}
-                    className="visual-preview__image"
-                    src={buildKeyframePreviewUrl(detail?.taskId ?? blueprint?.taskId ?? "", scene.id)}
-                  />
-                </div>
-                <div className="review-block">
-                  <label className="field-label">图片生成说明</label>
-                  <div className="review-content">{scene.imagePrompt}</div>
-                </div>
-                <div className="review-block">
-                  <label className="field-label">视频生成说明</label>
-                  <div className="review-content">{scene.videoPrompt}</div>
-                </div>
-                <div className="review-block">
-                  <label className="field-label">连续性要求</label>
+                  <label className="field-label">需要保持一致的地方</label>
                   <div className="review-content">
                     {scene.continuityConstraints.length ? scene.continuityConstraints.join(" / ") : "当前没有额外连续性要求"}
                   </div>
+                </div>
+                <div className="keyframe-review-card__actions">
+                  <button
+                    className="ghost-button"
+                    disabled={!detail || submitting || !canSubmitReview || !["waiting_review", "failed"].includes(selectedTask?.status ?? "")}
+                    onClick={() => void retryKeyframe(scene.id)}
+                    title={selectedTask?.status === "waiting_review" ? "只重做这一张关键画面" : "只有待审核或失败任务可以局部重做"}
+                    type="button"
+                  >
+                    重做这张画面
+                  </button>
+                  {canSubmitReview ? (
+                    <>
+                      <button
+                        className="primary-button"
+                        disabled={!blueprint || submitting}
+                        onClick={() => void submitReview("approved")}
+                        type="button"
+                      >
+                        通过这个方案
+                      </button>
+                      <button
+                        className="secondary-button"
+                        disabled={!blueprint || submitting || !hasRejectReason}
+                        onClick={() => void submitReview("rejected")}
+                        type="button"
+                      >
+                        重做这个方案
+                      </button>
+                    </>
+                  ) : (
+                    <span className="pill pill--sm">{isApproved ? "方案已通过" : isRejected ? "方案已驳回" : "等待方案"}</span>
+                  )}
                 </div>
               </section>
             )) ?? <div className="empty-inline">当前还没有分段生成方案。</div>}
@@ -582,10 +793,10 @@ export function TaskReviewPage() {
               </div>
               <div className="task-item">
                 <strong>最新审核</strong>
-                <span>{review ? `${review.decision} · ${review.decidedAt}` : "暂无"}</span>
+                <span>{review ? `${getReviewDecisionLabel(review.decision)} · ${review.decidedAt}` : "暂无"}</span>
               </div>
               <div className="task-item">
-                <strong>原始文案</strong>
+                <strong>视频内容</strong>
                 <span>{sourceScript ? "已加载" : "暂无"}</span>
               </div>
               <div className="task-item">

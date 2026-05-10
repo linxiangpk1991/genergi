@@ -20,6 +20,8 @@ function buildSeedProject(): ProjectRecord {
     brandDirection: "英语短视频内容生产",
     defaultChannelIds: ["tiktok", "reels", "shorts"],
     reusableStyleConstraints: ["保持主体与产品表达一致", "优先短视频传播节奏"],
+    defaultVisualSeedInput: null,
+    defaultKeyframeGenerationMode: "batch",
     createdAt: timestamp,
     updatedAt: timestamp,
   }
@@ -47,6 +49,8 @@ export async function createProject(input: {
   brandDirection?: string
   defaultChannelIds?: string[]
   reusableStyleConstraints?: string[]
+  defaultVisualSeedInput?: string | null
+  defaultKeyframeGenerationMode?: "batch" | "single"
 }): Promise<ProjectRecord> {
   const projects = await listProjects()
   const timestamp = now()
@@ -57,6 +61,8 @@ export async function createProject(input: {
     brandDirection: input.brandDirection?.trim() || null,
     defaultChannelIds: input.defaultChannelIds ?? [],
     reusableStyleConstraints: input.reusableStyleConstraints ?? [],
+    defaultVisualSeedInput: input.defaultVisualSeedInput?.trim() || null,
+    defaultKeyframeGenerationMode: input.defaultKeyframeGenerationMode ?? "batch",
     createdAt: timestamp,
     updatedAt: timestamp,
   }

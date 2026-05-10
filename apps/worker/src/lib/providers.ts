@@ -2,6 +2,7 @@ import { mkdirSync, writeFileSync } from "node:fs"
 import fs from "node:fs/promises"
 import path from "node:path"
 import { createDecipheriv, createHash } from "node:crypto"
+import { spawn } from "node:child_process"
 
 import axios from "axios"
 
@@ -55,6 +56,33 @@ type StructuredPlanningAttempt = {
   model: string | null
   baseUrl: string | null
   wireApi?: "messages" | "chat_completions" | "responses" | null
+  textModelFallbackEvents?: TextModelFallbackEvent[]
+  planningError?: {
+    trigger: string | null
+    message: string
+    provider: string | null
+    model: string | null
+  } | null
+}
+
+type TextPlanningRuntime = {
+  provider: string
+  apiKey: string
+  baseUrl: string
+  model: string
+  providerKey?: string
+  modelKey?: string
+  capabilityJson: Record<string, unknown>
+  fallbackTriggers?: string[]
+  source: "task_snapshot" | "environment"
+}
+
+type TextModelFallbackEvent = {
+  trigger: string
+  fromProvider: string | null
+  fromModel: string | null
+  toProvider: string
+  toModel: string
 }
 
 function ensureTaskDir(taskId: string) {
@@ -419,6 +447,312 @@ export function buildKeyframePrompt(scene: StoryboardScene, _aspectRatio: string
   return scene.imagePrompt.trim() || scene.videoPrompt.trim() || scene.title.trim()
 }
 
+export function buildBatchKeyframePrompt(input: {
+  scenes: StoryboardScene[]
+  aspectRatio: string
+  visualSeedInput?: string | null
+}) {
+  const sceneLines = input.scenes.map((scene) => {
+    const prompt = buildKeyframePrompt(scene, input.aspectRatio)
+    return `${scene.index + 1}. ${scene.title}: ${prompt}`
+  })
+  const visualSeed = input.visualSeedInput?.trim()
+
+  return [
+    `Return exactly ${input.scenes.length} distinct storyboard keyframes for one ${input.aspectRatio} vertical short video.`,
+    "All images must feel like one coherent set: same primary character, same visual language, stable lighting logic, and no visible text, captions, UI, or watermark.",
+    visualSeed ? `Shared visual brief: ${visualSeed}` : "Shared visual brief: infer a consistent character, setting, style, mood, and negative prompt from the scene list.",
+    "Keyframes in order:",
+    ...sceneLines,
+  ].join("\n")
+}
+
+type CompositeGridLayout = {
+  columns: number
+  rows: number
+  label: string
+  size: string
+  panelCount: number
+  panelWidth: number
+  panelHeight: number
+  note: string
+}
+
+function parseCompositeLayout(value?: string | null) {
+  const match = `${value ?? ""}`.trim().toLowerCase().match(/^(\d+)x(\d+)$/)
+  if (!match) {
+    return null
+  }
+  const columns = Number(match[1])
+  const rows = Number(match[2])
+  if (!Number.isFinite(columns) || !Number.isFinite(rows) || columns <= 0 || rows <= 0) {
+    return null
+  }
+  return { columns: Math.floor(columns), rows: Math.floor(rows) }
+}
+
+function parseCompositeSize(value?: string | null) {
+  const match = `${value ?? ""}`.trim().toLowerCase().match(/^(\d+)x(\d+)$/)
+  if (!match) {
+    return null
+  }
+  const width = Number(match[1])
+  const height = Number(match[2])
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+    return null
+  }
+  return { width: Math.floor(width), height: Math.floor(height), label: `${Math.floor(width)}x${Math.floor(height)}` }
+}
+
+export function resolveCompositeGridLayout(frameCount: number, aspectRatio = "9:16", overrides: {
+  layout?: string | null
+  size?: string | null
+} = {}): CompositeGridLayout {
+  const requestedCount = Math.max(1, Math.floor(frameCount))
+  const explicitLayout = parseCompositeLayout(overrides.layout)
+  const explicitSize = parseCompositeSize(overrides.size)
+  const vertical = aspectRatio.includes("9:16") || aspectRatio.includes("vertical")
+
+  let columns: number
+  let rows: number
+  let size = explicitSize?.label
+  let note = "auto"
+
+  if (explicitLayout) {
+    columns = explicitLayout.columns
+    rows = explicitLayout.rows
+    note = "configured"
+  } else if (requestedCount === 1) {
+    columns = 1
+    rows = 1
+    size = size ?? "1024x1792"
+    note = "single 15s keyframe, no grid needed"
+  } else if (requestedCount === 2) {
+    columns = 2
+    rows = 1
+    size = size ?? "2048x2048"
+    note = "two vertical panels from a 2K square grid"
+  } else if (requestedCount === 3 && vertical) {
+    columns = 3
+    rows = 1
+    size = size ?? "3072x2048"
+    note = "45s/3-keyframe layout: three side-by-side panels, no wasted fourth slot"
+  } else if (requestedCount <= 4) {
+    columns = 2
+    rows = 2
+    size = size ?? "2048x3072"
+    note = "four portrait panels from a 2K portrait grid"
+  } else if (requestedCount <= 6) {
+    columns = 3
+    rows = 2
+    size = size ?? "3072x2048"
+    note = "six-panel balanced grid"
+  } else {
+    columns = 3
+    rows = 3
+    size = size ?? "2048x2048"
+    note = "nine-panel fallback; panel resolution is lower than four-panel mode"
+  }
+
+  const parsedSize = explicitSize ?? parseCompositeSize(size) ?? { width: 2048, height: 2048, label: "2048x2048" }
+  const panelCount = columns * rows
+  return {
+    columns,
+    rows,
+    label: `${columns}x${rows}`,
+    size: parsedSize.label,
+    panelCount,
+    panelWidth: Math.floor(parsedSize.width / columns),
+    panelHeight: Math.floor(parsedSize.height / rows),
+    note,
+  }
+}
+
+export function buildCompositeGridKeyframePrompt(input: {
+  scenes: StoryboardScene[]
+  aspectRatio: string
+  visualSeedInput?: string | null
+  layout: CompositeGridLayout
+}) {
+  const sceneLines = input.scenes.map((scene) => {
+    const prompt = buildKeyframePrompt(scene, input.aspectRatio)
+    return `${scene.index + 1}. Panel ${scene.index + 1}: ${scene.title}: ${prompt}`
+  })
+  const visualSeed = input.visualSeedInput?.trim()
+
+  return [
+    `Create one single ${input.layout.label} composite storyboard grid containing exactly ${input.scenes.length} ordered panels for one ${input.aspectRatio} short video.`,
+    `Use a clean single ${input.layout.label} composite storyboard grid with equal-size panels, thin straight gutters, and no extra panels.`,
+    `The requested canvas is ${input.layout.size}; each panel should read as an independent keyframe after cropping.`,
+    "All panels must share the same primary character, outfit, visual language, and lighting logic.",
+    "Do not merge panels into one scene. Do not use captions, readable text, UI, logos, or watermark.",
+    visualSeed ? `Shared visual brief: ${visualSeed}` : "Shared visual brief: infer a consistent character, setting, style, mood, and negative prompt from the scene list.",
+    "Panel order is left-to-right, top-to-bottom:",
+    ...sceneLines,
+  ].join("\n")
+}
+
+type KeyframePromptSource = "executionBrief.keyframePlan" | "scene.imagePrompt"
+
+function hashShort(value: unknown) {
+  return createHash("sha256")
+    .update(typeof value === "string" ? value : JSON.stringify(value))
+    .digest("hex")
+    .slice(0, 16)
+}
+
+function resolveExecutionBriefKeyframe(detail: TaskDetail, scene: StoryboardScene) {
+  const executionBrief = detail.taskRunConfig.executionBrief
+  if (!executionBrief?.keyframePlan?.length) {
+    return null
+  }
+
+  return (
+    executionBrief.keyframePlan.find((plan) => plan.index === scene.index + 1) ??
+    executionBrief.keyframePlan.find((plan) => plan.index === scene.index) ??
+    executionBrief.keyframePlan[scene.index] ??
+    null
+  )
+}
+
+function resolveSceneKeyframePrompt(input: {
+  detail: TaskDetail
+  scene: StoryboardScene
+  aspectRatio: string
+}) {
+  const keyframe = resolveExecutionBriefKeyframe(input.detail, input.scene)
+  if (!keyframe) {
+    return {
+      prompt: buildKeyframePrompt(input.scene, input.aspectRatio),
+      promptSource: "scene.imagePrompt" as const,
+      keyframePlan: null,
+    }
+  }
+
+  return {
+    prompt: keyframe.imagePrompt,
+    promptSource: "executionBrief.keyframePlan" as const,
+    keyframePlan: keyframe,
+  }
+}
+
+function buildPromptReadyScene(scene: StoryboardScene, prompt: string, visualGoal?: string) {
+  return {
+    ...scene,
+    title: visualGoal || scene.title,
+    sceneGoal: visualGoal || scene.sceneGoal,
+    startFrameDescription: visualGoal || scene.startFrameDescription,
+    imagePrompt: prompt,
+    startFrameIntent: visualGoal || scene.startFrameIntent,
+  }
+}
+
+async function runFfmpegCrop(input: {
+  sourcePath: string
+  outputPath: string
+  x: number
+  y: number
+  width: number
+  height: number
+  signal?: AbortSignal
+}) {
+  throwIfTaskCanceled(input.signal)
+  const ffmpegPath = process.env.GENERGI_FFMPEG_PATH || "ffmpeg"
+  await new Promise<void>((resolve, reject) => {
+    const process = spawn(
+      ffmpegPath,
+      [
+        "-y",
+        "-i",
+        input.sourcePath,
+        "-vf",
+        `crop=${input.width}:${input.height}:${input.x}:${input.y}`,
+        input.outputPath,
+      ],
+      { stdio: ["ignore", "pipe", "pipe"] },
+    )
+
+    let stderr = ""
+    process.stderr.on("data", (chunk) => {
+      stderr += chunk.toString()
+    })
+    process.on("error", reject)
+    process.on("close", (code) => {
+      if (code === 0) {
+        resolve()
+        return
+      }
+      reject(new Error(`ffmpeg grid crop exited with code ${code}: ${stderr}`))
+    })
+    input.signal?.addEventListener("abort", () => {
+      process.kill("SIGTERM")
+      reject(createTaskCanceledError(input.signal))
+    }, { once: true })
+  })
+}
+
+export async function splitCompositeGridArtifact(input: {
+  artifact: {
+    bytes: Buffer
+    extension: string
+    generationId: string | null
+  }
+  scenes: StoryboardScene[]
+  layout: CompositeGridLayout
+  workDir: string
+  signal?: AbortSignal
+}) {
+  const sourceExtension = input.artifact.extension || "png"
+  const sourceId = hashShort(input.artifact.generationId ?? `${Date.now()}`)
+  const sourcePath = path.join(input.workDir, `composite-grid-master-${sourceId}.${sourceExtension}`)
+  await writeFileAtomic(sourcePath, input.artifact.bytes)
+  const sourceFileName = path.basename(sourcePath)
+
+  const panels: Array<{
+    scene: StoryboardScene
+    bytes: Buffer
+    extension: string
+    generationId: string | null
+    batchIndex: number
+    cropSourceFileName: string
+    cropPanelRect: { x: number; y: number; width: number; height: number }
+  }> = []
+
+  for (let index = 0; index < input.scenes.length; index += 1) {
+    throwIfTaskCanceled(input.signal)
+    const scene = input.scenes[index]
+    if (!scene) {
+      continue
+    }
+    const column = index % input.layout.columns
+    const row = Math.floor(index / input.layout.columns)
+    const cropPanelRect = {
+      x: column * input.layout.panelWidth,
+      y: row * input.layout.panelHeight,
+      width: input.layout.panelWidth,
+      height: input.layout.panelHeight,
+    }
+    const panelPath = path.join(input.workDir, `composite-panel-${String(index + 1).padStart(2, "0")}.png`)
+    await runFfmpegCrop({
+      sourcePath,
+      outputPath: panelPath,
+      ...cropPanelRect,
+      signal: input.signal,
+    })
+    panels.push({
+      scene,
+      bytes: await fs.readFile(panelPath),
+      extension: "png",
+      generationId: input.artifact.generationId ? `${input.artifact.generationId}:panel-${index + 1}` : null,
+      batchIndex: index,
+      cropSourceFileName: sourceFileName,
+      cropPanelRect,
+    })
+  }
+
+  return panels
+}
+
 function normalizeTransitionHint(index: number, total: number, fallback?: string) {
   if (fallback?.trim()) {
     return fallback.trim()
@@ -637,30 +971,69 @@ export function buildPlannedExecutionBlueprint(
   detail: TaskDetail,
   planned: TextPlanningOutput,
 ): PlannedExecutionBlueprint {
-  const sceneContracts = planned.scenePlan.map((scene, index, allScenes) => ({
-    id: `scene_${index + 1}`,
-    index,
-    sceneGoal: scene.scenePurpose,
-    voiceoverScript: scene.voiceoverScript,
-    startFrameDescription: scene.startFrameDescription,
-    imagePrompt: scene.imagePrompt,
-    videoPrompt: scene.videoPrompt,
-    startFrameIntent: scene.startFrameIntent,
-    endFrameIntent: scene.endFrameIntent,
-    durationSec: scene.durationSec,
-    transitionHint: normalizeTransitionHint(index, allScenes.length, scene.transitionHint),
-    continuityConstraints: scene.continuityConstraints ?? [],
-  }))
+  const bilingualUnderstandingPreview =
+    planned.bilingualUnderstandingPreview ??
+    planned.blueprint.bilingualUnderstandingPreview ??
+    detail.taskRunConfig.understandingPreview ??
+    null
+  const englishExecutionBrief =
+    planned.englishExecutionBrief ??
+    planned.blueprint.englishExecutionBrief ??
+    detail.taskRunConfig.executionBrief ??
+    null
+  const sceneContracts = planned.scenePlan.map((scene, index, allScenes) => {
+    const keyframePlan =
+      englishExecutionBrief?.keyframePlan.find((plan) => plan.index === index + 1) ??
+      englishExecutionBrief?.keyframePlan.find((plan) => plan.index === index) ??
+      englishExecutionBrief?.keyframePlan[index] ??
+      null
+    const visualGoal = keyframePlan?.visualGoal
+    return {
+      id: `scene_${index + 1}`,
+      index,
+      sceneGoal: keyframePlan?.narrativeRole || scene.scenePurpose,
+      voiceoverScript: scene.voiceoverScript,
+      startFrameDescription: visualGoal || scene.startFrameDescription,
+      imagePrompt: keyframePlan?.imagePrompt || scene.imagePrompt,
+      videoPrompt: keyframePlan?.videoPrompt || scene.videoPrompt,
+      startFrameIntent: visualGoal || scene.startFrameIntent,
+      endFrameIntent: visualGoal || scene.endFrameIntent,
+      durationSec: scene.durationSec,
+      transitionHint: normalizeTransitionHint(index, allScenes.length, scene.transitionHint),
+      continuityConstraints: scene.continuityConstraints ?? [],
+    }
+  })
 
   return {
     executionMode: detail.taskRunConfig.executionMode,
     renderSpec: detail.taskRunConfig.renderSpecJson,
     globalTheme: detail.title,
     visualStyleGuide: planned.blueprint.visualStyleGuide,
+    bilingualUnderstandingPreview,
+    englishExecutionBrief,
     subjectProfile: planned.blueprint.subjectProfile,
     productProfile: planned.blueprint.productProfile,
     backgroundConstraints: planned.blueprint.backgroundConstraints,
     negativeConstraints: planned.blueprint.negativeConstraints,
+    visualPlan: planned.blueprint.visualPlan ?? {
+      sourceBrief: detail.taskRunConfig.visualSeedInput,
+      keyframeCount: detail.taskRunConfig.keyframeCount,
+      generationMode: detail.taskRunConfig.keyframeGenerationMode,
+      characterConsistency: true,
+      subjectProfile: planned.blueprint.subjectProfile,
+      setting: planned.blueprint.backgroundConstraints.length
+        ? planned.blueprint.backgroundConstraints.join(" / ")
+        : "A visually coherent environment inferred from the script.",
+      style: planned.blueprint.visualStyleGuide,
+      mood: planned.visualStyleGuide,
+      negativePrompt: planned.blueprint.negativeConstraints.length
+        ? planned.blueprint.negativeConstraints.join(" / ")
+        : "No captions, no UI, no watermark, no distorted hands, no inconsistent faces.",
+      continuityRules: [
+        "Keep the same primary subject identity across all keyframes unless the script explicitly changes it.",
+        ...planned.blueprint.backgroundConstraints,
+      ],
+    },
     totalVoiceoverScript: planned.finalVoiceoverScript,
     sceneContracts,
   }
@@ -840,45 +1213,61 @@ function extractGenerationStatus(payload: any) {
   return `${payload?.status || payload?.data?.status || payload?.data?.data?.status || ""}`.toLowerCase()
 }
 
-function extractImageReference(payload: any) {
+function extractImageReferences(payload: any) {
   const candidates = [payload, payload?.data, payload?.data?.data, payload?.result, payload?.data?.result]
+  const references: Array<{ url: string | null; b64Json: string | null; mimeType: string | null }> = []
 
   for (const candidate of candidates) {
     if (!candidate) {
       continue
     }
 
-    const item = Array.isArray(candidate) ? candidate[0] : candidate
-    if (!item || typeof item !== "object") {
-      continue
+    const items = Array.isArray(candidate) ? candidate : [candidate]
+    for (const item of items) {
+      if (!item || typeof item !== "object") {
+        continue
+      }
+
+      const url =
+        typeof item.url === "string"
+          ? item.url
+          : typeof item.image_url === "string"
+            ? item.image_url
+            : typeof item.result_url === "string"
+              ? item.result_url
+              : typeof item.output_url === "string"
+                ? item.output_url
+                : null
+      const b64Json =
+        typeof item.b64_json === "string"
+          ? item.b64_json
+          : typeof item.base64 === "string"
+            ? item.base64
+            : null
+      const mimeType =
+        typeof item.mime_type === "string"
+          ? item.mime_type
+          : typeof item.mimeType === "string"
+            ? item.mimeType
+            : null
+
+      if (url || b64Json) {
+        references.push({ url, b64Json, mimeType })
+      }
     }
 
-    const url =
-      typeof item.url === "string"
-        ? item.url
-        : typeof item.image_url === "string"
-          ? item.image_url
-          : typeof item.result_url === "string"
-            ? item.result_url
-            : typeof item.output_url === "string"
-              ? item.output_url
-              : null
-    const b64Json =
-      typeof item.b64_json === "string"
-        ? item.b64_json
-        : typeof item.base64 === "string"
-          ? item.base64
-          : null
-    const mimeType =
-      typeof item.mime_type === "string"
-        ? item.mime_type
-        : typeof item.mimeType === "string"
-          ? item.mimeType
-          : null
-
-    if (url || b64Json) {
-      return { url, b64Json, mimeType }
+    if (references.length) {
+      return references
     }
+  }
+
+  return []
+}
+
+function extractImageReference(payload: any) {
+  const references = extractImageReferences(payload)
+  if (references[0]) {
+    return references[0]
   }
 
   return null
@@ -1066,7 +1455,7 @@ type GeminiNativeImageRuntime = {
   model: string
 }
 
-async function resolveTextPlanningRuntime(detail: TaskDetail, runtime: RuntimeGenerationConfig) {
+async function resolveTextPlanningRuntime(detail: TaskDetail, runtime: RuntimeGenerationConfig): Promise<TextPlanningRuntime> {
   const slotSnapshots = detail.taskRunConfig.slotSnapshots ?? []
   const textSnapshot =
     slotSnapshots.find((slot) =>
@@ -1089,7 +1478,10 @@ async function resolveTextPlanningRuntime(detail: TaskDetail, runtime: RuntimeGe
       apiKey: connection.apiKey,
       baseUrl: resolveProviderApiBaseUrl(connection.endpointUrl),
       model: textSnapshot.providerModelId,
+      providerKey: textSnapshot.providerKey,
+      modelKey: textSnapshot.modelKey,
       capabilityJson: textSnapshot.capabilityJson ?? {},
+      fallbackTriggers: [],
       source: "task_snapshot" as const,
     }
   }
@@ -1099,9 +1491,44 @@ async function resolveTextPlanningRuntime(detail: TaskDetail, runtime: RuntimeGe
     apiKey: process.env.GENERGI_TEXT_API_KEY ?? "",
     baseUrl: resolveProviderApiBaseUrl(process.env.GENERGI_TEXT_BASE_URL ?? ""),
     model: resolvePlanningModelId(runtime),
+    providerKey: undefined,
+    modelKey: runtime.textModelId,
     capabilityJson: {},
+    fallbackTriggers: [],
     source: "environment" as const,
   }
+}
+
+async function resolveTextPlanningFallbackRuntimes(detail: TaskDetail): Promise<TextPlanningRuntime[]> {
+  const textSnapshot = (detail.taskRunConfig.slotSnapshots ?? []).find((slot) => slot.slotType === "textModel")
+  const fallbackCandidates = textSnapshot?.fallbackCandidates ?? []
+  if (!fallbackCandidates.length) {
+    return []
+  }
+
+  const providers = await readProviderRecords()
+  const runtimes: TextPlanningRuntime[] = []
+  for (const candidate of fallbackCandidates) {
+    const provider = providers.find((item) => item.id === candidate.providerId)
+    const connection = resolveProviderConnectionFields(provider)
+    if (!provider || !connection.endpointUrl || !connection.apiKey) {
+      continue
+    }
+
+    runtimes.push({
+      provider: candidate.providerType.trim().toLowerCase(),
+      apiKey: connection.apiKey,
+      baseUrl: resolveProviderApiBaseUrl(connection.endpointUrl),
+      model: candidate.providerModelId,
+      providerKey: candidate.providerKey,
+      modelKey: candidate.modelKey,
+      capabilityJson: candidate.capabilityJson ?? {},
+      fallbackTriggers: candidate.fallbackTriggers ?? [],
+      source: "task_snapshot",
+    })
+  }
+
+  return runtimes
 }
 
 type OpenAIChatImageRuntime = {
@@ -1124,6 +1551,10 @@ type OpenAIImagesGenerationRuntime = {
   model: string
   quality?: string
   responseFormat?: string
+  maxBatchImages?: number
+  batchReturnMode?: "api_multi_image" | "composite_grid"
+  compositeGridSize?: string
+  compositeGridLayout?: string
 }
 
 type GatewayImageRuntime = {
@@ -1131,10 +1562,20 @@ type GatewayImageRuntime = {
   model: string
 }
 
+type ImageGenerationRuntime =
+  | GeminiNativeImageRuntime
+  | OpenAIChatImageRuntime
+  | OpenAIImagesGenerationRuntime
+  | GatewayImageRuntime
+
+type OpenAIImagesFallbackRuntime = OpenAIImagesGenerationRuntime & {
+  fallbackTriggers: string[]
+}
+
 export async function resolveImageGenerationRuntime(
   detail: TaskDetail,
   model: string,
-): Promise<GeminiNativeImageRuntime | OpenAIChatImageRuntime | OpenAIImagesGenerationRuntime | GatewayImageRuntime> {
+): Promise<ImageGenerationRuntime> {
   const slotSnapshots = detail.taskRunConfig.slotSnapshots ?? []
   const imageSnapshot =
     slotSnapshots.find((slot) => slot.slotType === "imageModel" && (slot.modelKey === model || slot.modelId === model || slot.providerModelId === model)) ??
@@ -1189,6 +1630,12 @@ export async function resolveImageGenerationRuntime(
 
     const quality = imageSnapshot.capabilityJson?.quality
     const responseFormat = imageSnapshot.capabilityJson?.responseFormat
+    const maxBatchImages = Number(imageSnapshot.capabilityJson?.maxBatchImages ?? imageSnapshot.capabilityJson?.max_batch_images ?? 4)
+    const rawBatchReturnMode = `${imageSnapshot.capabilityJson?.batchReturnMode ?? imageSnapshot.capabilityJson?.batch_return_mode ?? ""}`.trim()
+    const inferredCompositeGrid = imageSnapshot.providerModelId.trim().toLowerCase() === "gpt-image-2"
+    const batchReturnMode = rawBatchReturnMode || (inferredCompositeGrid ? "composite_grid" : "")
+    const compositeGridSize = imageSnapshot.capabilityJson?.compositeGridSize ?? imageSnapshot.capabilityJson?.composite_grid_size
+    const compositeGridLayout = imageSnapshot.capabilityJson?.compositeGridLayout ?? imageSnapshot.capabilityJson?.composite_grid_layout
 
     return {
       kind: "openai-images-generation",
@@ -1200,6 +1647,10 @@ export async function resolveImageGenerationRuntime(
       model: imageSnapshot.modelKey,
       quality: typeof quality === "string" && quality.trim() ? quality.trim() : undefined,
       responseFormat: typeof responseFormat === "string" && responseFormat.trim() ? responseFormat.trim() : undefined,
+      maxBatchImages: Number.isFinite(maxBatchImages) && maxBatchImages > 0 ? Math.floor(maxBatchImages) : 4,
+      batchReturnMode: batchReturnMode === "composite_grid" ? "composite_grid" : "api_multi_image",
+      compositeGridSize: typeof compositeGridSize === "string" && compositeGridSize.trim() ? compositeGridSize.trim() : undefined,
+      compositeGridLayout: typeof compositeGridLayout === "string" && compositeGridLayout.trim() ? compositeGridLayout.trim() : undefined,
     }
   }
 
@@ -1207,6 +1658,84 @@ export async function resolveImageGenerationRuntime(
     kind: "gateway",
     model: normalizeImageModel(model),
   }
+}
+
+async function resolveOpenAIImagesFallbackRuntimes(detail: TaskDetail): Promise<OpenAIImagesFallbackRuntime[]> {
+  const imageSnapshot = (detail.taskRunConfig.slotSnapshots ?? []).find((slot) => slot.slotType === "imageModel")
+  const fallbackCandidates = imageSnapshot?.fallbackCandidates ?? []
+  if (!fallbackCandidates.length) {
+    return []
+  }
+
+  const providers = await readProviderRecords()
+  const runtimes: OpenAIImagesFallbackRuntime[] = []
+  for (const candidate of fallbackCandidates) {
+    const transport = `${candidate.capabilityJson?.imageTransport ?? ""}`.trim().toLowerCase()
+    if (transport !== "openai-images-generations") {
+      continue
+    }
+    const provider = providers.find((item) => item.id === candidate.providerId)
+    const connection = resolveProviderConnectionFields(provider)
+    if (!provider || !connection.endpointUrl || !connection.apiKey) {
+      continue
+    }
+
+    const quality = candidate.capabilityJson?.quality
+    const responseFormat = candidate.capabilityJson?.responseFormat
+    const maxBatchImages = Number(candidate.capabilityJson?.maxBatchImages ?? candidate.capabilityJson?.max_batch_images ?? 4)
+    const rawBatchReturnMode = `${candidate.capabilityJson?.batchReturnMode ?? candidate.capabilityJson?.batch_return_mode ?? ""}`.trim()
+    const inferredCompositeGrid = candidate.providerModelId.trim().toLowerCase() === "gpt-image-2"
+    const batchReturnMode = rawBatchReturnMode || (inferredCompositeGrid ? "composite_grid" : "")
+    const compositeGridSize = candidate.capabilityJson?.compositeGridSize ?? candidate.capabilityJson?.composite_grid_size
+    const compositeGridLayout = candidate.capabilityJson?.compositeGridLayout ?? candidate.capabilityJson?.composite_grid_layout
+
+    runtimes.push({
+      kind: "openai-images-generation",
+      baseUrl: resolveProviderApiBaseUrl(connection.endpointUrl),
+      apiKey: connection.apiKey,
+      providerId: provider.id,
+      providerKey: provider.providerKey,
+      providerModelId: candidate.providerModelId,
+      model: candidate.modelKey,
+      quality: typeof quality === "string" && quality.trim() ? quality.trim() : undefined,
+      responseFormat: typeof responseFormat === "string" && responseFormat.trim() ? responseFormat.trim() : undefined,
+      maxBatchImages: Number.isFinite(maxBatchImages) && maxBatchImages > 0 ? Math.floor(maxBatchImages) : 4,
+      batchReturnMode: batchReturnMode === "composite_grid" ? "composite_grid" : "api_multi_image",
+      compositeGridSize: typeof compositeGridSize === "string" && compositeGridSize.trim() ? compositeGridSize.trim() : undefined,
+      compositeGridLayout: typeof compositeGridLayout === "string" && compositeGridLayout.trim() ? compositeGridLayout.trim() : undefined,
+      fallbackTriggers: candidate.fallbackTriggers ?? [],
+    })
+  }
+
+  return runtimes
+}
+
+function getImageFallbackTrigger(error: unknown) {
+  if (error instanceof Error && error.name === "AbortError") {
+    return null
+  }
+  const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase()
+  const statusMatch = message.match(/\((\d{3})(?:\s|[):])/)
+  const statusCode = statusMatch ? Number(statusMatch[1]) : null
+  if (statusCode === 400 || statusCode === 401 || statusCode === 403 || statusCode === 404 || statusCode === 422) {
+    return null
+  }
+  if (statusCode === 408 || /timeout|timed out|econnaborted/.test(message)) {
+    return "timeout"
+  }
+  if (statusCode === 429 || /rate limit|too many requests/.test(message)) {
+    return "rate_limit"
+  }
+  if (/empty|no image|no output|blank/.test(message)) {
+    return "empty_result"
+  }
+  if (/invalid response|malformed|did not return|parse|json/.test(message)) {
+    return "invalid_response"
+  }
+  if ((statusCode && statusCode >= 500) || /gateway|provider|upstream|unavailable|bad gateway/.test(message)) {
+    return "provider_error"
+  }
+  return null
 }
 
 export async function createGeminiNativeImageArtifact(
@@ -1423,11 +1952,42 @@ export async function createOpenAIImagesGenerationArtifact(
     postJson?: (url: string, body: Record<string, unknown>) => Promise<any>
   } = {},
 ) {
+  const artifacts = await createOpenAIImagesGenerationArtifacts(
+    {
+      ...input,
+      count: 1,
+    },
+    deps,
+  )
+  const artifact = artifacts[0]
+  if (!artifact) {
+    throw new Error("OpenAI images generation response did not include image data")
+  }
+  return artifact
+}
+
+export async function createOpenAIImagesGenerationArtifacts(
+  input: {
+    baseUrl: string
+    apiKey: string
+    model: string
+    prompt: string
+    size: string
+    count?: number
+    quality?: string
+    responseFormat?: string
+    signal?: AbortSignal
+  },
+  deps: {
+    postJson?: (url: string, body: Record<string, unknown>) => Promise<any>
+  } = {},
+) {
   const url = `${resolveProviderApiBaseUrl(input.baseUrl)}/v1/images/generations`
+  const count = Math.max(1, Math.floor(input.count ?? 1))
   const body: Record<string, unknown> = {
     model: input.model,
     prompt: input.prompt,
-    n: 1,
+    n: count,
     size: input.size,
   }
 
@@ -1457,16 +2017,18 @@ export async function createOpenAIImagesGenerationArtifact(
     throw toProviderRequestError("OpenAI images generation request failed", error)
   }
 
-  const reference = extractImageReference(responseData)
   const generationId = extractGenerationId(responseData)
-  if (!reference) {
+  const references = extractImageReferences(responseData)
+  if (!references.length) {
     throw new Error(`OpenAI images generation response did not include image data: ${JSON.stringify(responseData)}`)
   }
 
-  return {
-    ...await resolveImageBytes(reference),
-    generationId,
-  }
+  return Promise.all(
+    references.slice(0, count).map(async (reference, index) => ({
+      ...await resolveImageBytes(reference),
+      generationId: references.length > 1 && generationId ? `${generationId}:${index + 1}` : generationId,
+    })),
+  )
 }
 
 function extractAnthropicText(payload: any) {
@@ -1598,6 +2160,106 @@ async function requestOpenAICompatiblePlanning(input: {
   return extractOpenAIText(response.data)
 }
 
+function getTextPlanningFailureTrigger(error: unknown) {
+  if (axios.isAxiosError(error)) {
+    const status = error.response?.status
+    if (status === 401 || status === 403) {
+      return null
+    }
+    if (status === 404) {
+      return null
+    }
+    if (status === 400 || status === 422) {
+      return null
+    }
+    if (status === 408) {
+      return "timeout"
+    }
+    if (status === 429) {
+      return "rate_limit"
+    }
+    if (status && status >= 500) {
+      return "provider_error"
+    }
+    if (error.code === "ECONNABORTED" || /timeout|timed out/i.test(error.message)) {
+      return "timeout"
+    }
+  }
+
+  const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase()
+  if (/unauthori[sz]ed|forbidden|invalid api key|api key|auth/.test(message)) {
+    return null
+  }
+  if (/model_not_found|model not found|not found|unsupported model|unknown model/.test(message)) {
+    return null
+  }
+  if (/bad request|invalid request|request format|invalid parameter|unsupported parameter/.test(message)) {
+    return null
+  }
+  if (/timeout|timed out|econnaborted|408/.test(message)) {
+    return "timeout"
+  }
+  if (/429|rate limit|too many requests|quota/.test(message)) {
+    return "rate_limit"
+  }
+  if (/empty|no content|no output|blank/.test(message)) {
+    return "empty_result"
+  }
+  if (/invalid response|malformed|parse|json|schema|could not be normalized/.test(message)) {
+    return "invalid_response"
+  }
+  if (/5\d\d|gateway|provider|upstream|failed|unavailable|bad gateway/.test(message)) {
+    return "provider_error"
+  }
+  return null
+}
+
+function formatTextPlanningError(error: unknown) {
+  return error instanceof Error ? error.message : String(error)
+}
+
+async function requestTextPlanningRaw(input: {
+  runtime: TextPlanningRuntime
+  systemPrompt: string
+  promptContext: string
+  wireApi: "messages" | "chat_completions" | "responses" | null
+}) {
+  const { runtime } = input
+  if (runtime.provider === "anthropic-compatible" || runtime.provider === "anthropic-native") {
+    const response = await axios.post(
+      `${runtime.baseUrl}/v1/messages`,
+      {
+        model: runtime.model,
+        max_tokens: 1200,
+        system: input.systemPrompt,
+        messages: [{ role: "user", content: input.promptContext }],
+      },
+      {
+        headers: {
+          "x-api-key": runtime.apiKey,
+          "anthropic-version": "2023-06-01",
+          "content-type": "application/json",
+        },
+        timeout: 120000,
+      },
+    )
+    return extractAnthropicText(response.data)
+  }
+
+  if (runtime.provider === "openai-compatible") {
+    return requestOpenAICompatiblePlanning({
+      baseUrl: runtime.baseUrl,
+      apiKey: runtime.apiKey,
+      model: runtime.model,
+      systemPrompt: input.systemPrompt,
+      promptContext: input.promptContext,
+      wireApi: input.wireApi === "responses" ? "responses" : "chat_completions",
+    })
+  }
+
+  return ""
+}
+
 function extractJsonObject(text: string) {
   const fencedMatch = text.match(/```json\s*([\s\S]*?)```/i)
   if (fencedMatch?.[1]) {
@@ -1633,6 +2295,8 @@ export function buildPlanningPromptContext(input: {
   maxSingleShotSec: number
   enhancementKeywords: string[]
   maxSceneCount?: number
+  visualSeedInput?: string | null
+  keyframeGenerationMode?: "batch" | "single"
 }) {
   const requiredSceneCount =
     input.generationRoute === "multi_scene"
@@ -1652,6 +2316,8 @@ export function buildPlanningPromptContext(input: {
     `model single-shot ceiling: ${input.maxSingleShotSec}s`,
     "original script:",
     input.originalScript,
+    "visual brief:",
+    input.visualSeedInput?.trim() || "not provided; infer a consistent character, setting, style, mood, and negative prompt from the original script",
     "output requirements:",
     "- preserve the user's original topic, domain, subject, scene, and CTA intent",
     "- do not add new products, offers, commercial angles, or environments that are not present in the original script",
@@ -1666,8 +2332,14 @@ export function buildPlanningPromptContext(input: {
     "- finalVoiceoverScript must be direct voiceover text",
     "- scenePlan.script and scenePlan.voiceoverScript are the final narration draft for downstream TTS and subtitles",
     "- scenePlan.imagePrompt and scenePlan.videoPrompt are the final downstream prompts for image and video generation",
+    "- also return bilingualUnderstandingPreview for operators: every preview field must include zh and en",
+    "- also return englishExecutionBrief.version = \"execution-brief-v1\" and englishExecutionBrief.finalPromptLanguage = \"en\"",
+    "- englishExecutionBrief.keyframePlan must contain the final English imagePrompt and videoPrompt for each keyframe in order",
+    "- downstream image and video models will use englishExecutionBrief only; do not put Chinese text inside englishExecutionBrief prompts",
+    `- keyframe mode: ${input.keyframeGenerationMode ?? "batch"}`,
+    "- each scenePlan.imagePrompt must work as one frame in a consistent storyboard image set",
     "- make every scene prompt directly usable by the next model call; do not use placeholders such as TBD, same as above, or generic references",
-    "- when route is multi_scene, use the minimum number of scenes needed to satisfy the current model single-shot ceiling",
+    "- when route is multi_scene, use the requested keyframe count as the scene count unless single_shot is selected",
     input.generationRoute === "single_shot"
       ? "- scenePlan must contain exactly one scene"
       : `- scenePlan must contain exactly ${requiredSceneCount} scenes and their duration total must match the target duration`,
@@ -1752,6 +2424,10 @@ export function validatePlanningOutput(
           visualStyleGuide:
             (raw as { visualStyleGuide?: string }).visualStyleGuide ??
             "Use the returned visual, mood, and camera notes as the canonical style guide.",
+          bilingualUnderstandingPreview:
+            (raw as { bilingualUnderstandingPreview?: unknown }).bilingualUnderstandingPreview ?? null,
+          englishExecutionBrief:
+            (raw as { englishExecutionBrief?: unknown }).englishExecutionBrief ?? null,
           ctaLine:
             (raw as { ctaLine?: string }).ctaLine ??
             (
@@ -1845,6 +2521,10 @@ export function validatePlanningOutput(
             visualStyleGuide:
               (raw as { visualStyleGuide?: string }).visualStyleGuide ??
               "Use the returned image and video prompts as the canonical visual guide.",
+            bilingualUnderstandingPreview:
+              (raw as { bilingualUnderstandingPreview?: unknown }).bilingualUnderstandingPreview ?? null,
+            englishExecutionBrief:
+              (raw as { englishExecutionBrief?: unknown }).englishExecutionBrief ?? null,
             subjectProfile:
               (raw as { subjectProfile?: string }).subjectProfile ??
               "Maintain one consistent subject profile across all scenes.",
@@ -1936,14 +2616,73 @@ export function validatePlanningOutput(
     return { ok: false, reason: `planning output schema invalid: ${parsed.error.issues[0]?.message ?? "unknown error"}` }
   }
 
-  const output = parsed.data.blueprint.sceneContracts.length
-    ? parsed.data
-    : {
-        ...parsed.data,
+  const executionBrief =
+    parsed.data.englishExecutionBrief ??
+    parsed.data.blueprint.englishExecutionBrief ??
+    null
+  const understandingPreview =
+    parsed.data.bilingualUnderstandingPreview ??
+    parsed.data.blueprint.bilingualUnderstandingPreview ??
+    null
+  const scenePlan = executionBrief
+    ? parsed.data.scenePlan.map((scene, index) => {
+        const keyframe = executionBrief.keyframePlan[index]
+        if (!keyframe) {
+          return scene
+        }
+        return {
+          ...scene,
+          scenePurpose: keyframe.narrativeRole || scene.scenePurpose,
+          startFrameDescription: keyframe.visualGoal || scene.startFrameDescription,
+          imagePrompt: keyframe.imagePrompt,
+          videoPrompt: keyframe.videoPrompt,
+          startFrameIntent: keyframe.visualGoal || scene.startFrameIntent,
+          endFrameIntent: keyframe.visualGoal || scene.endFrameIntent,
+        }
+      })
+    : parsed.data.scenePlan
+  const parsedData = {
+    ...parsed.data,
+    bilingualUnderstandingPreview: understandingPreview,
+    englishExecutionBrief: executionBrief,
+    scenePlan,
+    blueprint: {
+      ...parsed.data.blueprint,
+      bilingualUnderstandingPreview: understandingPreview,
+      englishExecutionBrief: executionBrief,
+    },
+  }
+
+  const output = parsedData.blueprint.sceneContracts.length
+    ? {
+        ...parsedData,
         blueprint: {
-          ...parsed.data.blueprint,
-          totalVoiceoverScript: parsed.data.finalVoiceoverScript,
-          sceneContracts: parsed.data.scenePlan.map((scene, index, allScenes) => ({
+          ...parsedData.blueprint,
+          sceneContracts: executionBrief
+            ? parsedData.blueprint.sceneContracts.map((scene, index) => {
+                const keyframe = executionBrief.keyframePlan[index]
+                if (!keyframe) {
+                  return scene
+                }
+                return {
+                  ...scene,
+                  sceneGoal: keyframe.narrativeRole || scene.sceneGoal,
+                  startFrameDescription: keyframe.visualGoal || scene.startFrameDescription,
+                  imagePrompt: keyframe.imagePrompt,
+                  videoPrompt: keyframe.videoPrompt,
+                  startFrameIntent: keyframe.visualGoal || scene.startFrameIntent,
+                  endFrameIntent: keyframe.visualGoal || scene.endFrameIntent,
+                }
+              })
+            : parsedData.blueprint.sceneContracts,
+        },
+      }
+    : {
+        ...parsedData,
+        blueprint: {
+          ...parsedData.blueprint,
+          totalVoiceoverScript: parsedData.finalVoiceoverScript,
+          sceneContracts: parsedData.scenePlan.map((scene, index, allScenes) => ({
             id: `scene_${index + 1}`,
             index,
             sceneGoal: scene.scenePurpose,
@@ -2110,6 +2849,7 @@ function alignDetailScenes(detail: TaskDetail, script: string): TaskDetail {
       script,
       targetDurationSec: detail.taskRunConfig.targetDurationSec ?? 30,
       maxSceneDurationSec: resolveVideoModelCapability(detail.taskRunConfig.videoModel.id).maxSingleShotSec,
+      visualKeyframeCount: detail.taskRunConfig.keyframeCount,
       aspectRatio: detail.taskRunConfig.aspectRatio,
       existingScenes: detail.scenes,
       reviewRequirements: {
@@ -2127,6 +2867,7 @@ function buildPlanningFallback(detail: TaskDetail): TextPlanningOutput {
     script: finalVoiceoverScript,
     targetDurationSec: detail.taskRunConfig.targetDurationSec ?? 30,
     maxSceneDurationSec: resolveVideoModelCapability(detail.taskRunConfig.videoModel.id).maxSingleShotSec,
+    visualKeyframeCount: detail.taskRunConfig.keyframeCount,
     aspectRatio: detail.taskRunConfig.aspectRatio,
     reviewRequirements: {
       requireStoryboardReview: detail.taskRunConfig.requireStoryboardReview,
@@ -2194,17 +2935,13 @@ function buildPlanningFallback(detail: TaskDetail): TextPlanningOutput {
 async function requestStructuredPlanning(detail: TaskDetail): Promise<StructuredPlanningAttempt> {
   const runtime = resolveRuntimeGenerationConfig(detail)
   const textRuntime = await resolveTextPlanningRuntime(detail, runtime)
-  const provider = textRuntime.provider
-  const apiKey = textRuntime.apiKey
-  const baseUrl = textRuntime.baseUrl
-  const model = textRuntime.model
 
   const preference = GENERATION_PREFERENCES.find((item) => item.id === detail.taskRunConfig.generationMode)
   const capability = resolveVideoModelCapability(detail.taskRunConfig.videoModel.id)
   const maxSceneCount =
     detail.taskRunConfig.generationRoute === "single_shot"
       ? 1
-      : resolveSceneCountForDurationWithLimit(detail.taskRunConfig.targetDurationSec, capability.maxSingleShotSec)
+      : detail.taskRunConfig.keyframeCount
   const promptContext = buildPlanningPromptContext({
     originalScript: detail.script,
     projectId: detail.projectId,
@@ -2219,64 +2956,134 @@ async function requestStructuredPlanning(detail: TaskDetail): Promise<Structured
     maxSingleShotSec: capability.maxSingleShotSec,
     enhancementKeywords: preference?.keywords ?? [],
     maxSceneCount,
+    visualSeedInput: detail.taskRunConfig.visualSeedInput,
+    keyframeGenerationMode: detail.taskRunConfig.keyframeGenerationMode,
   })
 
-  if (!provider || !apiKey || !baseUrl) {
+  const fallbackRuntimes = await resolveTextPlanningFallbackRuntimes(detail)
+  const textModelFallbackEvents: TextModelFallbackEvent[] = []
+  let firstFailure: StructuredPlanningAttempt["planningError"] = null
+
+  if (!textRuntime.provider || !textRuntime.apiKey || !textRuntime.baseUrl) {
     return {
       output: null,
       promptContext,
       rawResponse: null,
       parsedResponse: null,
-      provider: provider || null,
-      model: model || null,
-      baseUrl: baseUrl || null,
+      provider: textRuntime.provider || null,
+      model: textRuntime.model || null,
+      baseUrl: textRuntime.baseUrl || null,
       wireApi: null,
+      textModelFallbackEvents,
+      planningError: {
+        trigger: null,
+        message: "text provider runtime is incomplete",
+        provider: textRuntime.provider || null,
+        model: textRuntime.model || null,
+      },
     }
   }
 
   const systemPrompt =
     "You are a short-form video director and planner. Return only valid JSON that matches the requested planning structure. Do not explain your decisions."
-  const openaiWireApi = provider === "openai-compatible"
-    ? resolveOpenAITextWireApi({
-        model,
-        capabilityJson: textRuntime.capabilityJson,
-      })
-    : null
 
-  for (let attempt = 1; attempt <= 2; attempt += 1) {
+  const runtimes = [textRuntime, ...fallbackRuntimes]
+  const findNextFallbackRuntime = (trigger: string, afterIndex: number) => {
+    for (let index = afterIndex + 1; index < runtimes.length; index += 1) {
+      const candidate = runtimes[index]
+      if (candidate.fallbackTriggers?.includes(trigger)) {
+        return { runtime: candidate, index }
+      }
+    }
+    return null
+  }
+
+  for (let runtimeIndex = 0; runtimeIndex < runtimes.length; runtimeIndex += 1) {
+    const activeRuntime = runtimes[runtimeIndex]
+    if (!activeRuntime.apiKey || !activeRuntime.baseUrl || !activeRuntime.model) {
+      continue
+    }
+    const wireApi = activeRuntime.provider === "openai-compatible"
+      ? resolveOpenAITextWireApi({
+          model: activeRuntime.model,
+          capabilityJson: activeRuntime.capabilityJson,
+        })
+      : activeRuntime.provider === "anthropic-compatible" || activeRuntime.provider === "anthropic-native"
+        ? "messages" as const
+        : null
+
     let rawText = ""
 
-    if (provider === "anthropic-compatible" || provider === "anthropic-native") {
-      const response = await axios.post(
-        `${baseUrl}/v1/messages`,
-        {
-          model,
-          max_tokens: 1200,
-          system: systemPrompt,
-          messages: [{ role: "user", content: promptContext }],
-        },
-        {
-          headers: {
-            "x-api-key": apiKey,
-            "anthropic-version": "2023-06-01",
-            "content-type": "application/json",
-          },
-          timeout: 120000,
-        },
-      )
-      rawText = extractAnthropicText(response.data)
-    } else if (provider === "openai-compatible") {
-      rawText = await requestOpenAICompatiblePlanning({
-        baseUrl,
-        apiKey,
-        model,
-        systemPrompt,
+    try {
+      for (let attempt = 1; attempt <= 2; attempt += 1) {
+        rawText = await requestTextPlanningRaw({
+          runtime: activeRuntime,
+          systemPrompt,
+          promptContext,
+          wireApi,
+        })
+        if (rawText) {
+          break
+        }
+      }
+    } catch (error) {
+      const trigger = getTextPlanningFailureTrigger(error)
+      const planningError = {
+        trigger,
+        message: formatTextPlanningError(error),
+        provider: activeRuntime.provider || null,
+        model: activeRuntime.model || null,
+      }
+      firstFailure ??= planningError
+      const fallback = trigger ? findNextFallbackRuntime(trigger, runtimeIndex) : null
+      if (trigger && fallback) {
+        const nextRuntime = fallback.runtime
+        textModelFallbackEvents.push({
+          trigger,
+          fromProvider: activeRuntime.providerKey ?? activeRuntime.provider ?? null,
+          fromModel: activeRuntime.model,
+          toProvider: nextRuntime.providerKey ?? nextRuntime.provider,
+          toModel: nextRuntime.model,
+        })
+        runtimeIndex = fallback.index - 1
+        continue
+      }
+
+      return {
+        output: null,
         promptContext,
-        wireApi: openaiWireApi ?? "chat_completions",
-      })
+        rawResponse: null,
+        parsedResponse: null,
+        provider: activeRuntime.provider || null,
+        model: activeRuntime.model || null,
+        baseUrl: activeRuntime.baseUrl || null,
+        wireApi,
+        textModelFallbackEvents,
+        planningError,
+      }
     }
 
     if (!rawText) {
+      const planningError = {
+        trigger: "empty_result",
+        message: "text model returned empty planning response",
+        provider: activeRuntime.provider || null,
+        model: activeRuntime.model || null,
+      }
+      firstFailure ??= planningError
+      const fallback = findNextFallbackRuntime("empty_result", runtimeIndex)
+      if (fallback) {
+        const nextRuntime = fallback.runtime
+        textModelFallbackEvents.push({
+          trigger: "empty_result",
+          fromProvider: activeRuntime.providerKey ?? activeRuntime.provider ?? null,
+          fromModel: activeRuntime.model,
+          toProvider: nextRuntime.providerKey ?? nextRuntime.provider,
+          toModel: nextRuntime.model,
+        })
+        runtimeIndex = fallback.index - 1
+        continue
+      }
       continue
     }
 
@@ -2284,15 +3091,38 @@ async function requestStructuredPlanning(detail: TaskDetail): Promise<Structured
     try {
       parsedJson = JSON.parse(extractJsonObject(rawText))
     } catch {
+      const planningError = {
+        trigger: "invalid_response",
+        message: "text model response was not valid JSON",
+        provider: activeRuntime.provider,
+        model: activeRuntime.model,
+      }
+      firstFailure ??= planningError
+      const fallback = findNextFallbackRuntime("invalid_response", runtimeIndex)
+      if (fallback) {
+        const nextRuntime = fallback.runtime
+        textModelFallbackEvents.push({
+          trigger: "invalid_response",
+          fromProvider: activeRuntime.providerKey ?? activeRuntime.provider ?? null,
+          fromModel: activeRuntime.model,
+          toProvider: nextRuntime.providerKey ?? nextRuntime.provider,
+          toModel: nextRuntime.model,
+        })
+        runtimeIndex = fallback.index - 1
+        continue
+      }
+
       return {
         output: null,
         promptContext,
         rawResponse: rawText,
         parsedResponse: null,
-        provider,
-        model,
-        baseUrl,
-        wireApi: provider === "anthropic-compatible" || provider === "anthropic-native" ? "messages" : openaiWireApi,
+        provider: activeRuntime.provider,
+        model: activeRuntime.model,
+        baseUrl: activeRuntime.baseUrl,
+        wireApi,
+        textModelFallbackEvents,
+        planningError,
       }
     }
 
@@ -2313,11 +3143,34 @@ async function requestStructuredPlanning(detail: TaskDetail): Promise<Structured
         promptContext,
         rawResponse: rawText,
         parsedResponse: parsedJson,
-        provider,
-        model,
-        baseUrl,
-        wireApi: provider === "anthropic-compatible" || provider === "anthropic-native" ? "messages" : openaiWireApi,
+        provider: activeRuntime.provider,
+        model: activeRuntime.model,
+        baseUrl: activeRuntime.baseUrl,
+        wireApi,
+        textModelFallbackEvents,
+        planningError: firstFailure,
       }
+    }
+
+    const planningError = {
+      trigger: "invalid_response",
+      message: validated.reason,
+      provider: activeRuntime.provider,
+      model: activeRuntime.model,
+    }
+    firstFailure ??= planningError
+    const fallback = findNextFallbackRuntime("invalid_response", runtimeIndex)
+    if (fallback) {
+      const nextRuntime = fallback.runtime
+      textModelFallbackEvents.push({
+        trigger: "invalid_response",
+        fromProvider: activeRuntime.providerKey ?? activeRuntime.provider ?? null,
+        fromModel: activeRuntime.model,
+        toProvider: nextRuntime.providerKey ?? nextRuntime.provider,
+        toModel: nextRuntime.model,
+      })
+      runtimeIndex = fallback.index - 1
+      continue
     }
 
     return {
@@ -2325,10 +3178,12 @@ async function requestStructuredPlanning(detail: TaskDetail): Promise<Structured
       promptContext,
       rawResponse: rawText,
       parsedResponse: parsedJson,
-      provider,
-      model,
-      baseUrl,
-      wireApi: provider === "anthropic-compatible" || provider === "anthropic-native" ? "messages" : openaiWireApi,
+      provider: activeRuntime.provider,
+      model: activeRuntime.model,
+      baseUrl: activeRuntime.baseUrl,
+      wireApi,
+      textModelFallbackEvents,
+      planningError,
     }
   }
 
@@ -2337,10 +3192,16 @@ async function requestStructuredPlanning(detail: TaskDetail): Promise<Structured
     promptContext,
     rawResponse: null,
     parsedResponse: null,
-    provider,
-    model,
-    baseUrl,
-    wireApi: provider === "anthropic-compatible" || provider === "anthropic-native" ? "messages" : openaiWireApi,
+    provider: textRuntime.provider,
+    model: textRuntime.model,
+    baseUrl: textRuntime.baseUrl,
+    wireApi: textRuntime.provider === "anthropic-compatible" || textRuntime.provider === "anthropic-native"
+      ? "messages"
+      : textRuntime.provider === "openai-compatible"
+        ? resolveOpenAITextWireApi({ model: textRuntime.model, capabilityJson: textRuntime.capabilityJson })
+        : null,
+    textModelFallbackEvents,
+    planningError: firstFailure,
   }
 }
 
@@ -2372,6 +3233,8 @@ async function buildPreparedTaskDetail(detail: TaskDetail): Promise<{
         model: structuredAttempt.model,
         baseUrl: structuredAttempt.baseUrl,
         wireApi: structuredAttempt.wireApi,
+        textModelFallbackEvents: structuredAttempt.textModelFallbackEvents ?? [],
+        planningError: structuredAttempt.planningError ?? null,
         usedFallback: !structuredAttempt.output,
         fallbackReason: structuredAttempt.output
           ? null
@@ -2503,6 +3366,36 @@ export async function writeTaskSourceFiles(
   if (planningTrace?.planningAudit) {
     writeFileSync(path.join(dir, "planning-audit.json"), JSON.stringify(planningTrace.planningAudit, null, 2), "utf8")
   }
+  writeFileSync(
+    path.join(dir, "visual-plan.json"),
+    JSON.stringify(
+      {
+        visualSeedInput: detail.taskRunConfig.visualSeedInput,
+        keyframeGenerationMode: detail.taskRunConfig.keyframeGenerationMode,
+        keyframeCount: detail.taskRunConfig.keyframeCount,
+        aspectRatio: detail.taskRunConfig.aspectRatio,
+        scenes: detail.scenes.map((scene) => ({
+          sceneId: scene.id,
+          sceneIndex: scene.index,
+          title: scene.title,
+          imagePrompt: scene.imagePrompt,
+          continuityConstraints: scene.continuityConstraints ?? [],
+        })),
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  )
+  writeFileSync(
+    path.join(dir, "keyframe-prompt-summary.txt"),
+    buildBatchKeyframePrompt({
+      scenes: detail.scenes,
+      aspectRatio: detail.taskRunConfig.aspectRatio,
+      visualSeedInput: detail.taskRunConfig.visualSeedInput,
+    }),
+    "utf8",
+  )
   writeFileSync(path.join(dir, "storyboard.json"), JSON.stringify(detail, null, 2), "utf8")
   return dir
 }
@@ -2532,6 +3425,8 @@ export async function buildTaskDocumentAssetRecords(input: {
     { id: `${input.taskId}_planning_prompt`, assetType: "planning_prompt", label: "文本规划提示词", path: path.join(input.taskDir, "planning-prompt.txt") },
     { id: `${input.taskId}_planning_response`, assetType: "planning_response", label: "文本模型原始返回", path: path.join(input.taskDir, "planning-response.txt") },
     { id: `${input.taskId}_planning_audit`, assetType: "planning_audit", label: "文本规划审计 JSON", path: path.join(input.taskDir, "planning-audit.json") },
+    { id: `${input.taskId}_visual_plan`, assetType: "visual_plan", label: "视觉计划 JSON", path: path.join(input.taskDir, "visual-plan.json") },
+    { id: `${input.taskId}_keyframe_prompt_summary`, assetType: "keyframe_prompt_summary", label: "关键画面提示词汇总", path: path.join(input.taskDir, "keyframe-prompt-summary.txt") },
     { id: `${input.taskId}_storyboard`, assetType: "storyboard", label: "分镜 JSON", path: path.join(input.taskDir, "storyboard.json") },
   ]
 
@@ -3040,6 +3935,8 @@ export async function createKeyframeBundle(input: {
   createGeminiNativeImageArtifact?: typeof createGeminiNativeImageArtifact
   createGatewayImageArtifact?: typeof createGatewayImageArtifact
   createOpenAIImagesGenerationArtifact?: typeof createOpenAIImagesGenerationArtifact
+  createOpenAIImagesGenerationArtifacts?: typeof createOpenAIImagesGenerationArtifacts
+  splitCompositeGridArtifact?: typeof splitCompositeGridArtifact
 } = {}) {
   const dir = ensureTaskDir(input.taskId)
   const keyframeDir = path.join(dir, "keyframes")
@@ -3092,17 +3989,89 @@ export async function createKeyframeBundle(input: {
     filePath: string
     model?: string
     remoteTaskId?: string | null
+    promptSource?: KeyframePromptSource
+    executionBriefKeyframeIndex?: number | null
+    timestampRange?: string | null
+    narrativeRole?: string | null
+    visualGoal?: string | null
+    promptHash?: string
+    imagePromptHash?: string
+    promptSummary?: string
+    generationMode?: "batch" | "single"
+    batchId?: string | null
+    batchIndex?: number | null
+    cropSourceFileName?: string | null
+    cropPanelRect?: { x: number; y: number; width: number; height: number } | null
   }> = []
   const imageRuntime = await resolveImageGenerationRuntime(input.detail, input.model)
+  const imageFallbackCandidates = (input.detail.taskRunConfig.slotSnapshots ?? [])
+    .find((slot) => slot.slotType === "imageModel")
+    ?.fallbackCandidates ?? []
+  const imageFallbackRuntimes = imageFallbackCandidates.length
+    ? await resolveOpenAIImagesFallbackRuntimes(input.detail)
+    : []
+  const imageModelTrace =
+    imageRuntime.kind === "openai-images-generation"
+      ? {
+          providerId: imageRuntime.providerId,
+          providerKey: imageRuntime.providerKey,
+          modelId: imageRuntime.model,
+          providerModelId: imageRuntime.providerModelId,
+          wireApi: "images_generations",
+          requestPath: "/v1/images/generations",
+        }
+      : imageRuntime.kind === "openai-chat-image"
+        ? {
+            providerId: imageRuntime.providerId,
+            providerKey: imageRuntime.providerKey,
+            modelId: imageRuntime.model,
+            providerModelId: imageRuntime.providerModelId,
+            wireApi: "chat_completions",
+            requestPath: "/v1/chat/completions",
+          }
+        : imageRuntime.kind === "gemini-native"
+          ? {
+              providerId: imageRuntime.providerId,
+              providerKey: imageRuntime.providerKey,
+              modelId: imageRuntime.model,
+              providerModelId: imageRuntime.providerModelId,
+              wireApi: "gemini_generate_content",
+              requestPath: ":generateContent",
+            }
+          : {
+              providerId: null,
+              providerKey: "gateway",
+              modelId: imageRuntime.model,
+              providerModelId: imageRuntime.model,
+              wireApi: "gateway_image",
+              requestPath: "/v1/images/generations",
+            }
   const createGeminiArtifact = deps.createGeminiNativeImageArtifact ?? createGeminiNativeImageArtifact
   const createGatewayArtifact = deps.createGatewayImageArtifact ?? createGatewayImageArtifact
   const createOpenAIImagesArtifact = deps.createOpenAIImagesGenerationArtifact ?? createOpenAIImagesGenerationArtifact
-  const createdFrames = await Promise.all(
-    targetScenes.map(async (scene) => {
-      throwIfTaskCanceled(input.signal)
-      await input.onSceneStart?.(scene, targetScenes.length)
-      const prompt = buildKeyframePrompt(scene, aspectRatio)
-      const generated =
+  const createOpenAIImagesArtifacts = deps.createOpenAIImagesGenerationArtifacts ?? createOpenAIImagesGenerationArtifacts
+  const splitCompositeGrid = deps.splitCompositeGridArtifact ?? splitCompositeGridArtifact
+  const hashPrompt = (prompt: string) => createHash("sha256").update(prompt).digest("hex").slice(0, 16)
+  const modelFallbackEvents: Array<{
+    at: string
+    trigger: string
+    reason: string
+    fromModel: string
+    toModel: string
+  }> = []
+  const findFallbackRuntime = (error: unknown) => {
+    const trigger = getImageFallbackTrigger(error)
+    if (!trigger) {
+      return null
+    }
+    const runtime = imageFallbackRuntimes.find((candidate) => candidate.fallbackTriggers.includes(trigger)) ?? null
+    return runtime ? { trigger, runtime } : null
+  }
+  const getRuntimeModelId = (runtime: ImageGenerationRuntime) =>
+    runtime.kind === "gateway" ? runtime.model : runtime.providerModelId
+  const createImageArtifactWithFallback = async (prompt: string) => {
+    try {
+      const artifact =
         imageRuntime.kind === "gemini-native"
           ? await createGeminiArtifact({
               baseUrl: imageRuntime.baseUrl,
@@ -3120,44 +4089,358 @@ export async function createKeyframeBundle(input: {
                 size: "1024x1024",
                 signal: input.signal,
               })
-          : imageRuntime.kind === "openai-images-generation"
-            ? await createOpenAIImagesArtifact({
-                baseUrl: imageRuntime.baseUrl,
-                apiKey: imageRuntime.apiKey,
-                model: imageRuntime.providerModelId,
-                prompt,
-                size: "1024x1024",
-                quality: imageRuntime.quality,
-                responseFormat: imageRuntime.responseFormat,
-                signal: input.signal,
-              })
-          : await createGatewayArtifact({
-              model: imageRuntime.model,
-              prompt,
-              size: "1024x1024",
+            : imageRuntime.kind === "openai-images-generation"
+              ? await createOpenAIImagesArtifact({
+                  baseUrl: imageRuntime.baseUrl,
+                  apiKey: imageRuntime.apiKey,
+                  model: imageRuntime.providerModelId,
+                  prompt,
+                  size: "1024x1024",
+                  quality: imageRuntime.quality,
+                  responseFormat: imageRuntime.responseFormat,
+                  signal: input.signal,
+                })
+              : await createGatewayArtifact({
+                  model: imageRuntime.model,
+                  prompt,
+                  size: "1024x1024",
+                  signal: input.signal,
+                })
+      return { artifact, runtime: imageRuntime }
+    } catch (error) {
+      const fallback = findFallbackRuntime(error)
+      if (!fallback) {
+        throw error
+      }
+      modelFallbackEvents.push({
+        at: new Date().toISOString(),
+        trigger: fallback.trigger,
+        reason: error instanceof Error ? error.message : String(error),
+        fromModel: getRuntimeModelId(imageRuntime),
+        toModel: fallback.runtime.providerModelId,
+      })
+      const artifact = await createOpenAIImagesArtifact({
+        baseUrl: fallback.runtime.baseUrl,
+        apiKey: fallback.runtime.apiKey,
+        model: fallback.runtime.providerModelId,
+        prompt,
+        size: "1024x1024",
+        quality: fallback.runtime.quality,
+        responseFormat: fallback.runtime.responseFormat,
+        signal: input.signal,
+      })
+      return { artifact, runtime: fallback.runtime }
+    }
+  }
+  const createOpenAIImagesBatchWithFallback = async (inputBatch: {
+    prompt: string
+    count: number
+    size: string
+  }) => {
+    if (imageRuntime.kind !== "openai-images-generation") {
+      throw new Error("Batch keyframes require OpenAI images generation runtime")
+    }
+    try {
+      const artifacts = await createOpenAIImagesArtifacts({
+        baseUrl: imageRuntime.baseUrl,
+        apiKey: imageRuntime.apiKey,
+        model: imageRuntime.providerModelId,
+        prompt: inputBatch.prompt,
+        count: inputBatch.count,
+        size: inputBatch.size,
+        quality: imageRuntime.quality,
+        responseFormat: imageRuntime.responseFormat,
+        signal: input.signal,
+      })
+      return { artifacts, runtime: imageRuntime }
+    } catch (error) {
+      const fallback = findFallbackRuntime(error)
+      if (!fallback) {
+        throw error
+      }
+      modelFallbackEvents.push({
+        at: new Date().toISOString(),
+        trigger: fallback.trigger,
+        reason: error instanceof Error ? error.message : String(error),
+        fromModel: imageRuntime.providerModelId,
+        toModel: fallback.runtime.providerModelId,
+      })
+      const artifacts = await createOpenAIImagesArtifacts({
+        baseUrl: fallback.runtime.baseUrl,
+        apiKey: fallback.runtime.apiKey,
+        model: fallback.runtime.providerModelId,
+        prompt: inputBatch.prompt,
+        count: inputBatch.count,
+        size: inputBatch.size,
+        quality: fallback.runtime.quality,
+        responseFormat: fallback.runtime.responseFormat,
+        signal: input.signal,
+      })
+      return { artifacts, runtime: fallback.runtime }
+    }
+  }
+  const executionBrief = input.detail.taskRunConfig.executionBrief ?? null
+  const executionBriefHash = executionBrief ? hashShort(executionBrief) : null
+  const getFramePrompt = (scene: StoryboardScene) =>
+    resolveSceneKeyframePrompt({
+      detail: input.detail,
+      scene,
+      aspectRatio,
+    })
+	  const writeGeneratedFrame = async (scene: StoryboardScene, prompt: string, generated: {
+	    bytes: Buffer
+	    extension: string
+	    generationId: string | null
+	  }, metadata: {
+    generationMode?: "batch" | "single"
+    batchId?: string | null
+    batchIndex?: number | null
+    promptSource?: KeyframePromptSource
+    keyframePlan?: ReturnType<typeof resolveExecutionBriefKeyframe>
+	    cropSourceFileName?: string | null
+	    cropPanelRect?: { x: number; y: number; width: number; height: number } | null
+	    model?: string
+	  } = {}) => {
+    const existingFrame = existingFrames.find((frame) => frame.sceneId === scene.id || frame.sceneIndex === scene.index)
+    const existingFileName = existingFrame?.fileName?.trim()
+    const existingExtension = existingFileName ? path.extname(existingFileName).replace(/^\./, "").toLowerCase() : ""
+    const fileName = existingFileName && existingExtension === generated.extension.toLowerCase()
+      ? existingFileName
+      : `scene-${String(scene.index + 1).padStart(2, "0")}.${generated.extension}`
+    const filePath = path.join(keyframeDir, fileName)
+    await writeFileAtomic(filePath, generated.bytes)
+    return {
+      sceneId: scene.id,
+      sceneIndex: scene.index,
+      title: scene.title,
+      prompt,
+      fileName,
+      filePath,
+	      model: metadata.model ?? input.model,
+      remoteTaskId: generated.generationId,
+      generationMode: metadata.generationMode ?? input.detail.taskRunConfig.keyframeGenerationMode,
+      batchId: metadata.batchId ?? null,
+      batchIndex: metadata.batchIndex ?? null,
+      promptSource: metadata.promptSource ?? "scene.imagePrompt",
+      executionBriefKeyframeIndex: metadata.keyframePlan?.index ?? null,
+      timestampRange: metadata.keyframePlan?.timestampRange ?? null,
+      narrativeRole: metadata.keyframePlan?.narrativeRole ?? null,
+      visualGoal: metadata.keyframePlan?.visualGoal ?? null,
+      promptHash: hashPrompt(prompt),
+      imagePromptHash: hashPrompt(prompt),
+      promptSummary: prompt.slice(0, 240),
+      cropSourceFileName: metadata.cropSourceFileName ?? null,
+      cropPanelRect: metadata.cropPanelRect ?? null,
+    }
+  }
+  const generateSingleFrame = async (scene: StoryboardScene) => {
+    throwIfTaskCanceled(input.signal)
+    await input.onSceneStart?.(scene, targetScenes.length)
+    const framePrompt = getFramePrompt(scene)
+    const prompt = framePrompt.prompt
+    const generated = await createImageArtifactWithFallback(prompt)
+
+    return writeGeneratedFrame(scene, prompt, generated.artifact, {
+      generationMode: "single",
+      promptSource: framePrompt.promptSource,
+      keyframePlan: framePrompt.keyframePlan,
+      model: getRuntimeModelId(generated.runtime),
+    })
+  }
+  type GeneratedFrameRecord = {
+    sceneId: string
+    sceneIndex: number
+    title: string
+    prompt?: string
+    fileName: string
+    filePath: string
+    model?: string
+    remoteTaskId?: string | null
+    generationMode?: "batch" | "single"
+    batchId?: string | null
+    batchIndex?: number | null
+    promptHash?: string
+    promptSummary?: string
+    promptSource?: KeyframePromptSource
+    executionBriefKeyframeIndex?: number | null
+    timestampRange?: string | null
+    narrativeRole?: string | null
+    visualGoal?: string | null
+    imagePromptHash?: string
+    cropSourceFileName?: string | null
+    cropPanelRect?: { x: number; y: number; width: number; height: number } | null
+  }
+  let createdFrames: GeneratedFrameRecord[] | null = null
+  const batchGroups: Array<{
+    batchId: string
+    requestedCount: number
+    returnedCount: number
+    elapsedMs: number
+    providerId: string
+    modelId: string
+    providerModelId: string
+    promptHash: string
+    frameIndexes: number[]
+    fallbackUsed: boolean
+    returnMode?: "api_multi_image" | "composite_grid"
+    compositeLayout?: string | null
+    compositeSize?: string | null
+    panelSize?: string | null
+  }> = []
+  const fallbackEvents: Array<{
+    at: string
+    reason: string
+    from: "batch"
+    to: "single"
+    affectedFrameIndexes: number[]
+  }> = []
+  const shouldUseBatchKeyframes =
+    !requestedSceneIds &&
+    input.detail.taskRunConfig.keyframeGenerationMode === "batch" &&
+    imageRuntime.kind === "openai-images-generation" &&
+    targetScenes.length > 1
+
+  if (shouldUseBatchKeyframes) {
+    for (const scene of targetScenes) {
+      throwIfTaskCanceled(input.signal)
+      await input.onSceneStart?.(scene, targetScenes.length)
+    }
+
+    const maxBatchImages = Math.max(1, imageRuntime.maxBatchImages ?? targetScenes.length)
+    const batchCreatedFrames: GeneratedFrameRecord[] = []
+    for (let startIndex = 0; startIndex < targetScenes.length; startIndex += maxBatchImages) {
+      const batchScenes = targetScenes.slice(startIndex, startIndex + maxBatchImages)
+      const batchId = `batch-${batchGroups.length + 1}`
+      const explicitLayout = parseCompositeLayout(imageRuntime.compositeGridLayout)
+      const layoutMatchesSceneCount = explicitLayout
+        ? explicitLayout.columns * explicitLayout.rows === batchScenes.length
+        : false
+      const compositeLayout = resolveCompositeGridLayout(batchScenes.length, aspectRatio, {
+        layout: layoutMatchesSceneCount ? imageRuntime.compositeGridLayout : undefined,
+        size: layoutMatchesSceneCount ? imageRuntime.compositeGridSize : undefined,
+      })
+      const useCompositeGrid = imageRuntime.batchReturnMode === "composite_grid" && batchScenes.length > 1
+      const promptReadyScenes = batchScenes.map((scene) => {
+        const framePrompt = getFramePrompt(scene)
+        return buildPromptReadyScene(scene, framePrompt.prompt, framePrompt.keyframePlan?.visualGoal)
+      })
+      const prompt = useCompositeGrid
+        ? buildCompositeGridKeyframePrompt({
+            scenes: promptReadyScenes,
+            aspectRatio,
+            visualSeedInput: input.detail.taskRunConfig.visualSeedInput,
+            layout: compositeLayout,
+          })
+        : buildBatchKeyframePrompt({
+            scenes: promptReadyScenes,
+            aspectRatio,
+            visualSeedInput: input.detail.taskRunConfig.visualSeedInput,
+          })
+
+      try {
+        const batchStartedAt = Date.now()
+        const batchResult = await createOpenAIImagesBatchWithFallback({
+          prompt,
+          count: batchScenes.length,
+          size: useCompositeGrid ? compositeLayout.size : "1024x1024",
+        })
+        const generatedArtifacts = batchResult.artifacts
+
+        const compositePanels = useCompositeGrid && generatedArtifacts.length === 1
+          ? await splitCompositeGrid({
+              artifact: generatedArtifacts[0],
+              scenes: batchScenes,
+              layout: compositeLayout,
+              workDir: keyframeDir,
               signal: input.signal,
             })
+          : []
+        const returnedCount = useCompositeGrid && compositePanels.length
+          ? Math.min(compositePanels.length, batchScenes.length)
+          : Math.min(generatedArtifacts.length, batchScenes.length)
+        batchGroups.push({
+          batchId,
+          requestedCount: batchScenes.length,
+          returnedCount,
+          elapsedMs: Date.now() - batchStartedAt,
+          providerId: batchResult.runtime.providerId,
+          modelId: batchResult.runtime.model,
+          providerModelId: batchResult.runtime.providerModelId,
+          promptHash: hashPrompt(prompt),
+          frameIndexes: batchScenes.slice(0, returnedCount).map((scene) => scene.index),
+          fallbackUsed: returnedCount < batchScenes.length,
+          returnMode: useCompositeGrid ? "composite_grid" : "api_multi_image",
+          compositeLayout: useCompositeGrid ? compositeLayout.label : null,
+          compositeSize: useCompositeGrid ? compositeLayout.size : null,
+          panelSize: useCompositeGrid ? `${compositeLayout.panelWidth}x${compositeLayout.panelHeight}` : null,
+        })
 
-      const existingFrame = existingFrames.find((frame) => frame.sceneId === scene.id || frame.sceneIndex === scene.index)
-      const existingFileName = existingFrame?.fileName?.trim()
-      const existingExtension = existingFileName ? path.extname(existingFileName).replace(/^\./, "").toLowerCase() : ""
-      const fileName = existingFileName && existingExtension === generated.extension.toLowerCase()
-        ? existingFileName
-        : `scene-${String(scene.index + 1).padStart(2, "0")}.${generated.extension}`
-      const filePath = path.join(keyframeDir, fileName)
-      await writeFileAtomic(filePath, generated.bytes)
-      return {
-        sceneId: scene.id,
-        sceneIndex: scene.index,
-        title: scene.title,
-        prompt,
-        fileName,
-        filePath,
-        model: input.model,
-        remoteTaskId: generated.generationId,
+        if (useCompositeGrid && compositePanels.length) {
+          batchCreatedFrames.push(
+            ...await Promise.all(
+              compositePanels.slice(0, returnedCount).map((panel) => {
+                const framePrompt = getFramePrompt(panel.scene)
+                return writeGeneratedFrame(panel.scene, framePrompt.prompt, {
+                  bytes: panel.bytes,
+                  extension: panel.extension,
+                  generationId: panel.generationId,
+                }, {
+                  generationMode: "batch",
+                  batchId,
+                  batchIndex: panel.batchIndex,
+                  promptSource: framePrompt.promptSource,
+                  keyframePlan: framePrompt.keyframePlan,
+	                  cropSourceFileName: "cropSourceFileName" in panel ? panel.cropSourceFileName : null,
+	                  cropPanelRect: "cropPanelRect" in panel ? panel.cropPanelRect : null,
+	                  model: batchResult.runtime.providerModelId,
+	                })
+              }),
+            ),
+          )
+        } else {
+          batchCreatedFrames.push(
+            ...await Promise.all(
+              batchScenes.slice(0, returnedCount).map((scene, index) => {
+                const framePrompt = getFramePrompt(scene)
+                return writeGeneratedFrame(scene, framePrompt.prompt, generatedArtifacts[index], {
+                  generationMode: "batch",
+                  batchId,
+                  batchIndex: index,
+	                  promptSource: framePrompt.promptSource,
+	                  keyframePlan: framePrompt.keyframePlan,
+	                  model: batchResult.runtime.providerModelId,
+	                })
+              }),
+            ),
+          )
+        }
+        const missingScenes = batchScenes.slice(returnedCount)
+        if (missingScenes.length) {
+          fallbackEvents.push({
+            at: new Date().toISOString(),
+            reason: `Batch image response returned ${returnedCount}/${batchScenes.length} frames`,
+            from: "batch",
+            to: "single",
+            affectedFrameIndexes: missingScenes.map((scene) => scene.index),
+          })
+          batchCreatedFrames.push(...await Promise.all(missingScenes.map((scene) => generateSingleFrame(scene))))
+        }
+      } catch (error) {
+        fallbackEvents.push({
+          at: new Date().toISOString(),
+          reason: error instanceof Error ? error.message : "Batch image generation failed",
+          from: "batch",
+          to: "single",
+          affectedFrameIndexes: batchScenes.map((scene) => scene.index),
+        })
+        batchCreatedFrames.push(...await Promise.all(batchScenes.map((scene) => generateSingleFrame(scene))))
       }
-    }),
-  )
+    }
+    createdFrames = batchCreatedFrames
+  }
+  if (!createdFrames) {
+    createdFrames = await Promise.all(targetScenes.map((scene) => generateSingleFrame(scene)))
+  }
   const replacedKeys = new Set(createdFrames.map((frame) => `${frame.sceneId}:${frame.sceneIndex}`))
   const preservedFrames = existingFrames
     .filter((frame) => !replacedKeys.has(`${frame.sceneId ?? ""}:${frame.sceneIndex ?? -1}`))
@@ -3175,6 +4458,8 @@ export async function createKeyframeBundle(input: {
     }))
   frames.push(...[...preservedFrames, ...createdFrames].sort((left, right) => left.sceneIndex - right.sceneIndex))
 
+  const promptSources = new Set(frames.map((frame) => frame.promptSource ?? "scene.imagePrompt"))
+  const firstBatchGroup = batchGroups[0] ?? null
   const manifest = {
     taskId: input.taskId,
     createdAt,
@@ -3183,6 +4468,23 @@ export async function createKeyframeBundle(input: {
         ? imageRuntime.model
         : imageRuntime.providerModelId,
     aspectRatio,
+    version: "keyframe-manifest-v3",
+    keyframeGenerationMode: input.detail.taskRunConfig.keyframeGenerationMode,
+    promptCompilerVersion: "visual-execution-prompt-v1",
+    promptSource: promptSources.size === 1 ? [...promptSources][0] : "mixed",
+    finalPromptLanguage: executionBrief ? executionBrief.finalPromptLanguage : null,
+    executionBriefVersion: executionBrief?.version ?? null,
+    executionBriefHash,
+    modelTrace: imageModelTrace,
+    returnMode: firstBatchGroup?.returnMode ?? "single_image",
+    compositeLayout: firstBatchGroup?.compositeLayout ?? null,
+    compositeSize: firstBatchGroup?.compositeSize ?? null,
+    panelSize: firstBatchGroup?.panelSize ?? null,
+    requestedFrameCount: targetScenes.length,
+    returnedFrameCount: createdFrames.length,
+    batchGroups,
+    fallbackEvents,
+    modelFallbackEvents,
     sceneCount: frames.length,
     frames,
   }

@@ -12,6 +12,10 @@ import {
   renderSpecSchema,
   terminalPresetIdSchema,
 } from "./video-blueprint.js"
+import {
+  bilingualUnderstandingPreviewSchema,
+  englishExecutionBriefSchema,
+} from "./understanding-preview.js"
 
 const planningChannelProfileSchema = z.enum(["tiktok", "reels", "shorts"])
 const planningVideoDurationSecSchema = z.union([z.literal(15), z.literal(30), z.literal(45), z.literal(60)])
@@ -62,6 +66,8 @@ export const textPlanningOutputSchema = z.object({
   targetDurationSec: planningVideoDurationSecSchema,
   finalVoiceoverScript: z.string().min(1),
   visualStyleGuide: z.string().min(1),
+  bilingualUnderstandingPreview: bilingualUnderstandingPreviewSchema.nullable().optional(),
+  englishExecutionBrief: englishExecutionBriefSchema.nullable().optional(),
   ctaLine: z.string().min(1),
   scenePlan: z.array(planningSceneSchema).min(1),
   blueprint: planningBlueprintSchema,

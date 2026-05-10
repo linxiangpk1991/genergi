@@ -64,6 +64,9 @@ async function buildArchive() {
     "--exclude=.turbo",
     "--exclude=dist",
     "--exclude=coverage",
+    "--exclude=tmp",
+    "--exclude=genergi-task-review-smoke-*.png",
+    "--exclude=tmp-playwright-snapshot.md",
     "--exclude=.tmp-*",
     "--exclude=genergi-release.tgz",
     "--exclude=apps/api/.data",
@@ -260,12 +263,21 @@ if ! sudo systemctl reload nginx; then
   exit 1
 fi
 
+api_ready=0
 for attempt in 1 2 3 4 5 6 7 8 9 10; do
-  if curl -fsS http://127.0.0.1:8787/api/health >/tmp/genergi-health.json; then
+  if curl -fsS http://127.0.0.1:8787/api/health >/tmp/genergi-health.json 2>/tmp/genergi-health.err; then
+    api_ready=1
     break
   fi
   sleep 2
 done
+
+if [ "$api_ready" -ne 1 ]; then
+  echo "API health check did not become ready after release activation. Rolling back." >&2
+  cat /tmp/genergi-health.err >&2 || true
+  rollback_release
+  exit 1
+fi
 
 cat /tmp/genergi-health.json
 curl -fsS -H 'Host: ai.genergius.com' http://127.0.0.1/api/health
@@ -273,6 +285,7 @@ curl -kfsSL --resolve ai.genergius.com:443:127.0.0.1 https://ai.genergius.com/ >
 grep -q "GENERGI" /tmp/genergi-home.html
 curl -kfsSL --resolve ai.genergius.com:443:127.0.0.1 https://ai.genergius.com/api/bootstrap >/tmp/genergi-bootstrap.json
 curl -kfsSL --resolve ai.genergius.com:443:127.0.0.1 https://ai.genergius.com/api/auth/session >/tmp/genergi-session.json
+systemctl is-active genergi-api
 systemctl is-active genergi-worker
 ls -ld ${remoteRoot}/current ${remoteRoot}/current.prev 2>/dev/null || true
 find ${remoteRoot}/releases -maxdepth 1 -mindepth 1 -type d | sort

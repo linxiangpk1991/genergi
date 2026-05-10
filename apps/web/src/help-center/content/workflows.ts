@@ -4,14 +4,14 @@ export const workflowGuides: HelpWorkflowGuide[] = [
   {
     id: "launch-review-delivery",
     title: "新建任务 -> 审阅 -> 交付",
-    summary: "适合运营理解一条视频从原始文案到成片交付的完整主流程。",
+    summary: "适合运营理解一条视频从视频内容到成片交付的完整主流程。",
     audienceNote: "最适合第一次接触系统的运营同学。",
     stages: [
       {
         id: "launch",
         title: "任务启动",
-        description: "在任务启动页填写任务名称、原始文案、时长、尺寸和所属项目，发起新任务。",
-        notes: ["先把内容写清楚，再确认输出时长和终端尺寸。"],
+        description: "在任务启动页填写任务名称、视频内容、可选画面参考、时长、尺寸和所属项目，发起新任务。",
+        notes: ["先把内容写清楚，再确认输出时长和终端尺寸。", "画面参考是可选项；不填写时，系统会按视频内容补全主角、场景、风格、情绪和禁止项。"],
       },
       {
         id: "task-review",
@@ -27,7 +27,7 @@ export const workflowGuides: HelpWorkflowGuide[] = [
       },
     ],
     decisionPoints: [
-      "任务启动时只需要确定原始文案、时长和终端尺寸，系统会按保真优先的单一路径规划视频分段。",
+      "任务启动时只需要确定视频内容、可选画面参考、时长和终端尺寸，系统会按保真优先的单一路径规划视频分段和关键画面。",
       "任务审核通过后，任务才会继续生成正片；审核驳回则需要重做方案。",
       "素材与交付里优先看成片视频，再决定是否需要继续回查中间素材。",
     ],
@@ -35,7 +35,7 @@ export const workflowGuides: HelpWorkflowGuide[] = [
   },
   {
     id: "task-launch-source-sop",
-    title: "原始文案启动 SOP",
+    title: "视频内容启动 SOP",
     summary: "用于运营在任务启动台把业务内容稳定转成审核优先任务，减少漏填、跑题和重复提交。",
     audienceNote: "适合日常新建任务、批量发车前自检和新人上手。",
     stages: [
@@ -43,13 +43,19 @@ export const workflowGuides: HelpWorkflowGuide[] = [
         id: "project-output",
         title: "先定项目与输出",
         description: "选择所属项目、终端预设和目标时长，确认默认渠道、输出语言和画幅是否符合本次交付。",
-        notes: ["项目决定品牌方向和复用约束。", "时长会影响场景数量和预算粗估。"],
+        notes: ["项目决定品牌方向和复用约束。", "时长会默认决定关键画面数量：约每 15 秒 1 张。"],
+      },
+      {
+        id: "visual-brief",
+        title: "可选补充画面参考",
+        description: "如果你知道主角、场景、风格、情绪、禁止项或是否保持角色一致，就写在画面参考里；如果还不清楚，可以留空让文本模型补全。",
+        notes: ["不要手动拆成很多输入框。", "批量生成适合一次返回整组画面，单张生成适合局部微调或模型不支持批量时使用。"],
       },
       {
         id: "source-copy",
-        title: "再写原始文案",
+        title: "再写视频内容",
         description: "把产品/服务、目标人群、核心卖点、使用场景、语气和 CTA 写清楚；必要时套用页面内模板补齐结构。",
-        notes: ["原始文案是业务表达，不是技术说明。", "越清楚的目标人群和场景，越容易得到可审的生成方案。"],
+        notes: ["视频内容是业务表达，不是技术说明。", "越清楚的目标人群和场景，越容易得到可审的生成方案。"],
       },
       {
         id: "preflight",
@@ -65,8 +71,8 @@ export const workflowGuides: HelpWorkflowGuide[] = [
       },
     ],
     decisionPoints: [
-      "原始文案至少要包含明确主题、卖点、目标人群或 CTA，缺少关键内容时先补充再提交。",
-      "同项目、同标题、同原始文案或同长度内容重复时，先确认是否复用已有任务。",
+      "视频内容至少要包含明确主题、卖点、目标人群或 CTA，缺少关键内容时先补充再提交。",
+      "同项目、同标题、同视频内容或同长度内容重复时，先确认是否复用已有任务。",
       "审核优先流程的正确顺序是：提交 -> 生成方案/关键画面准备 -> 任务审核 -> 审核通过后继续生成正片。",
     ],
     relatedFeatureIds: ["task-launch", "task-review", "batch-dashboard"],
@@ -161,7 +167,7 @@ export const workflowGuides: HelpWorkflowGuide[] = [
       {
         id: "do-not",
         title: "不要做什么",
-        description: "不要把看板当作重试按钮合集，不要在容量异常时重复提交同一原始文案，不要跳过素材排查直接恢复卡住任务。",
+        description: "不要把看板当作重试按钮合集，不要在容量异常时重复提交同一视频内容，不要跳过素材排查直接恢复卡住任务。",
       },
     ],
     decisionPoints: [
@@ -261,7 +267,7 @@ export const workflowGuides: HelpWorkflowGuide[] = [
       {
         id: "acceptance",
         title: "验收什么",
-        description: "验收成片视频能预览或下载、字幕和音频对齐、时长偏差在可接受范围、关键画面与原始文案一致。",
+        description: "验收成片视频能预览或下载、字幕和音频对齐、时长偏差在可接受范围、关键画面与视频内容一致。",
       },
       {
         id: "do-not",
@@ -295,7 +301,7 @@ export const workflowGuides: HelpWorkflowGuide[] = [
       {
         id: "acceptance",
         title: "验收什么",
-        description: "验收原始文案没有跑偏、视频分段连续、关键画面可用、生成说明不互相矛盾、通过后任务能继续生成正片。",
+        description: "验收视频内容没有跑偏、视频分段连续、关键画面可用、生成说明不互相矛盾、通过后任务能继续生成正片。",
       },
       {
         id: "do-not",

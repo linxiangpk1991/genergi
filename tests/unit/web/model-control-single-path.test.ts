@@ -17,9 +17,13 @@ vi.mock("../../../apps/web/src/api", async () => {
       updateModeModelDefaults: vi.fn(),
       listModelProviders: vi.fn(),
       listModelRegistry: vi.fn(),
+      listModelDiagnostics: vi.fn(),
+      getModelQualitySummary: vi.fn(),
       createModelRegistryEntry: vi.fn(),
       updateModelRegistryEntry: vi.fn(),
       validateModelRegistryEntry: vi.fn(),
+      getModelRoutingPolicies: vi.fn(),
+      updateModelRoutingPolicies: vi.fn(),
     },
   }
 })
@@ -27,7 +31,9 @@ vi.mock("../../../apps/web/src/api", async () => {
 import { api } from "../../../apps/web/src/api"
 import { ModelControlCenterPage } from "../../../apps/web/src/pages/ModelControlCenterPage"
 import { ModelDefaultsPage } from "../../../apps/web/src/pages/ModelDefaultsPage"
+import { ModelDiagnosticsPage } from "../../../apps/web/src/pages/ModelDiagnosticsPage"
 import { ModelRegistryPage } from "../../../apps/web/src/pages/ModelRegistryPage"
+import { ModelRoutingPage } from "../../../apps/web/src/pages/ModelRoutingPage"
 
 async function waitFor(assertion: () => void, timeoutMs = 3000) {
   const deadline = Date.now() + timeoutMs
@@ -118,6 +124,72 @@ function createSelectablePoolsResponse() {
   }
 }
 
+function createRoutingPoliciesResponse() {
+  const emptyPolicy = {
+    enabled: false,
+    strategy: "balanced",
+    primary: null,
+    fallbacks: [],
+    fallbackTriggers: ["timeout", "rate_limit", "provider_error"],
+    operatorNote: "",
+  }
+  const slots = {
+    textModel: emptyPolicy,
+    imageModel: {
+      ...emptyPolicy,
+      enabled: true,
+      strategy: "quality_first",
+      primary: { modelId: "image-hq" },
+      fallbacks: [{ modelId: "image-global" }],
+      operatorNote: "图片优先保证人物一致。",
+    },
+    videoModel: emptyPolicy,
+    ttsProvider: emptyPolicy,
+  }
+  return {
+    policies: {
+      global: slots,
+      modes: {
+        mass_production: slots,
+        high_quality: slots,
+      },
+      updatedAt: "2026-05-09T08:00:00.000Z",
+    },
+    resolved: {
+      global: {
+        textModel: { ...emptyPolicy, strategyLabel: "均衡", primary: null, fallbacks: [], fallbackTriggerLabels: [], warnings: [], summary: "全局未启用路由策略，将继续使用默认模型。" },
+        imageModel: { ...emptyPolicy, enabled: true, strategyLabel: "高质量优先", primary: { recordId: "image-hq", displayName: "HQ Image" }, fallbacks: [{ recordId: "image-global", displayName: "Global Image" }], fallbackTriggerLabels: ["调用超时"], warnings: [], summary: "全局启用高质量优先，主模型HQ Image，备用1个。" },
+        videoModel: { ...emptyPolicy, strategyLabel: "均衡", primary: null, fallbacks: [], fallbackTriggerLabels: [], warnings: [], summary: "全局未启用路由策略，将继续使用默认模型。" },
+        ttsProvider: { ...emptyPolicy, strategyLabel: "均衡", primary: null, fallbacks: [], fallbackTriggerLabels: [], warnings: [], summary: "全局未启用路由策略，将继续使用默认模型。" },
+      },
+      mass_production: {
+        textModel: { ...emptyPolicy, strategyLabel: "均衡", primary: null, fallbacks: [], fallbackTriggerLabels: [], warnings: [], summary: "量产模式未启用路由策略，将继续使用默认模型。" },
+        imageModel: { ...emptyPolicy, enabled: true, strategyLabel: "高质量优先", primary: { recordId: "image-hq", displayName: "HQ Image" }, fallbacks: [{ recordId: "image-global", displayName: "Global Image" }], fallbackTriggerLabels: ["调用超时"], warnings: [], summary: "量产模式启用高质量优先，主模型HQ Image，备用1个。" },
+        videoModel: { ...emptyPolicy, strategyLabel: "均衡", primary: null, fallbacks: [], fallbackTriggerLabels: [], warnings: [], summary: "量产模式未启用路由策略，将继续使用默认模型。" },
+        ttsProvider: { ...emptyPolicy, strategyLabel: "均衡", primary: null, fallbacks: [], fallbackTriggerLabels: [], warnings: [], summary: "量产模式未启用路由策略，将继续使用默认模型。" },
+      },
+      high_quality: {
+        textModel: { ...emptyPolicy, strategyLabel: "均衡", primary: null, fallbacks: [], fallbackTriggerLabels: [], warnings: [], summary: "高质量模式未启用路由策略，将继续使用默认模型。" },
+        imageModel: { ...emptyPolicy, enabled: true, strategyLabel: "高质量优先", primary: { recordId: "image-hq", displayName: "HQ Image" }, fallbacks: [{ recordId: "image-global", displayName: "Global Image" }], fallbackTriggerLabels: ["调用超时"], warnings: [], summary: "高质量模式启用高质量优先，主模型HQ Image，备用1个。" },
+        videoModel: { ...emptyPolicy, strategyLabel: "均衡", primary: null, fallbacks: [], fallbackTriggerLabels: [], warnings: [], summary: "高质量模式未启用路由策略，将继续使用默认模型。" },
+        ttsProvider: { ...emptyPolicy, strategyLabel: "均衡", primary: null, fallbacks: [], fallbackTriggerLabels: [], warnings: [], summary: "高质量模式未启用路由策略，将继续使用默认模型。" },
+      },
+    },
+    strategyOptions: [
+      { value: "balanced", label: "均衡" },
+      { value: "quality_first", label: "高质量优先" },
+      { value: "speed_first", label: "速度优先" },
+      { value: "cost_first", label: "成本优先" },
+    ],
+    triggerOptions: [
+      { value: "timeout", label: "调用超时" },
+      { value: "rate_limit", label: "限流" },
+      { value: "provider_error", label: "接入方错误" },
+    ],
+    updatedAt: "2026-05-09T08:00:00.000Z",
+  }
+}
+
 describe("model control single-path surfaces", () => {
   let container: HTMLDivElement
   let root: Root
@@ -160,6 +232,10 @@ describe("model control single-path surfaces", () => {
         },
       ],
     } as any)
+    vi.mocked(api.listModelDiagnostics).mockResolvedValue({ diagnostics: [] } as any)
+    vi.mocked(api.getModelQualitySummary).mockResolvedValue({ totalCount: 0, items: [], updatedAt: null } as any)
+    vi.mocked(api.getModelRoutingPolicies).mockResolvedValue(createRoutingPoliciesResponse() as any)
+    vi.mocked(api.updateModelRoutingPolicies).mockResolvedValue(createRoutingPoliciesResponse() as any)
   })
 
   afterEach(async () => {
@@ -244,7 +320,6 @@ describe("model control single-path surfaces", () => {
         },
       ],
     } as any)
-
     await act(async () => {
       root.render(
         createElement(
@@ -307,6 +382,215 @@ describe("model control single-path surfaces", () => {
       expect(text).toContain("Gemini Generate Content")
       expect(text).toContain(":generateContent")
       expect(text).not.toContain("图片调用方式未标注")
+    })
+  })
+
+  it("shows the latest model smoke diagnostic on the model registry page", async () => {
+    vi.mocked(api.listModelRegistry).mockResolvedValue({
+      models: [
+        {
+          id: "model_gpt_55",
+          modelKey: "gpt-5-5",
+          providerId: "provider_openai_compatible",
+          providerDisplayName: "OpenAI Direct",
+          slotType: "textModel",
+          providerModelId: "gpt-5.5",
+          displayName: "GPT-5.5",
+          lifecycleStatus: "invalid",
+          capabilityJson: {
+            wireApi: "responses",
+          },
+        },
+      ],
+    } as any)
+    vi.mocked(api.listModelDiagnostics).mockResolvedValue({
+      diagnostics: [
+        {
+          id: "diag_1",
+          providerId: "provider_openai_compatible",
+          providerDisplayName: "OpenAI Direct",
+          providerType: "direct-openai",
+          modelId: "model_gpt_55",
+          modelDisplayName: "GPT-5.5",
+          slotType: "textModel",
+          providerModelId: "gpt-5.5",
+          transport: "direct-openai",
+          wireApi: "responses",
+          requestPath: "/v1/responses",
+          smokeMode: "connectivity",
+          status: "failed",
+          statusCode: 401,
+          durationMs: 238,
+          errorCategory: "auth_error",
+          errorMessage: "密钥错误: Incorrect API key provided",
+          createdAt: "2026-05-08T09:00:00.000Z",
+        },
+        {
+          id: "diag_0",
+          providerId: "provider_openai_compatible",
+          providerDisplayName: "OpenAI Direct",
+          providerType: "direct-openai",
+          modelId: "model_gpt_55",
+          modelDisplayName: "GPT-5.5",
+          slotType: "textModel",
+          providerModelId: "gpt-5.5",
+          transport: "direct-openai",
+          wireApi: "responses",
+          requestPath: "/v1/responses",
+          smokeMode: "connectivity",
+          status: "success",
+          statusCode: 200,
+          durationMs: 180,
+          errorCategory: null,
+          errorMessage: null,
+          createdAt: "2026-05-08T08:00:00.000Z",
+        },
+      ],
+    } as any)
+
+    await act(async () => {
+      root.render(
+        createElement(
+          MemoryRouter,
+          { initialEntries: ["/model-control-center/registry"] },
+          createElement(
+            Routes,
+            null,
+            createElement(Route, { path: "/model-control-center/registry", element: createElement(ModelRegistryPage) }),
+          ),
+        ),
+      )
+    })
+
+    await waitFor(() => {
+      const text = container.textContent ?? ""
+      expect(text).toContain("最近检查")
+      expect(text).toContain("Responses API")
+      expect(text).toContain("/v1/responses")
+      expect(text).toContain("238ms")
+      expect(text).toContain("密钥错误")
+      expect(text).toContain("最近一次成功")
+    })
+  })
+
+  it("shows model diagnostic records with classified errors and request paths", async () => {
+    vi.mocked(api.listModelDiagnostics).mockResolvedValue({
+      diagnostics: [
+        {
+          id: "diag_1",
+          providerId: "provider_openai_direct",
+          providerDisplayName: "OpenAI Direct",
+          providerType: "direct-openai",
+          modelId: "model_gpt_55",
+          modelDisplayName: "GPT-5.5",
+          slotType: "textModel",
+          providerModelId: "gpt-5.5",
+          transport: "direct-openai",
+          wireApi: "responses",
+          requestPath: "/v1/responses",
+          smokeMode: "connectivity",
+          status: "failed",
+          statusCode: 401,
+          durationMs: 311,
+          errorCategory: "auth_error",
+          errorMessage: "密钥错误: Incorrect API key provided",
+          createdAt: "2026-05-08T09:00:00.000Z",
+        },
+      ],
+    } as any)
+
+    await act(async () => {
+      root.render(
+        createElement(
+          MemoryRouter,
+          { initialEntries: ["/model-control-center/diagnostics"] },
+          createElement(
+            Routes,
+            null,
+            createElement(Route, { path: "/model-control-center/diagnostics", element: createElement(ModelDiagnosticsPage) }),
+          ),
+        ),
+      )
+    })
+
+    await waitFor(() => {
+      const text = container.textContent ?? ""
+      expect(text).toContain("模型检查记录")
+      expect(text).toContain("GPT-5.5")
+      expect(text).toContain("密钥或权限问题")
+      expect(text).toContain("/v1/responses")
+      expect(text).toContain("密钥错误")
+      expect(text).not.toContain("sk-live-secret")
+    })
+  })
+
+  it("shows recent operator quality issues on the diagnostics page", async () => {
+    vi.mocked(api.getModelQualitySummary).mockResolvedValue({
+      totalCount: 3,
+      updatedAt: "2026-05-10T08:00:00.000Z",
+      items: [
+        {
+          slotType: "imageModel",
+          slotLabel: "图片模型",
+          modelId: "image-hq",
+          modelDisplayName: "HQ Image",
+          providerModelId: "gemini-3-pro-image-preview",
+          providerDisplayName: "Google",
+          issueCategory: "character_unstable",
+          reasonLabel: "人物不稳定",
+          count: 3,
+          latestAt: "2026-05-10T08:00:00.000Z",
+        },
+      ],
+    } as any)
+
+    await act(async () => {
+      root.render(
+        createElement(
+          MemoryRouter,
+          { initialEntries: ["/model-control-center/diagnostics"] },
+          createElement(
+            Routes,
+            null,
+            createElement(Route, { path: "/model-control-center/diagnostics", element: createElement(ModelDiagnosticsPage) }),
+          ),
+        ),
+      )
+    })
+
+    await waitFor(() => {
+      const text = container.textContent ?? ""
+      expect(text).toContain("最近质量问题")
+      expect(text).toContain("HQ Image")
+      expect(text).toContain("人物不稳定")
+      expect(text).toContain("3 次")
+    })
+  })
+
+  it("shows a routing strategy center with primary models, fallback models, and plain-language rules", async () => {
+    await act(async () => {
+      root.render(
+        createElement(
+          MemoryRouter,
+          { initialEntries: ["/model-control-center/routing"] },
+          createElement(
+            Routes,
+            null,
+            createElement(Route, { path: "/model-control-center/routing", element: createElement(ModelRoutingPage) }),
+          ),
+        ),
+      )
+    })
+
+    await waitFor(() => {
+      expect(vi.mocked(api.getModelRoutingPolicies)).toHaveBeenCalled()
+      const text = container.textContent ?? ""
+      expect(text).toContain("路由策略")
+      expect(text).toContain("主模型")
+      expect(text).toContain("备用模型")
+      expect(text).toContain("什么时候切备用")
+      expect(text).toContain("高质量模式启用高质量优先")
+      expect(text).toContain("密钥错、模型不存在不会悄悄切走")
     })
   })
 })

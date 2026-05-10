@@ -2,18 +2,33 @@ import type { HelpReleaseEntry } from "./types"
 
 export const releaseTimelineEntries: HelpReleaseEntry[] = [
   {
+    id: "2026-05-09-visual-brief-batch-keyframes",
+    versionDate: "2026-05-09",
+    title: "画面参考与批量关键画面上线",
+    summary: "任务启动支持用可选画面参考描述主角、场景、风格、情绪和禁止项，并按视频时长自动规划关键画面数量；支持的生图模型可一次返回整组关键画面。",
+    affectedFeatureIds: ["task-launch", "task-review", "batch-dashboard", "asset-center", "model-control-center"],
+    operatorNotes: [
+      "运营不需要手动拆分四张图的提示词，只需提供视频内容，可选补充画面参考。",
+      "60 秒视频默认规划 4 张关键画面；批量和单张生成方式会随任务固定并在审核、看板、素材页显示。",
+    ],
+    workflowChanges: [
+      "任务启动新增画面参考（可选）输入和批量/单张选择。",
+      "任务审核新增画面参考与关键画面追踪，素材与交付、生产看板、任务管理同步展示关键画面数量和生成方式。",
+    ],
+  },
+  {
     id: "2026-04-21-single-path-fidelity-first",
     versionDate: "2026-04-21",
-    title: "单一路径原始文案保真重构上线",
-    summary: "任务启动页收口为单一路径，只保留原始文案、项目、时长和终端尺寸约束，文本规划与生成说明重新锚定原始文案。",
+    title: "单一路径视频内容保真重构上线",
+    summary: "任务启动页收口为单一路径，只保留视频内容、项目、时长和终端尺寸约束，文本规划与生成说明重新锚定视频内容。",
     affectedFeatureIds: ["task-launch", "task-review", "batch-dashboard", "asset-center", "model-control-center"],
     operatorNotes: [
       "任务启动页不再暴露渠道、生成方式和任务级临时覆盖，避免在入口处改写内容方向。",
-      "任务审核现在会更强调原始文案、一致性要求和关键画面/生成说明是否真的围绕同一内容展开。",
+      "任务审核现在会更强调视频内容、一致性要求和关键画面/生成说明是否真的围绕同一内容展开。",
     ],
     workflowChanges: [
       "新任务统一按保真优先的单一路径创建，先审核生成方案与关键画面，再继续生成正片。",
-      "画面说明和视频说明改为由系统基于原始文案和分段内容组合生成，不再直接采用文本模型自由改写后的整段说明。",
+      "画面说明和视频说明改为由系统基于视频内容和分段内容组合生成，不再直接采用文本模型自由改写后的整段说明。",
     ],
   },
   {

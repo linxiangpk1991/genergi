@@ -134,9 +134,9 @@ export function getLaunchReadiness(input: {
     },
     {
       key: "script",
-      label: "原始文案",
+      label: "视频内容",
       status: script ? "ready" : "risk",
-      detail: script ? "已填写原始文案。" : "必须补齐原始文案，否则无法稳定生成正确视频。",
+      detail: script ? "已填写视频内容。" : "必须补齐视频内容，否则无法稳定生成正确视频。",
     },
   ]
 
@@ -233,7 +233,7 @@ export function findSimilarLaunchTasks(input: {
       const reason = exactishTitle
         ? "任务名称相似"
         : scriptOverlap >= 0.6 && nearDuration
-          ? "原始文案和目标时长相似"
+          ? "视频内容和目标时长相似"
         : sameProject && sameDuration
           ? "同项目和同目标时长"
           : "配置相似"
@@ -259,7 +259,7 @@ export function findSimilarLaunchTasks(input: {
 }
 
 export function estimateLaunchProduction(targetDurationSec: number): LaunchProductionEstimate {
-  const sceneCount = targetDurationSec <= 8 ? 1 : Math.max(1, Math.ceil(targetDurationSec / 8))
+  const sceneCount = Math.max(1, Math.ceil(targetDurationSec / 15))
   const estimatedBudgetCny = Number((sceneCount * 1.25).toFixed(2))
   const routeLabel = sceneCount === 1 ? "单条成片" : "多段成片"
   return {

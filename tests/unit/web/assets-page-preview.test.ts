@@ -85,6 +85,8 @@ describe("AssetsPage inline preview", () => {
           progressPct: 100,
           retryCount: 0,
           estimatedCostCny: 4.2,
+          keyframeCount: 2,
+          keyframeGenerationMode: "batch",
           modelUsage: {
             textModel: { id: "text.default", label: "Claude Opus 4.6", provider: "anthropic-compatible" },
             imageModel: { id: "gemini-3-pro-image-preview-2k", label: "Gemini 3 Pro Image Preview 2k", provider: "openai-compatible" },
@@ -128,6 +130,15 @@ describe("AssetsPage inline preview", () => {
           previewKind: "text",
           modifiedAt: "2026-04-20T00:00:00.000Z",
           downloadFileName: "source-script.txt",
+          modelTrace: {
+            stage: "textModel",
+            slotType: "textModel",
+            label: "Claude Opus 4.6",
+            providerType: "anthropic-compatible",
+            providerModelId: "claude-opus-4.6",
+            wireApi: "messages",
+            requestPath: "/v1/messages",
+          },
         },
       ],
     } as any)
@@ -183,10 +194,12 @@ describe("AssetsPage inline preview", () => {
       expect(vi.mocked(api.getTaskAssets)).toHaveBeenCalledWith("task_assets")
       expect(container.textContent ?? "").toContain("任务时间线")
       expect(container.textContent ?? "").toContain("关键画面生成中 3/4")
-      expect(container.textContent ?? "").toContain("本次使用的模型")
+      expect(container.textContent ?? "").toContain("本次用了哪些模型")
       expect(container.textContent ?? "").toContain("Claude Opus 4.6")
       expect(container.textContent ?? "").toContain("Gemini 3 Pro Image Preview 2k")
       expect(container.textContent ?? "").toContain("Veo 3.1 Portrait HD")
+      expect(container.textContent ?? "").toContain("生成模型")
+      expect(container.textContent ?? "").toContain("Claude Opus 4.6，用于生成这个素材")
     })
 
     const previewButton = Array.from(container.querySelectorAll("button")).find((button) =>
@@ -200,6 +213,67 @@ describe("AssetsPage inline preview", () => {
 
     await waitFor(() => {
       expect(container.textContent ?? "").toContain("Original source script.")
+    })
+  })
+
+  it("uses actual keyframe image assets when historical task config has a stale count", async () => {
+    vi.mocked(api.getTaskAssets).mockResolvedValue({
+      assets: Array.from({ length: 4 }, (_, index) => ({
+        id: `task_assets_keyframe_${index + 1}`,
+        taskId: "task_assets",
+        assetType: "keyframe_image",
+        label: `关键画面 ${index + 1}`,
+        status: "ready",
+        path: `/tmp/keyframe-${index + 1}.png`,
+        createdAt: "2026-04-20T00:00:00.000Z",
+        fileName: `keyframe-${index + 1}.png`,
+        directoryName: "/tmp",
+        displayPath: `/tmp/keyframe-${index + 1}.png`,
+        extension: ".png",
+        mimeType: "image/png",
+        sizeBytes: 1000,
+        sizeLabel: "1 KB",
+        exists: index === 0 ? false : true,
+        isDirectory: false,
+        previewable: true,
+        previewKind: "media",
+        modifiedAt: "2026-04-20T00:00:00.000Z",
+        downloadFileName: `keyframe-${index + 1}.png`,
+        modelTrace: index === 0
+          ? {
+              stage: "imageModel",
+              slotType: "imageModel",
+              label: "Gemini 3 Pro Image Preview 2k",
+              providerType: "openai-compatible",
+              providerModelId: "gemini-3-pro-image-preview-2k",
+              wireApi: "gemini_generate_content",
+              requestPath: ":generateContent",
+            }
+          : null,
+      })),
+    } as any)
+
+    await act(async () => {
+      root.render(
+        createElement(
+          MemoryRouter,
+          { initialEntries: ["/asset-center?taskId=task_assets"] },
+          createElement(
+            Routes,
+            null,
+            createElement(Route, { path: "/asset-center", element: createElement(AssetsPage) }),
+          ),
+        ),
+      )
+    })
+
+    await waitFor(() => {
+      const text = container.textContent ?? ""
+      expect(text).toContain("关键画面 4 张 · 批量")
+      expect(text).toContain("来自：关键画面 1")
+      expect(text).toContain("使用模型：Gemini 3 Pro Image Preview 2k")
+      expect(text).toContain("生成依据：按这段分镜的英文提示词生成")
+      expect(text).toContain("缺图：记录还在，但文件现在打不开")
     })
   })
 
@@ -389,6 +463,16 @@ describe("AssetsPage inline preview", () => {
           retryCount: 1,
           estimatedCostCny: 4.2,
           failureReason: "Scene 2 video generation timeout",
+          modelTrace: {
+            videoModel: {
+              slotType: "videoModel",
+              label: "Veo 3.1 Portrait HD",
+              providerType: "openai-compatible",
+              providerModelId: "veo3.1",
+              wireApi: "video_generation",
+              requestPath: "按视频适配器",
+            },
+          },
           createdAt: "2026-04-20T00:00:00.000Z",
           updatedAt: "2026-04-20T00:00:00.000Z",
         },
@@ -413,6 +497,9 @@ describe("AssetsPage inline preview", () => {
       const text = container.textContent ?? ""
       expect(text).toContain("失败原因")
       expect(text).toContain("Scene 2 video generation timeout")
+      expect(text).toContain("失败时使用的模型")
+      expect(text).toContain("Veo 3.1 Portrait HD")
+      expect(text).toContain("按视频适配器")
       expect(text).toContain("视频结构依据")
       expect(text).toContain("target duration 30s exceeds the current model single-shot limit of 8s")
     })

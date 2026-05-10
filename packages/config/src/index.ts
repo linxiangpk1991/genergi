@@ -1,8 +1,11 @@
 import type {
+  BilingualUnderstandingPreview,
   ChannelProfileId,
   CostEstimate,
+  EnglishExecutionBrief,
   ExecutionMode,
   GenerationMode,
+  KeyframeGenerationMode,
   ModelRef,
   ProductionModeId,
   RenderSpec,
@@ -11,7 +14,7 @@ import type {
   VideoDurationSec,
   VideoModelCapability,
 } from "@genergi/shared"
-import { resolveGenerationRoute } from "@genergi/shared"
+import { resolveDefaultKeyframeCount, resolveGenerationRoute } from "@genergi/shared"
 
 export const BRAND = {
   productName: "GENERGI 自动化视频平台",
@@ -29,7 +32,7 @@ export const GENERATION_PREFERENCES: Array<{
 }> = [
   {
     id: "user_locked",
-    label: "忠于原脚本",
+    label: "忠于视频内容",
     description: "尽量保留你原本的内容表达，只做最小必要的结构整理。",
     keywords: ["preserve original tone", "minimal structural cleanup"],
   },
@@ -188,6 +191,12 @@ export function buildDefaultTaskRunConfig(
     terminalPresetId?: TerminalPresetId
     audioStrategy?: "tts_only" | "native_plus_tts_ducked"
     subtitleStrategy?: "tts_aligned" | "whisper_cpp"
+    visualSeedInput?: string | null
+    keepCharacterConsistent?: boolean
+    keyframeGenerationMode?: KeyframeGenerationMode
+    keyframeCount?: number
+    understandingPreview?: BilingualUnderstandingPreview | null
+    executionBrief?: EnglishExecutionBrief | null
   } = {},
 ): TaskRunConfig {
   const mode = MODE_MODELS[modeId]
@@ -207,6 +216,13 @@ export function buildDefaultTaskRunConfig(
     renderSpecJson: renderSpec,
     targetDurationSec,
     generationMode,
+    visualSeedInput: options.visualSeedInput ?? null,
+    keepCharacterConsistent: options.keepCharacterConsistent ?? true,
+    keyframeGenerationMode: options.keyframeGenerationMode ?? "batch",
+    keyframeCount: Math.max(1, Math.floor(options.keyframeCount ?? resolveDefaultKeyframeCount(targetDurationSec))),
+    understandingPreview: options.understandingPreview ?? null,
+    executionBrief: options.executionBrief ?? null,
+    executionBriefVersion: "execution-brief-v1",
     enhancementMode,
     generationRoute: routeDecision.generationRoute,
     routeReason: routeDecision.routeReason,

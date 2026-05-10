@@ -6,6 +6,7 @@ import {
   planningVersionSchema,
 } from "./generation-route.js"
 import {
+  modelSlotTypeSchema,
   resolvedSlotSnapshotSchema,
   taskModelOverrideSchema,
 } from "./model-control.js"
@@ -14,12 +15,19 @@ import {
   executionBlueprintSchema,
   executionModeSchema,
   projectApprovedBlueprintRecordSchema,
+  blueprintQualityFeedbackSlotSchema,
+  blueprintQualityIssueCategorySchema,
   projectRecordSchema,
   renderSpecSchema,
+  taskBlueprintQualityFeedbackRecordSchema,
   taskBlueprintRecordSchema,
   taskBlueprintReviewRecordSchema,
   terminalPresetIdSchema,
 } from "./video-blueprint.js"
+import {
+  bilingualUnderstandingPreviewSchema,
+  englishExecutionBriefSchema,
+} from "./understanding-preview.js"
 
 export type AppId = "web" | "api" | "worker"
 
@@ -200,12 +208,59 @@ export const taskTimelineEventSchema = z.object({
 export type TaskTimelineEvent = z.infer<typeof taskTimelineEventSchema>
 export type TaskTimelineEventInput = Omit<TaskTimelineEvent, "id" | "taskId" | "sequence" | "createdAt">
 
+export const modelSmokeModeSchema = z.enum(["config", "connectivity", "minimal_generation"])
+export type ModelSmokeMode = z.infer<typeof modelSmokeModeSchema>
+
+export const modelDiagnosticStatusSchema = z.enum(["success", "failed", "skipped"])
+export type ModelDiagnosticStatus = z.infer<typeof modelDiagnosticStatusSchema>
+
+export const modelDiagnosticErrorCategorySchema = z.enum([
+  "auth_error",
+  "quota_exceeded",
+  "model_not_found",
+  "request_format_incompatible",
+  "timeout",
+  "empty_result",
+  "safety_refusal",
+  "provider_error",
+  "worker_local_failure",
+  "config_error",
+  "unknown",
+])
+export type ModelDiagnosticErrorCategory = z.infer<typeof modelDiagnosticErrorCategorySchema>
+
+export const modelDiagnosticRecordSchema = z.object({
+  id: z.string(),
+  providerId: z.string(),
+  providerDisplayName: z.string(),
+  providerType: z.string(),
+  modelId: z.string().nullable(),
+  modelDisplayName: z.string().nullable(),
+  slotType: modelSlotTypeSchema.nullable(),
+  providerModelId: z.string().nullable(),
+  transport: z.string(),
+  wireApi: z.string(),
+  requestPath: z.string(),
+  smokeMode: modelSmokeModeSchema,
+  status: modelDiagnosticStatusSchema,
+  statusCode: z.number().int().nullable(),
+  durationMs: z.number().int().nonnegative(),
+  errorCategory: modelDiagnosticErrorCategorySchema.nullable(),
+  errorMessage: z.string().nullable(),
+  createdAt: z.string(),
+})
+export type ModelDiagnosticRecord = z.infer<typeof modelDiagnosticRecordSchema>
+export type ModelDiagnosticRecordInput = Omit<ModelDiagnosticRecord, "id" | "createdAt">
+
 export const modelRefSchema = z.object({
   id: z.string(),
   label: z.string(),
   provider: z.string(),
 })
 export type ModelRef = z.infer<typeof modelRefSchema>
+
+export const keyframeGenerationModeSchema = z.enum(["batch", "single"])
+export type KeyframeGenerationMode = z.infer<typeof keyframeGenerationModeSchema>
 
 export const taskRunConfigSchema = z.object({
   projectId: z.string().min(1),
@@ -216,6 +271,13 @@ export const taskRunConfigSchema = z.object({
   renderSpecJson: renderSpecSchema,
   targetDurationSec: videoDurationSecSchema,
   generationMode: generationModeSchema,
+  visualSeedInput: z.string().trim().max(4000).nullable().default(null),
+  keepCharacterConsistent: z.boolean().default(true),
+  keyframeGenerationMode: keyframeGenerationModeSchema.default("batch"),
+  keyframeCount: z.number().int().positive().default(2),
+  understandingPreview: bilingualUnderstandingPreviewSchema.nullable().default(null),
+  executionBrief: englishExecutionBriefSchema.nullable().default(null),
+  executionBriefVersion: z.literal("execution-brief-v1").default("execution-brief-v1"),
   enhancementMode: enhancementModeSchema,
   generationRoute: generationRouteSchema,
   routeReason: z.string(),
@@ -259,6 +321,13 @@ export const taskSummarySchema = z.object({
   renderSpecJson: renderSpecSchema,
   targetDurationSec: videoDurationSecSchema,
   generationMode: generationModeSchema,
+  visualSeedInput: z.string().trim().max(4000).nullable().default(null),
+  keepCharacterConsistent: z.boolean().default(true),
+  keyframeGenerationMode: keyframeGenerationModeSchema.default("batch"),
+  keyframeCount: z.number().int().positive().default(2),
+  understandingPreview: bilingualUnderstandingPreviewSchema.nullable().default(null),
+  executionBrief: englishExecutionBriefSchema.nullable().default(null),
+  executionBriefVersion: z.literal("execution-brief-v1").default("execution-brief-v1"),
   generationRoute: generationRouteSchema,
   routeReason: z.string(),
   planningVersion: planningVersionSchema,
@@ -331,7 +400,9 @@ export const assetRecordSchema = z.object({
     "source_script",
     "planning_prompt",
     "planning_response",
-    "planning_audit",
+  "planning_audit",
+    "visual_plan",
+    "keyframe_prompt_summary",
     "storyboard",
     "subtitles",
     "audio",
@@ -357,6 +428,12 @@ export const createTaskInputSchema = z.object({
   aspectRatio: z.string().default("9:16"),
   targetDurationSec: videoDurationSecSchema.default(30),
   generationMode: generationModeSchema.default("user_locked"),
+  visualSeedInput: z.string().trim().max(4000).nullable().optional(),
+  keepCharacterConsistent: z.boolean().default(true),
+  keyframeGenerationMode: keyframeGenerationModeSchema.default("batch"),
+  keyframeCount: z.number().int().positive().optional(),
+  understandingPreview: bilingualUnderstandingPreviewSchema.nullable().optional(),
+  executionBrief: englishExecutionBriefSchema.nullable().optional(),
   audioStrategy: audioStrategySchema.default("tts_only"),
   subtitleStrategy: subtitleStrategySchema.default("tts_aligned"),
   modelOverrides: taskModelOverrideSchema.optional(),
@@ -369,12 +446,17 @@ export type UserStatus = z.infer<typeof userStatusSchema>
 export const userSourceSchema = z.enum(["file", "env"])
 export type UserSource = z.infer<typeof userSourceSchema>
 
+export const userPurposeSchema = z.enum(["operator", "test_operator"])
+export type UserPurpose = z.infer<typeof userPurposeSchema>
+
 export const storedUserSchema = z.object({
   id: z.string(),
   username: z.string().min(1),
   displayName: z.string().min(1),
   passwordHash: z.string().min(1),
   status: userStatusSchema,
+  purpose: userPurposeSchema.optional(),
+  expiresAt: z.string().nullable().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
   lastLoginAt: z.string().nullable(),
@@ -430,5 +512,6 @@ export * from "./planning-contract.js"
 export * from "./model-control.js"
 export * from "./model-routing.js"
 export * from "./provider-model-ids.js"
+export * from "./understanding-preview.js"
 export * from "./video-blueprint.js"
 export * from "./blueprint-persistence.js"

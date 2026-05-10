@@ -48,6 +48,7 @@ describe("API model control defaults and selectable resolution", () => {
     cookie: string,
     modelKey: string,
     displayName: string,
+    slotType = "imageModel",
   ) {
     const providerResponse = await app.request("/api/model-control/providers", {
       method: "POST",
@@ -84,7 +85,7 @@ describe("API model control defaults and selectable resolution", () => {
       body: JSON.stringify({
         modelKey,
         providerId: providerPayload.provider.id,
-        slotType: "imageModel",
+        slotType,
         providerModelId: `${modelKey}-provider-model`,
         displayName,
         capabilityJson: {
@@ -105,6 +106,140 @@ describe("API model control defaults and selectable resolution", () => {
 
     return modelPayload.model.id
   }
+
+  it("saves routing policies and freezes the selected model with visible fallback reasons", async () => {
+    const { app, cookie } = await createAuthedApp()
+
+    const primaryModelId = await createValidatedModel(app, cookie, "image-primary", "Image Primary")
+    const fallbackModelId = await createValidatedModel(app, cookie, "image-backup", "Image Backup")
+
+    const updateRoutingResponse = await app.request("/api/model-control/routing", {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: cookie,
+      },
+      body: JSON.stringify({
+        modes: {
+          high_quality: {
+            imageModel: {
+              enabled: true,
+              strategy: "quality_first",
+              primary: { modelId: primaryModelId },
+              fallbacks: [{ modelId: fallbackModelId }],
+              fallbackTriggers: ["timeout", "rate_limit", "provider_error"],
+              operatorNote: "高质量任务优先用主力生图，网关不稳时再换备用。",
+            },
+          },
+        },
+      }),
+    })
+
+    expect(updateRoutingResponse.status).toBe(200)
+    const updatePayload = (await updateRoutingResponse.json()) as {
+      resolved: {
+        high_quality: {
+          imageModel: {
+            primary: { recordId: string; displayName: string } | null
+            fallbacks: Array<{ recordId: string; displayName: string }>
+            summary: string
+          }
+        }
+      }
+    }
+
+    expect(updatePayload.resolved.high_quality.imageModel.primary?.recordId).toBe(primaryModelId)
+    expect(updatePayload.resolved.high_quality.imageModel.fallbacks[0]?.recordId).toBe(fallbackModelId)
+    expect(updatePayload.resolved.high_quality.imageModel.summary).toContain("高质量优先")
+
+    const { resolveEffectiveSlots } = await import("../../../apps/api/src/lib/model-control/resolver")
+    const resolved = await resolveEffectiveSlots({ modeId: "high_quality" })
+    const imageSlot = resolved.find((slot) => slot.slotType === "imageModel")
+
+    expect(imageSlot?.modelId).toBe(primaryModelId)
+    expect(imageSlot?.selectionReason).toContain("高质量模式")
+    expect(imageSlot?.selectionReason).toContain("高质量优先")
+    expect(imageSlot?.fallbackCandidates?.[0]?.modelId).toBe(fallbackModelId)
+    expect(imageSlot?.fallbackCandidates?.[0]?.fallbackTriggers).toEqual([
+      "timeout",
+      "rate_limit",
+      "provider_error",
+    ])
+
+    const overrideResolved = await resolveEffectiveSlots({
+      modeId: "high_quality",
+      taskOverrides: {
+        imageModel: { modelId: fallbackModelId },
+      },
+    })
+    const overrideImageSlot = overrideResolved.find((slot) => slot.slotType === "imageModel")
+
+    expect(overrideImageSlot?.modelId).toBe(fallbackModelId)
+    expect(overrideImageSlot?.selectionReason).toContain("本次任务手动指定")
+    expect(overrideImageSlot?.fallbackCandidates ?? []).toHaveLength(0)
+  })
+
+  it("returns a task route preview with selection reasons and fallback candidates", async () => {
+    const { app, cookie } = await createAuthedApp()
+
+    const primaryModelId = await createValidatedModel(app, cookie, "image-primary", "Image Primary")
+    const fallbackModelId = await createValidatedModel(app, cookie, "image-backup", "Image Backup")
+
+    await app.request("/api/model-control/routing", {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: cookie,
+      },
+      body: JSON.stringify({
+        modes: {
+          high_quality: {
+            imageModel: {
+              enabled: true,
+              strategy: "quality_first",
+              primary: { modelId: primaryModelId },
+              fallbacks: [{ modelId: fallbackModelId }],
+              fallbackTriggers: ["timeout", "provider_error"],
+              operatorNote: "图片质量优先，失败后切备用。",
+            },
+          },
+        },
+      }),
+    })
+
+    const response = await app.request("/api/model-control/route-preview?modeId=high_quality", {
+      headers: { Cookie: cookie },
+    })
+
+    expect(response.status).toBe(200)
+    const payload = (await response.json()) as {
+      modeId: string
+      slots: Array<{
+        slotType: string
+        displayName: string
+        provider: string
+        wireApi: string
+        requestPath: string
+        selectionReason: string
+        fallbackCandidates: Array<{ displayName: string }>
+        warnings: string[]
+      }>
+      warnings: string[]
+    }
+
+    expect(payload.modeId).toBe("high_quality")
+    expect(payload.slots).toHaveLength(4)
+    const imageSlot = payload.slots.find((slot) => slot.slotType === "imageModel")
+    expect(imageSlot?.displayName).toBe("Image Primary")
+    expect(imageSlot?.provider).toBe("Image Primary Provider")
+    expect(imageSlot?.wireApi).toBeTruthy()
+    expect(imageSlot?.requestPath).toBeTruthy()
+    expect(imageSlot?.selectionReason).toContain("高质量模式")
+    expect(imageSlot?.selectionReason).toContain("高质量优先")
+    expect(imageSlot?.fallbackCandidates[0]?.displayName).toBe("Image Backup")
+    expect(imageSlot?.warnings).toEqual([])
+    expect(payload.warnings).toEqual([])
+  })
 
   it("resolves effective defaults with mode overrides taking precedence over global defaults", async () => {
     const { app, cookie } = await createAuthedApp()

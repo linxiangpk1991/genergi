@@ -12,6 +12,8 @@ import { ModelControlCenterPage } from "./pages/ModelControlCenterPage"
 import { ModelProvidersPage } from "./pages/ModelProvidersPage"
 import { ModelRegistryPage } from "./pages/ModelRegistryPage"
 import { ModelDefaultsPage } from "./pages/ModelDefaultsPage"
+import { ModelRoutingPage } from "./pages/ModelRoutingPage"
+import { ModelDiagnosticsPage } from "./pages/ModelDiagnosticsPage"
 import { HelpCenterHomePage } from "./pages/HelpCenterHomePage"
 import { HelpWorkflowPage } from "./pages/HelpWorkflowPage"
 import { HelpFeaturePage } from "./pages/HelpFeaturePage"
@@ -64,6 +66,8 @@ export function App() {
         <Route path="/model-control-center/providers" element={<ModelProvidersPage />} />
         <Route path="/model-control-center/registry" element={<ModelRegistryPage />} />
         <Route path="/model-control-center/defaults" element={<ModelDefaultsPage />} />
+        <Route path="/model-control-center/routing" element={<ModelRoutingPage />} />
+        <Route path="/model-control-center/diagnostics" element={<ModelDiagnosticsPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </AppLayout>

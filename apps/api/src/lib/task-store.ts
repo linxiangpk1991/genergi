@@ -36,6 +36,7 @@ import type {
   TaskStatus,
 } from "@genergi/shared"
 import { createInitialTaskBlueprintRecord } from "./blueprint-store.js"
+import { buildUnderstandingPreviewPayload } from "./understanding-preview.js"
 import { resolveEffectiveSlots } from "./model-control/resolver.js"
 import { getProjectById } from "./project-store.js"
 
@@ -155,7 +156,7 @@ function getAssetExtension(assetType: string, fileName: string, isDirectory: boo
     return ".json"
   }
 
-  if (assetType === "planning_audit") {
+  if (assetType === "planning_audit" || assetType === "visual_plan") {
     return ".json"
   }
 
@@ -167,7 +168,8 @@ function getAssetExtension(assetType: string, fileName: string, isDirectory: boo
     assetType === "script" ||
     assetType === "source_script" ||
     assetType === "planning_prompt" ||
-    assetType === "planning_response"
+    assetType === "planning_response" ||
+    assetType === "keyframe_prompt_summary"
   ) {
     return ".txt"
   }
@@ -185,9 +187,11 @@ function getAssetMimeType(assetType: string, extension: string | null, isDirecto
     case "source_script":
     case "planning_prompt":
     case "planning_response":
+    case "keyframe_prompt_summary":
       return "text/plain; charset=utf-8"
     case "storyboard":
     case "planning_audit":
+    case "visual_plan":
       return "application/json"
     case "subtitles":
       return "application/x-subrip; charset=utf-8"
@@ -253,6 +257,7 @@ function getPreviewKind(assetType: string, extension: string | null, isDirectory
     assetType === "source_script" ||
     assetType === "planning_prompt" ||
     assetType === "planning_response" ||
+    assetType === "keyframe_prompt_summary" ||
     assetType === "subtitles" ||
     [".txt", ".md", ".csv", ".log", ".srt", ".vtt"].includes(extension ?? "")
   ) {
@@ -348,6 +353,8 @@ async function inferExportedAssets(taskId: string): Promise<AssetRecord[]> {
   await pushIfExists({ id: `${taskId}_planning_prompt`, assetType: "planning_prompt", label: "文本规划提示词", relativePath: "planning-prompt.txt" })
   await pushIfExists({ id: `${taskId}_planning_response`, assetType: "planning_response", label: "文本模型原始返回", relativePath: "planning-response.txt" })
   await pushIfExists({ id: `${taskId}_planning_audit`, assetType: "planning_audit", label: "文本规划审计 JSON", relativePath: "planning-audit.json" })
+  await pushIfExists({ id: `${taskId}_visual_plan`, assetType: "visual_plan", label: "视觉计划 JSON", relativePath: "visual-plan.json" })
+  await pushIfExists({ id: `${taskId}_keyframe_prompt_summary`, assetType: "keyframe_prompt_summary", label: "关键画面提示词汇总", relativePath: "keyframe-prompt-summary.txt" })
   await pushIfExists({ id: `${taskId}_storyboard`, assetType: "storyboard", label: "分镜 JSON", relativePath: "storyboard.json" })
   await pushIfExists({ id: `${taskId}_subtitles`, assetType: "subtitles", label: "英文字幕", relativePath: "subtitles.srt" })
   await pushIfExists({ id: `${taskId}_audio`, assetType: "audio", label: "英文配音", relativePath: "narration.mp3" })
@@ -768,6 +775,13 @@ function synthesizeTaskSummaryFromDetail(detail: TaskDetail): TaskSummary {
       renderSpecJson: detail.taskRunConfig.renderSpecJson,
       targetDurationSec: detail.taskRunConfig.targetDurationSec,
       generationMode: detail.taskRunConfig.generationMode,
+      visualSeedInput: detail.taskRunConfig.visualSeedInput,
+      keepCharacterConsistent: detail.taskRunConfig.keepCharacterConsistent,
+      keyframeGenerationMode: detail.taskRunConfig.keyframeGenerationMode,
+      keyframeCount: detail.taskRunConfig.keyframeCount,
+      understandingPreview: detail.taskRunConfig.understandingPreview,
+      executionBrief: detail.taskRunConfig.executionBrief,
+      executionBriefVersion: detail.taskRunConfig.executionBriefVersion,
       audioStrategy: detail.taskRunConfig.audioStrategy,
       subtitleStrategy: detail.taskRunConfig.subtitleStrategy,
       generationRoute: detail.taskRunConfig.generationRoute,
@@ -814,6 +828,13 @@ function synthesizeTaskSummaryFromDetail(detail: TaskDetail): TaskSummary {
     renderSpecJson: detail.taskRunConfig.renderSpecJson,
     targetDurationSec: detail.taskRunConfig.targetDurationSec,
     generationMode: detail.taskRunConfig.generationMode,
+    visualSeedInput: detail.taskRunConfig.visualSeedInput,
+    keepCharacterConsistent: detail.taskRunConfig.keepCharacterConsistent,
+    keyframeGenerationMode: detail.taskRunConfig.keyframeGenerationMode,
+    keyframeCount: detail.taskRunConfig.keyframeCount,
+    understandingPreview: detail.taskRunConfig.understandingPreview,
+    executionBrief: detail.taskRunConfig.executionBrief,
+    executionBriefVersion: detail.taskRunConfig.executionBriefVersion,
     audioStrategy: detail.taskRunConfig.audioStrategy,
     subtitleStrategy: detail.taskRunConfig.subtitleStrategy,
     generationRoute: detail.taskRunConfig.generationRoute,
@@ -1559,32 +1580,65 @@ export async function listTaskOperationAudit(limit = 50): Promise<TaskOperationA
   return records.slice(0, Math.max(1, Math.min(200, limit)))
 }
 
+function withTaskUnderstandingDefaults(input: CreateTaskInput, visualSeedInput: string | null): CreateTaskInput {
+  const keyframeCount = Math.max(1, Math.floor(input.keyframeCount ?? Math.ceil(input.targetDurationSec / 15)))
+  if (input.understandingPreview && input.executionBrief && input.keyframeCount === keyframeCount) {
+    return input
+  }
+
+  const generated =
+    input.understandingPreview && input.executionBrief
+      ? null
+      : buildUnderstandingPreviewPayload({
+          sourceBrief: input.script,
+          visualSeedInput,
+          targetDurationSec: input.targetDurationSec,
+          keyframeCount,
+          keepCharacterConsistent: input.keepCharacterConsistent ?? true,
+        })
+
+  return {
+    ...input,
+    keyframeCount,
+    understandingPreview: input.understandingPreview ?? generated?.understandingPreview ?? null,
+    executionBrief: input.executionBrief ?? generated?.executionBrief ?? null,
+  }
+}
+
 export async function createTask(input: CreateTaskInput): Promise<{ task: TaskSummary; taskRunConfig: unknown }> {
   const project = await getProjectById(input.projectId)
   if (!project) {
     throw new Error("PROJECT_NOT_FOUND")
   }
+  const visualSeedInput = input.visualSeedInput ?? project.defaultVisualSeedInput ?? null
+  const taskInput = withTaskUnderstandingDefaults(input, visualSeedInput)
   const tasks = await listTasks()
-  const modeId = input.modeId
-  const channelId = input.channelId
-  const generationMode = input.generationMode
+  const modeId = taskInput.modeId
+  const channelId = taskInput.channelId
+  const generationMode = taskInput.generationMode
   const estimate = estimateCost(modeId)
   const timestamp = now()
   let taskRunConfig = buildDefaultTaskRunConfig(
     modeId,
     channelId,
-    input.targetDurationSec,
+    taskInput.targetDurationSec,
     generationMode,
     {
-      projectId: input.projectId,
-      terminalPresetId: input.terminalPresetId,
-      audioStrategy: input.audioStrategy,
-      subtitleStrategy: input.subtitleStrategy,
+      projectId: taskInput.projectId,
+      terminalPresetId: taskInput.terminalPresetId,
+      audioStrategy: taskInput.audioStrategy,
+      subtitleStrategy: taskInput.subtitleStrategy,
+      visualSeedInput,
+      keepCharacterConsistent: taskInput.keepCharacterConsistent,
+      keyframeGenerationMode: taskInput.keyframeGenerationMode ?? project.defaultKeyframeGenerationMode,
+      keyframeCount: taskInput.keyframeCount,
+      understandingPreview: taskInput.understandingPreview ?? null,
+      executionBrief: taskInput.executionBrief ?? null,
     },
   )
   const resolvedSlots = await resolveEffectiveSlots({
     modeId,
-    taskOverrides: input.modelOverrides,
+    taskOverrides: taskInput.modelOverrides,
   })
   taskRunConfig = mapResolvedSlotsToTaskConfig(
     {
@@ -1598,9 +1652,9 @@ export async function createTask(input: CreateTaskInput): Promise<{ task: TaskSu
   const taskId = `task_${Date.now()}`
   const detail = normalizeTaskDetailRecord({
     taskId,
-    projectId: input.projectId,
-    title: input.title,
-    script: input.script,
+    projectId: taskInput.projectId,
+    title: taskInput.title,
+    script: taskInput.script,
     taskRunConfig,
     blueprintVersion: 1,
       blueprintStatus: "pending_generation",
@@ -1609,9 +1663,10 @@ export async function createTask(input: CreateTaskInput): Promise<{ task: TaskSu
       statusDetail: "等待 worker 开始处理",
       cancelRequestedAt: null,
       scenes: buildStoryboardScenes({
-      script: input.script,
-      targetDurationSec: input.targetDurationSec,
+      script: taskInput.script,
+      targetDurationSec: taskInput.targetDurationSec,
       maxSceneDurationSec: resolveVideoModelCapability(taskRunConfig.videoModel.id).maxSingleShotSec,
+      visualKeyframeCount: taskRunConfig.keyframeCount,
       aspectRatio: taskRunConfig.aspectRatio,
       reviewRequirements: buildSceneReviewRequirements(taskRunConfig),
     }),
@@ -1620,15 +1675,22 @@ export async function createTask(input: CreateTaskInput): Promise<{ task: TaskSu
   })
   const task: TaskSummary = {
     id: taskId,
-    projectId: input.projectId,
-    title: input.title,
+    projectId: taskInput.projectId,
+    title: taskInput.title,
     modeId,
     executionMode: taskRunConfig.executionMode,
     channelId,
     terminalPresetId: taskRunConfig.terminalPresetId,
     renderSpecJson: taskRunConfig.renderSpecJson,
-    targetDurationSec: input.targetDurationSec,
+    targetDurationSec: taskInput.targetDurationSec,
     generationMode,
+    visualSeedInput: taskRunConfig.visualSeedInput,
+    keepCharacterConsistent: taskRunConfig.keepCharacterConsistent,
+    keyframeGenerationMode: taskRunConfig.keyframeGenerationMode,
+    keyframeCount: taskRunConfig.keyframeCount,
+    understandingPreview: taskRunConfig.understandingPreview,
+    executionBrief: taskRunConfig.executionBrief,
+    executionBriefVersion: taskRunConfig.executionBriefVersion,
     audioStrategy: taskRunConfig.audioStrategy,
     subtitleStrategy: taskRunConfig.subtitleStrategy,
     generationRoute: taskRunConfig.generationRoute,

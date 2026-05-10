@@ -82,7 +82,7 @@ describe("API task store", () => {
     expect(detail?.blueprintVersion).toBe(1)
     expect(detail?.blueprintStatus).toBe("pending_generation")
     expect(detail?.taskRunConfig.generationRoute).toBe("multi_scene")
-    expect(detail?.scenes).toHaveLength(4)
+    expect(detail?.scenes).toHaveLength(2)
     expect(detail?.scenes.reduce((total, scene) => total + scene.durationSec, 0)).toBe(30)
     expect(detail?.scenes.some((scene) => scene.script.includes("Show the product in action"))).toBe(false)
     expect(detail?.reviewStage).toBeNull()
@@ -133,6 +133,48 @@ describe("API task store", () => {
     expect((await store.getTaskDetail(defaultTask.task.id))?.taskRunConfig.subtitleStrategy).toBe("tts_aligned")
     expect(whisperTask.taskRunConfig.subtitleStrategy).toBe("whisper_cpp")
     expect((await store.getTaskDetail(whisperTask.task.id))?.taskRunConfig.subtitleStrategy).toBe("whisper_cpp")
+  })
+
+  it("freezes visual brief and duration-matched batch keyframe settings at task creation", async () => {
+    dataDir = await mkdtemp(path.join(os.tmpdir(), "genergi-task-store-visual-"))
+    process.env.GENERGI_DATA_DIR = dataDir
+
+    const store = await import("../../../apps/api/src/lib/task-store")
+
+    const created = await store.createTask({
+      projectId: "project_default",
+      title: "BaZi career cycle video",
+      script:
+        "Asian woman, 28 years old, tired expression, sitting at desk. Explain the luck cycle and close with the full BaZi report CTA.",
+      modeId: "high_quality",
+      channelId: "reels",
+      terminalPresetId: "phone_portrait",
+      aspectRatio: "9:16",
+      targetDurationSec: 60,
+      generationMode: "system_enhanced",
+      visualSeedInput:
+        "主角: Asian woman, 28, tired but professional. 场景: dimly lit late night office. 风格: soft cinematic anime illustration. 情绪: stuck, reflective, hopeful. 禁止项: no text overlay. 保持角色一致: yes.",
+      keyframeGenerationMode: "batch",
+    })
+
+    const detail = await store.getTaskDetail(created.task.id)
+
+    expect(created.task.keyframeGenerationMode).toBe("batch")
+    expect(created.task.keyframeCount).toBe(4)
+    expect(created.task.visualSeedInput).toContain("Asian woman")
+    expect(created.taskRunConfig.keyframeGenerationMode).toBe("batch")
+    expect(created.taskRunConfig.keyframeCount).toBe(4)
+    expect(created.taskRunConfig.visualSeedInput).toContain("保持角色一致")
+    expect(created.taskRunConfig.understandingPreview?.topic.zh).toContain("系统已理解")
+    expect(created.taskRunConfig.executionBrief?.finalPromptLanguage).toBe("en")
+    expect(created.taskRunConfig.executionBrief?.keyframePlan).toHaveLength(4)
+    expect(created.taskRunConfig.executionBrief?.keyframePlan[0]?.timestampRange).toBe("0-15s")
+    expect(created.taskRunConfig.executionBrief?.keyframePlan[0]?.imagePrompt).toContain("no text overlays")
+    expect(JSON.stringify(created.taskRunConfig.executionBrief)).not.toMatch(/主角|场景|禁止项/)
+    expect(detail?.taskRunConfig.keyframeGenerationMode).toBe("batch")
+    expect(detail?.taskRunConfig.keyframeCount).toBe(4)
+    expect(detail?.taskRunConfig.executionBrief?.keyframePlan).toHaveLength(4)
+    expect(detail?.scenes).toHaveLength(4)
   })
 
   it("freezes the resolved model snapshot at task creation even after defaults change later", async () => {
@@ -527,7 +569,7 @@ describe("API task store", () => {
     expect(firstStoryboardReview?.detail.scenes[1]?.reviewNote).toBe("opening beat works")
     expect(firstStoryboardReview?.detail.scenes[1]?.reviewedAt).toMatch(/\d{4}-\d{2}-\d{2}T/)
     expect(firstStoryboardReview?.summary.status).toBe("waiting_review")
-    expect(firstStoryboardReview?.summary.reviewStage).toBe("storyboard_review")
+    expect(firstStoryboardReview?.summary.reviewStage).toBe("keyframe_review")
     expect(firstStoryboardReview?.summary.pendingReviewCount).toBe(2)
     expect(firstStoryboardReview?.summary.reviewUpdatedAt).toBe(firstStoryboardReview?.detail.scenes[1]?.reviewedAt)
 
@@ -543,7 +585,7 @@ describe("API task store", () => {
     }
 
     expect(currentSummary.reviewStage).toBe("keyframe_review")
-    expect(currentSummary.pendingReviewCount).toBe(4)
+    expect(currentSummary.pendingReviewCount).toBe(2)
     expect(currentSummary.status).toBe("waiting_review")
 
     let finalResult = await store.applySceneReviewDecision(created.task.id, {
@@ -558,7 +600,7 @@ describe("API task store", () => {
     expect(finalResult?.detail.scenes[0]?.keyframeReviewNote).toBe("Need a brighter hero frame")
     expect(finalResult?.detail.scenes[0]?.keyframeReviewedAt).toMatch(/\d{4}-\d{2}-\d{2}T/)
     expect(finalResult?.summary.reviewStage).toBe("keyframe_review")
-    expect(finalResult?.summary.pendingReviewCount).toBe(3)
+    expect(finalResult?.summary.pendingReviewCount).toBe(1)
     expect(finalResult?.summary.status).toBe("waiting_review")
 
     finalResult = await store.applySceneReviewDecision(created.task.id, {
@@ -812,6 +854,8 @@ describe("API task store", () => {
     await writeFile(path.join(exportDir, "planning-prompt.txt"), "prompt", "utf8")
     await writeFile(path.join(exportDir, "planning-response.txt"), "response", "utf8")
     await writeFile(path.join(exportDir, "planning-audit.json"), "{\"usedFallback\":false}", "utf8")
+    await writeFile(path.join(exportDir, "visual-plan.json"), "{\"keyframeCount\":2}", "utf8")
+    await writeFile(path.join(exportDir, "keyframe-prompt-summary.txt"), "keyframe prompts", "utf8")
     await writeFile(path.join(exportDir, "storyboard.json"), "{\"scenes\":[]}", "utf8")
 
     const assets = await store.getTaskAssets(created.task.id)
@@ -823,6 +867,8 @@ describe("API task store", () => {
       "planning_prompt",
       "planning_response",
       "planning_audit",
+      "visual_plan",
+      "keyframe_prompt_summary",
       "storyboard",
     ])
     expect(assets.every((asset) => asset.exists)).toBe(true)

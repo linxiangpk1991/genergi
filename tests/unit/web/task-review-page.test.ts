@@ -17,6 +17,7 @@ vi.mock("../../../apps/web/src/api", async () => {
       getTaskAssets: vi.fn(),
       reviewTaskBlueprint: vi.fn(),
       resumeCurrentBlueprint: vi.fn(),
+      retryTask: vi.fn(),
       updateTaskAudioStrategy: vi.fn(),
     },
   }
@@ -141,11 +142,47 @@ describe("TaskReviewPage", () => {
           operatorLocale: "zh-CN",
           requireStoryboardReview: true,
           requireKeyframeReview: true,
+          keyframeCount: 2,
+          keyframeGenerationMode: "batch",
           budgetLimitCny: 5,
           aspectRatio: "9:16",
           slotSnapshots: [],
         },
         scenes: [],
+        modelTrace: {
+          textModel: {
+            slotType: "textModel",
+            label: "Claude Opus 4.6",
+            providerType: "anthropic-compatible",
+            providerModelId: "claude-opus-4.6",
+            wireApi: "messages",
+            requestPath: "/v1/messages",
+          },
+          imageModel: {
+            slotType: "imageModel",
+            label: "Gemini 3 Pro Image Preview",
+            providerType: "openai-compatible",
+            providerModelId: "gemini-3-pro-image-preview",
+            wireApi: "gemini_generate_content",
+            requestPath: ":generateContent",
+          },
+          videoModel: {
+            slotType: "videoModel",
+            label: "Veo 3.1 Portrait",
+            providerType: "openai-compatible",
+            providerModelId: "veo3.1",
+            wireApi: "video_generation",
+            requestPath: "按视频适配器",
+          },
+          ttsProvider: {
+            slotType: "ttsProvider",
+            label: "Edge TTS",
+            providerType: "edge-tts",
+            providerModelId: "edge-tts",
+            wireApi: "tts",
+            requestPath: "provider",
+          },
+        },
         updatedAt: "2026-04-20T00:00:00.000Z",
       },
     } as any)
@@ -192,6 +229,48 @@ describe("TaskReviewPage", () => {
               durationSec: 5,
               transitionHint: "hard cut",
               continuityConstraints: ["product hidden"],
+            },
+            {
+              id: "scene_2",
+              index: 1,
+              sceneGoal: "Reveal the dock",
+              voiceoverScript: "Then the setup changes.",
+              startFrameDescription: "Product reveal on the desk",
+              imagePrompt: "Vertical product ad frame, dock revealed on desk",
+              videoPrompt: "Slow reveal of the charging dock",
+              startFrameIntent: "Reveal the solution",
+              endFrameIntent: "Hold the product state",
+              durationSec: 5,
+              transitionHint: "match cut",
+              continuityConstraints: ["same desk"],
+            },
+            {
+              id: "scene_3",
+              index: 2,
+              sceneGoal: "Show the clean result",
+              voiceoverScript: "Everything feels calmer.",
+              startFrameDescription: "Clean desk result",
+              imagePrompt: "Vertical product ad frame, clean organized desk",
+              videoPrompt: "Gentle push-in over the organized desk",
+              startFrameIntent: "Show the result",
+              endFrameIntent: "Hold the clean state",
+              durationSec: 5,
+              transitionHint: "soft cut",
+              continuityConstraints: ["same product"],
+            },
+            {
+              id: "scene_4",
+              index: 3,
+              sceneGoal: "Close with product hero",
+              voiceoverScript: "Ready for the day.",
+              startFrameDescription: "Hero product close",
+              imagePrompt: "Vertical product ad frame, hero charging dock close-up",
+              videoPrompt: "Subtle hero close-up with soft reflections",
+              startFrameIntent: "Close with CTA-ready hero",
+              endFrameIntent: "Hold product hero",
+              durationSec: 5,
+              transitionHint: "fade",
+              continuityConstraints: ["same product"],
             },
           ],
         },
@@ -475,15 +554,177 @@ describe("TaskReviewPage", () => {
     expect(text).toContain("Slow push-in over the clutter before the product appears")
     expect(text).toContain("1080 × 1920")
     expect(text).toContain("9:16")
-    expect(text).toContain("原始文案")
+    expect(text).toContain("视频内容")
     expect(text).toContain("Original source script.")
+    expect(text).toContain("关键画面：4 张 · 批量生成")
     expect(text).toContain("一致性要求")
+    expect(text).toContain("查看技术细节")
+    expect(text).toContain("Claude Opus 4.6")
+    expect(text).toContain("文案：Claude Opus 4.6")
+    expect(text).toContain("图片：Gemini 3 Pro Image Preview")
+    expect(text).toContain("视频：Veo 3.1 Portrait")
     expect(text).toContain("主体：Single hero product")
-    expect(text).toContain("本次使用的模型")
+    expect(text).toContain("本次用了哪些模型")
     expect(text).toContain("Claude Opus 4.6")
     expect(text).toContain("Gemini 3 Pro Image Preview")
     expect(text).toContain("Veo 3.1 Portrait")
     expect(text).toContain("edge-tts")
+    expect(text).toContain("第 1 张关键画面")
+    expect(text).toContain("这张图表达什么")
+    expect(text).toContain("使用模型")
+    expect(text).toContain("生成依据 / 英文提示词")
+    expect(text).toContain("状态")
+    expect(text).toContain("通过这个方案")
+    expect(text).toContain("重做这个方案")
+
+    const keyframeImage = container.querySelector('img[alt="第 1 张关键画面预览"]')
+    expect(keyframeImage).toBeTruthy()
+
+    await act(async () => {
+      keyframeImage?.dispatchEvent(new Event("error", { bubbles: true }))
+    })
+
+    expect(container.textContent ?? "").toContain("这张关键画面暂时打不开，请到素材页确认文件是否生成成功。")
+  })
+
+  it("shows plain-language quality reason choices for rejecting a blueprint", async () => {
+    await act(async () => {
+      root.render(
+        createElement(
+          MemoryRouter,
+          { initialEntries: ["/task-review?taskId=task_reviewable"] },
+          createElement(
+            Routes,
+            null,
+            createElement(Route, { path: "/task-review", element: createElement(TaskReviewPage) }),
+          ),
+        ),
+      )
+    })
+
+    await waitFor(() => {
+      const text = container.textContent ?? ""
+      expect(text).toContain("文案跑偏")
+      expect(text).toContain("画面不一致")
+      expect(text).toContain("人物不稳定")
+      expect(text).toContain("配音问题")
+      expect(text).toContain("可选备注")
+    })
+  })
+
+  it("shows a waiting state instead of a raw error when a pending task has no blueprint yet", async () => {
+    vi.mocked(api.listTasks).mockResolvedValue({
+      tasks: [
+        {
+          id: "task_pending",
+          projectId: "project_seed_default",
+          title: "Summer Product Hook Series",
+          modeId: "high_quality",
+          executionMode: "review_required",
+          channelId: "reels",
+          terminalPresetId: "phone_portrait",
+          renderSpecJson: {
+            terminalPresetId: "phone_portrait",
+            width: 1080,
+            height: 1920,
+            aspectRatio: "9:16",
+            safeArea: { topPct: 8, rightPct: 6, bottomPct: 10, leftPct: 6 },
+            compositionGuideline: "主体保持在竖屏中心安全区",
+            motionGuideline: "优先轻推拉",
+          },
+          targetDurationSec: 30,
+          generationMode: "user_locked",
+          generationRoute: "multi_scene",
+          routeReason: "target duration exceeds single-shot limit",
+          planningVersion: "v1",
+          blueprintVersion: 1,
+          blueprintStatus: "pending_generation",
+          actualDurationSec: null,
+          status: "running",
+          progressPct: 35,
+          retryCount: 0,
+          estimatedCostCny: 5,
+          createdAt: "2026-05-09T00:00:00.000Z",
+          updatedAt: "2026-05-09T00:00:00.000Z",
+        },
+      ],
+    } as any)
+    vi.mocked(api.getTaskDetail).mockResolvedValue({
+      detail: {
+        taskId: "task_pending",
+        projectId: "project_seed_default",
+        title: "Summer Product Hook Series",
+        script: "",
+        blueprintVersion: 1,
+        blueprintStatus: "pending_generation",
+        taskRunConfig: {
+          projectId: "project_seed_default",
+          modeId: "high_quality",
+          executionMode: "review_required",
+          channelId: "reels",
+          terminalPresetId: "phone_portrait",
+          renderSpecJson: {
+            terminalPresetId: "phone_portrait",
+            width: 1080,
+            height: 1920,
+            aspectRatio: "9:16",
+            safeArea: { topPct: 8, rightPct: 6, bottomPct: 10, leftPct: 6 },
+            compositionGuideline: "主体保持在竖屏中心安全区",
+            motionGuideline: "优先轻推拉",
+          },
+          targetDurationSec: 30,
+          generationMode: "user_locked",
+          generationRoute: "multi_scene",
+          routeReason: "target duration exceeds single-shot limit",
+          planningVersion: "v1",
+          blueprintVersion: 1,
+          blueprintStatus: "pending_generation",
+          imageModel: { id: "image.default", label: "GPT-image2-自用生图模型", provider: "openai-compatible" },
+          textModel: { id: "text.default", label: "GPT-5.5", provider: "openai-compatible" },
+          videoModel: { id: "video.default", label: "Veo 3.1 Portrait", provider: "openai-compatible" },
+          ttsProvider: "edge-tts",
+          contentLocale: "en",
+          operatorLocale: "zh-CN",
+          requireStoryboardReview: true,
+          requireKeyframeReview: true,
+          keyframeCount: 4,
+          keyframeGenerationMode: "batch",
+          audioStrategy: "tts_only",
+          budgetLimitCny: 5,
+          aspectRatio: "9:16",
+          slotSnapshots: [],
+        },
+        scenes: [],
+        updatedAt: "2026-05-09T00:00:00.000Z",
+      },
+    } as any)
+    vi.mocked(api.getTaskCurrentBlueprint).mockRejectedValue(new Error("TASK_BLUEPRINT_NOT_FOUND"))
+    vi.mocked(api.getTaskAssets).mockResolvedValue({ assets: [] } as any)
+
+    await act(async () => {
+      root.render(
+        createElement(
+          MemoryRouter,
+          { initialEntries: ["/task-review?taskId=task_pending"] },
+          createElement(
+            Routes,
+            null,
+            createElement(Route, { path: "/task-review", element: createElement(TaskReviewPage) }),
+          ),
+        ),
+      )
+    })
+
+    await waitFor(() => {
+      expect(vi.mocked(api.getTaskDetail)).toHaveBeenCalledWith("task_pending")
+    })
+
+    const text = container.textContent ?? ""
+    expect(text).toContain("当前任务还在准备生成方案")
+    expect(text).toContain("方案版本未生成")
+    expect(text).toContain("Summer Product Hook Series")
+    expect(text).not.toContain("TASK_BLUEPRINT_NOT_FOUND")
+    expect(vi.mocked(api.getTaskCurrentBlueprint)).not.toHaveBeenCalled()
   })
 
   it("prefers actionable review tasks even when the blueprint is already approved", async () => {
@@ -631,15 +872,12 @@ describe("TaskReviewPage", () => {
       expect(vi.mocked(api.getTaskDetail)).toHaveBeenCalledWith("task_approved")
     })
 
-    const approveButton = Array.from(container.querySelectorAll("button")).find((button) =>
-      button.textContent?.includes("审核通过") || button.textContent?.includes("已审核通过"),
-    )
     const resumeButton = Array.from(container.querySelectorAll("button")).find((button) =>
       button.textContent?.includes("继续生成正片"),
     )
 
-    expect(approveButton).toBeTruthy()
-    expect((approveButton as HTMLButtonElement | undefined)?.disabled).toBe(true)
+    expect(container.textContent ?? "").not.toContain("审核通过")
+    expect(container.textContent ?? "").not.toContain("驳回当前方案")
     expect(container.textContent ?? "").toContain("已通过")
     expect((resumeButton as HTMLButtonElement | undefined)?.disabled).toBe(false)
   })

@@ -87,7 +87,7 @@ function getWorkspaceMeta(pathname: string) {
 
   return {
     title: "任务启动",
-    description: "从原始文案开始，新建一条完整的短视频生产任务。",
+    description: "从视频内容开始，新建一条完整的短视频生产任务。",
   }
 }
 

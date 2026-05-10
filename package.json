@@ -23,6 +23,7 @@
     "format": "prettier --write .",
     "cleanup:legacy-tasks": "node scripts/clear-legacy-task-data.mjs",
     "validate:unified-media-slots": "node scripts/validation/unified-media-slot-rollout-smoke.mjs",
+    "smoke:production": "node scripts/validation/production-platform-smoke.mjs",
     "deploy:production": "node scripts/deploy/deploy-production.mjs",
     "deploy:hotfix": "node scripts/deploy/deploy-hotfix-sync.mjs"
   },

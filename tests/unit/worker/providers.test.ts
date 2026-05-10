@@ -30,6 +30,9 @@ describe("worker provider helpers", () => {
         },
         targetDurationSec: 15,
         generationMode: "system_enhanced",
+        visualSeedInput: null,
+        keyframeGenerationMode: "batch",
+        keyframeCount: 1,
         enhancementMode: "system_enhanced",
         generationRoute: "multi_scene",
         routeReason: "target duration exceeds the current model single-shot limit of 8s",
@@ -52,6 +55,47 @@ describe("worker provider helpers", () => {
       blueprintStatus: "pending_generation",
       scenes: [],
       updatedAt: "2026-04-19T00:00:00.000Z",
+      ...overrides,
+    }
+  }
+
+  function createStructuredPlanningResponse(overrides: Record<string, unknown> = {}) {
+    return {
+      generationRoute: "multi_scene",
+      targetDurationSec: 15,
+      finalVoiceoverScript: "Hook the viewer fast. Reveal the upgrade.",
+      visualStyleGuide: "Keep the same subject and scene.",
+      ctaLine: "Reveal the upgrade.",
+      scenePlan: [
+        {
+          sceneIndex: 0,
+          scenePurpose: "Open the story",
+          durationSec: 8,
+          script: "Hook the viewer fast.",
+          voiceoverScript: "Hook the viewer fast.",
+          startFrameDescription: "A focused opener.",
+          imagePrompt: "A focused opener in vertical composition.",
+          videoPrompt: "A focused opener with subtle camera motion.",
+          startFrameIntent: "Open with tension",
+          endFrameIntent: "Prepare the reveal",
+          transitionHint: "cut",
+          continuityConstraints: ["same setting"],
+        },
+        {
+          sceneIndex: 1,
+          scenePurpose: "Reveal the upgrade",
+          durationSec: 7,
+          script: "Reveal the upgrade.",
+          voiceoverScript: "Reveal the upgrade.",
+          startFrameDescription: "The upgrade appears.",
+          imagePrompt: "The upgrade appears in the same setting.",
+          videoPrompt: "The upgrade appears with a clean push-in.",
+          startFrameIntent: "Show the reveal",
+          endFrameIntent: "Land the CTA",
+          transitionHint: "close",
+          continuityConstraints: ["same setting"],
+        },
+      ],
       ...overrides,
     }
   }
@@ -312,6 +356,97 @@ A few notes to make it hit:
     expect(blueprint.sceneContracts[0]?.imagePrompt).toBe("Phone portrait 1080x1920, cluttered desk, centered subject.")
     expect(blueprint.sceneContracts[0]?.videoPrompt).toBe("Use the input frame and slowly push into the clutter before reveal.")
     expect(blueprint.sceneContracts[0]?.continuityConstraints).toEqual(["product hidden"])
+    expect(blueprint.visualPlan).toMatchObject({
+      keyframeCount: 1,
+      generationMode: "batch",
+      subjectProfile: "Single desk hero",
+      style: "Premium vertical composition.",
+    })
+  })
+
+  it("maps one-based execution brief keyframes to zero-based scene contracts in order", async () => {
+    const providers = await import("../../../apps/worker/src/lib/providers")
+
+    const detail = createTaskDetail({
+      taskRunConfig: {
+        ...createTaskDetail().taskRunConfig,
+        targetDurationSec: 60,
+        keyframeCount: 4,
+        executionBrief: {
+          version: "execution-brief-v1",
+          sourceBrief: "Career cycle explainer",
+          topic: "Career cycle explainer",
+          targetAudience: "People feeling stuck",
+          corePainPoint: "Progress feels blocked",
+          mainPromise: "Explain why",
+          conversionGoal: "Open report",
+          emotionalArc: "tired to hopeful",
+          visualBrief: {
+            subject: "28-year-old Asian woman",
+            setting: "late-night office",
+            style: "soft cinematic illustration",
+            mood: "tired and hopeful",
+            negativeRules: ["no text overlays"],
+            consistencyRules: ["same character"],
+          },
+          narrativeStructure: ["Pain hook", "Context setup", "Insight explanation", "Proof or pattern"],
+          keyframePlan: [
+            { index: 1, timestampRange: "0-15s", narrativeRole: "Pain hook", visualGoal: "Pain visual", imagePrompt: "Frame 1 prompt", videoPrompt: "Frame 1 motion" },
+            { index: 2, timestampRange: "15-30s", narrativeRole: "Context setup", visualGoal: "Context visual", imagePrompt: "Frame 2 prompt", videoPrompt: "Frame 2 motion" },
+            { index: 3, timestampRange: "30-45s", narrativeRole: "Insight explanation", visualGoal: "Insight visual", imagePrompt: "Frame 3 prompt", videoPrompt: "Frame 3 motion" },
+            { index: 4, timestampRange: "45-60s", narrativeRole: "Proof or pattern", visualGoal: "Proof visual", imagePrompt: "Frame 4 prompt", videoPrompt: "Frame 4 motion" },
+          ],
+          finalPromptLanguage: "en",
+        },
+      },
+    })
+
+    const blueprint = providers.buildPlannedExecutionBlueprint(detail, {
+      generationRoute: "multi_scene",
+      targetDurationSec: 60,
+      finalVoiceoverScript: "One. Two. Three. Four.",
+      visualStyleGuide: "Soft cinematic illustration.",
+      ctaLine: "Open the report.",
+      scenePlan: [0, 1, 2, 3].map((index) => ({
+        sceneIndex: index,
+        scenePurpose: `Fallback scene ${index + 1}`,
+        durationSec: 15,
+        script: `Scene ${index + 1}`,
+        voiceoverScript: `Voiceover ${index + 1}`,
+        startFrameDescription: `Fallback visual ${index + 1}`,
+        imagePrompt: `Fallback image ${index + 1}`,
+        videoPrompt: `Fallback video ${index + 1}`,
+        startFrameIntent: `Fallback start ${index + 1}`,
+        endFrameIntent: `Fallback end ${index + 1}`,
+        transitionHint: "cut",
+        continuityConstraints: [],
+      })),
+      blueprint: {
+        executionMode: "review_required",
+        renderSpec: detail.taskRunConfig.renderSpecJson,
+        globalTheme: "Career cycle",
+        visualStyleGuide: "Soft cinematic illustration.",
+        subjectProfile: "Single person",
+        productProfile: null,
+        backgroundConstraints: [],
+        negativeConstraints: ["no subtitles"],
+        totalVoiceoverScript: "One. Two. Three. Four.",
+        sceneContracts: [],
+      },
+    })
+
+    expect(blueprint.sceneContracts.map((scene) => scene.sceneGoal)).toEqual([
+      "Pain hook",
+      "Context setup",
+      "Insight explanation",
+      "Proof or pattern",
+    ])
+    expect(blueprint.sceneContracts.map((scene) => scene.imagePrompt)).toEqual([
+      "Frame 1 prompt",
+      "Frame 2 prompt",
+      "Frame 3 prompt",
+      "Frame 4 prompt",
+    ])
   })
 
   it("uses the scene image prompt as-is when creating a keyframe prompt", async () => {
@@ -1213,6 +1348,228 @@ Here's the thing. In Chinese destiny analysis, there's a pattern called "late bl
     expect(rewritten.scenes[0]?.imagePrompt).toBe("A focused opener in vertical composition.")
   })
 
+  it("falls back to a frozen backup text model after a retryable provider failure and records the trace", async () => {
+    const providers = await import("../../../apps/worker/src/lib/providers")
+    const { encryptControlPlaneSecret } = await import("../../../apps/api/src/lib/model-control/crypto")
+    const axios = (await import("../../../apps/worker/node_modules/axios/index.js")).default
+
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "genergi-text-model-fallback-"))
+    process.env.GENERGI_DATA_DIR = tempDir
+    process.env.GENERGI_MODEL_CONTROL_MASTER_KEY = "0123456789abcdef0123456789abcdef"
+
+    await replaceProviderRecords([
+      {
+        id: "provider_primary_text",
+        providerKey: "primary-text",
+        providerType: "openai-compatible",
+        displayName: "Primary Text",
+        authType: "bearer_token",
+        encryptedEndpoint: encryptControlPlaneSecret("https://primary.example/v1"),
+        encryptedSecret: encryptControlPlaneSecret("primary-secret"),
+        endpointHint: "https://primary.example/v1",
+        secretHint: "****mary",
+        status: "available",
+        lastValidatedAt: "2026-05-10T00:00:00.000Z",
+        lastValidationError: null,
+        createdAt: "2026-05-10T00:00:00.000Z",
+        updatedAt: "2026-05-10T00:00:00.000Z",
+      },
+      {
+        id: "provider_backup_text",
+        providerKey: "backup-text",
+        providerType: "anthropic-compatible",
+        displayName: "Backup Text",
+        authType: "bearer_token",
+        encryptedEndpoint: encryptControlPlaneSecret("https://backup.example/v1"),
+        encryptedSecret: encryptControlPlaneSecret("backup-secret"),
+        endpointHint: "https://backup.example/v1",
+        secretHint: "****ckup",
+        status: "available",
+        lastValidatedAt: "2026-05-10T00:00:00.000Z",
+        lastValidationError: null,
+        createdAt: "2026-05-10T00:00:00.000Z",
+        updatedAt: "2026-05-10T00:00:00.000Z",
+      },
+    ] as any)
+
+    const postSpy = vi.spyOn(axios, "post")
+      .mockRejectedValueOnce({
+        isAxiosError: true,
+        message: "Request failed with status code 502",
+        response: {
+          status: 502,
+          statusText: "Bad Gateway",
+          data: { error: { message: "upstream provider failed" } },
+        },
+      })
+      .mockResolvedValueOnce({
+        data: {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(createStructuredPlanningResponse()),
+            },
+          ],
+        },
+      } as any)
+
+    const detail = createTaskDetail({
+      taskRunConfig: {
+        ...createTaskDetail().taskRunConfig,
+        textModel: { id: "primary-text-model", label: "Primary", provider: "openai-compatible" },
+        slotSnapshots: [
+          {
+            slotType: "textModel",
+            providerId: "provider_primary_text",
+            providerKey: "primary-text",
+            providerType: "openai-compatible",
+            modelId: "model_primary_text",
+            modelKey: "primary-text-model",
+            providerModelId: "primary-text-model",
+            displayName: "Primary",
+            capabilityJson: {},
+            validatedAt: "2026-05-10T00:00:00.000Z",
+            fallbackCandidates: [
+              {
+                slotType: "textModel",
+                providerId: "provider_backup_text",
+                providerKey: "backup-text",
+                providerType: "anthropic-compatible",
+                modelId: "model_backup_text",
+                modelKey: "backup-text-model",
+                providerModelId: "backup-text-model",
+                displayName: "Backup",
+                capabilityJson: {},
+                fallbackTriggers: ["provider_error"],
+                validatedAt: "2026-05-10T00:00:00.000Z",
+              },
+            ],
+          },
+        ],
+      },
+    })
+
+    const prepared = await providers.prepareTaskBlueprint(detail)
+
+    expect(postSpy).toHaveBeenCalledTimes(2)
+    expect(String(postSpy.mock.calls[0]?.[0])).toBe("https://primary.example/v1/chat/completions")
+    expect(String(postSpy.mock.calls[1]?.[0])).toBe("https://backup.example/v1/messages")
+    expect(prepared.detail.script).toBe("Hook the viewer fast. Reveal the upgrade.")
+    expect(prepared.planningTrace.planningAudit).toMatchObject({
+      provider: "anthropic-compatible",
+      model: "backup-text-model",
+      textModelFallbackEvents: [
+        {
+          trigger: "provider_error",
+          fromModel: "primary-text-model",
+          toModel: "backup-text-model",
+          fromProvider: "primary-text",
+          toProvider: "backup-text",
+        },
+      ],
+    })
+  })
+
+  it("does not switch text models for auth errors", async () => {
+    const providers = await import("../../../apps/worker/src/lib/providers")
+    const { encryptControlPlaneSecret } = await import("../../../apps/api/src/lib/model-control/crypto")
+    const axios = (await import("../../../apps/worker/node_modules/axios/index.js")).default
+
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "genergi-text-model-auth-no-fallback-"))
+    process.env.GENERGI_DATA_DIR = tempDir
+    process.env.GENERGI_MODEL_CONTROL_MASTER_KEY = "0123456789abcdef0123456789abcdef"
+
+    await replaceProviderRecords([
+      {
+        id: "provider_auth_primary_text",
+        providerKey: "auth-primary-text",
+        providerType: "openai-compatible",
+        displayName: "Auth Primary Text",
+        authType: "bearer_token",
+        encryptedEndpoint: encryptControlPlaneSecret("https://auth-primary.example/v1"),
+        encryptedSecret: encryptControlPlaneSecret("bad-secret"),
+        endpointHint: "https://auth-primary.example/v1",
+        secretHint: "****cret",
+        status: "available",
+        lastValidatedAt: "2026-05-10T00:00:00.000Z",
+        lastValidationError: null,
+        createdAt: "2026-05-10T00:00:00.000Z",
+        updatedAt: "2026-05-10T00:00:00.000Z",
+      },
+      {
+        id: "provider_auth_backup_text",
+        providerKey: "auth-backup-text",
+        providerType: "anthropic-compatible",
+        displayName: "Auth Backup Text",
+        authType: "bearer_token",
+        encryptedEndpoint: encryptControlPlaneSecret("https://auth-backup.example/v1"),
+        encryptedSecret: encryptControlPlaneSecret("backup-secret"),
+        endpointHint: "https://auth-backup.example/v1",
+        secretHint: "****ckup",
+        status: "available",
+        lastValidatedAt: "2026-05-10T00:00:00.000Z",
+        lastValidationError: null,
+        createdAt: "2026-05-10T00:00:00.000Z",
+        updatedAt: "2026-05-10T00:00:00.000Z",
+      },
+    ] as any)
+
+    const postSpy = vi.spyOn(axios, "post").mockRejectedValueOnce({
+      isAxiosError: true,
+      message: "Request failed with status code 401",
+      response: {
+        status: 401,
+        statusText: "Unauthorized",
+        data: { error: { message: "invalid api key" } },
+      },
+    })
+
+    const detail = createTaskDetail({
+      taskRunConfig: {
+        ...createTaskDetail().taskRunConfig,
+        textModel: { id: "auth-primary-text-model", label: "Auth Primary", provider: "openai-compatible" },
+        slotSnapshots: [
+          {
+            slotType: "textModel",
+            providerId: "provider_auth_primary_text",
+            providerKey: "auth-primary-text",
+            providerType: "openai-compatible",
+            modelId: "model_auth_primary_text",
+            modelKey: "auth-primary-text-model",
+            providerModelId: "auth-primary-text-model",
+            displayName: "Auth Primary",
+            capabilityJson: {},
+            validatedAt: "2026-05-10T00:00:00.000Z",
+            fallbackCandidates: [
+              {
+                slotType: "textModel",
+                providerId: "provider_auth_backup_text",
+                providerKey: "auth-backup-text",
+                providerType: "anthropic-compatible",
+                modelId: "model_auth_backup_text",
+                modelKey: "auth-backup-text-model",
+                providerModelId: "auth-backup-text-model",
+                displayName: "Auth Backup",
+                capabilityJson: {},
+                fallbackTriggers: ["provider_error", "auth_error"],
+                validatedAt: "2026-05-10T00:00:00.000Z",
+              },
+            ],
+          },
+        ],
+      },
+    })
+
+    const prepared = await providers.prepareTaskBlueprint(detail)
+
+    expect(postSpy).toHaveBeenCalledTimes(1)
+    expect(prepared.planningTrace.planningAudit).toMatchObject({
+      provider: "openai-compatible",
+      model: "auth-primary-text-model",
+      textModelFallbackEvents: [],
+    })
+  })
+
   it("normalizes GPT planning responses that use durationSeconds and sceneId field names", async () => {
     const providers = await import("../../../apps/worker/src/lib/providers")
     const detail = createTaskDetail({
@@ -1548,6 +1905,553 @@ Here's the thing. In Chinese destiny analysis, there's a pattern called "late bl
     expect(bundle.frameCount).toBe(2)
   })
 
+  it("uses one OpenAI Images request for batch keyframe generation when the runtime supports it", async () => {
+    const providers = await import("../../../apps/worker/src/lib/providers")
+    const { encryptControlPlaneSecret } = await import("../../../apps/api/src/lib/model-control/crypto")
+
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "genergi-keyframe-batch-"))
+    process.env.GENERGI_DATA_DIR = tempDir
+    process.env.GENERGI_MODEL_CONTROL_MASTER_KEY = "0123456789abcdef0123456789abcdef"
+
+    await replaceProviderRecords([
+      {
+        id: "provider_anhesea_image_batch",
+        providerKey: "anhesea-gpt-image2-batch",
+        providerType: "openai-compatible",
+        displayName: "GPT-image2 private image provider",
+        authType: "bearer_token",
+        encryptedEndpoint: encryptControlPlaneSecret("https://api.anhesea.top:9443"),
+        encryptedSecret: encryptControlPlaneSecret("anhesea-secret"),
+        endpointHint: "https://api.anhesea.top:9443",
+        secretHint: "****cret",
+        status: "available",
+        lastValidatedAt: "2026-05-06T00:00:00.000Z",
+        lastValidationError: null,
+        createdAt: "2026-05-06T00:00:00.000Z",
+        updatedAt: "2026-05-06T00:00:00.000Z",
+      },
+    ] as any)
+
+    const detail = createTaskDetail({
+      taskId: "task_keyframe_batch",
+      taskRunConfig: {
+        ...createTaskDetail().taskRunConfig,
+        imageModel: {
+          id: "gpt-image2-private",
+          label: "GPT-image2 自用生图模型",
+          provider: "openai-compatible",
+        },
+        visualSeedInput: "Same Asian woman in a dimly lit office, soft cinematic anime style.",
+        keyframeGenerationMode: "batch",
+        keyframeCount: 4,
+        executionBrief: {
+          version: "execution-brief-v1",
+          sourceBrief: "Explain why a career cycle can make hard work feel stuck.",
+          topic: "BaZi career cycle",
+          targetAudience: "People who feel stuck despite working hard",
+          corePainPoint: "Hard work is not turning into visible progress",
+          mainPromise: "A luck cycle may explain the timing",
+          conversionGoal: "Read the full report",
+          emotionalArc: "Tired, reflective, hopeful",
+          visualBrief: {
+            subject: "28-year-old Asian woman",
+            setting: "dimly lit late-night office",
+            style: "soft cinematic anime illustration",
+            mood: "tired, reflective, hopeful",
+            negativeRules: ["no text overlays", "no watermarks"],
+            consistencyRules: ["keep the same woman in every frame"],
+          },
+          narrativeStructure: ["Pain hook", "Daily effort", "Cycle explanation", "Report CTA"],
+          keyframePlan: Array.from({ length: 4 }, (_, index) => ({
+            index: index + 1,
+            timestampRange: `${index * 15}-${(index + 1) * 15}s`,
+            narrativeRole: ["Pain hook", "Daily effort", "Cycle explanation", "Report CTA"][index] ?? "Story beat",
+            visualGoal: `Show beat ${index + 1} with the same woman in the same office.`,
+            imagePrompt: `English execution frame ${index + 1}: 28-year-old Asian woman in a dimly lit late-night office, soft cinematic anime illustration.`,
+            videoPrompt: `English execution video ${index + 1}: slow, natural movement while preserving the same character and office.`,
+          })),
+          finalPromptLanguage: "en",
+        },
+        slotSnapshots: [
+          {
+            slotType: "imageModel",
+            providerId: "provider_anhesea_image_batch",
+            providerKey: "anhesea-gpt-image2-batch",
+            providerType: "openai-compatible",
+            modelId: "model_gpt_image2_private_batch",
+            modelKey: "gpt-image2-private",
+            providerModelId: "gpt-image-2",
+            displayName: "GPT-image2 private image model",
+            capabilityJson: {
+              imageTransport: "openai-images-generations",
+              quality: "high",
+              batchReturnMode: "api_multi_image",
+            },
+            validatedAt: "2026-05-06T00:00:00.000Z",
+          },
+        ],
+      },
+      scenes: Array.from({ length: 4 }, (_, index) => ({
+        id: `scene_${index + 1}`,
+        index,
+        title: `Scene ${index + 1}`,
+        sceneGoal: `Beat ${index + 1}`,
+        voiceoverScript: `Narration ${index + 1}.`,
+        startFrameDescription: `Frame ${index + 1}`,
+        script: `Narration ${index + 1}.`,
+        imagePrompt: `Scene ${index + 1} visual prompt.`,
+        videoPrompt: `Scene ${index + 1} video prompt.`,
+        startFrameIntent: `Start ${index + 1}`,
+        endFrameIntent: `End ${index + 1}`,
+        durationSec: 15,
+        startLabel: `00:${String(index * 15).padStart(2, "0")}`,
+        endLabel: `00:${String((index + 1) * 15).padStart(2, "0")}`,
+        reviewStatus: "pending" as const,
+        keyframeStatus: "pending" as const,
+        continuityConstraints: [],
+        reviewNote: null,
+        reviewedAt: null,
+        keyframeReviewNote: null,
+        keyframeReviewedAt: null,
+      })),
+    })
+
+    const openAiRequests: Array<{ prompt: string; count?: number }> = []
+    const bundle = await providers.createKeyframeBundle(
+      {
+        taskId: detail.taskId,
+        detail,
+        model: detail.taskRunConfig.imageModel.id,
+      },
+      {
+        createOpenAIImagesGenerationArtifacts: async ({ prompt, count }) => {
+          openAiRequests.push({ prompt, count })
+          return Array.from({ length: count ?? 1 }, (_, index) => ({
+            bytes: Buffer.from(`batch-frame-${index + 1}`, "utf8"),
+            extension: "png",
+            generationId: `remote-frame-${index + 1}`,
+          }))
+        },
+      },
+    )
+
+    expect(openAiRequests).toHaveLength(1)
+    expect(openAiRequests[0]?.count).toBe(4)
+    expect(openAiRequests[0]?.prompt).toContain("Return exactly 4 distinct storyboard keyframes")
+    expect(openAiRequests[0]?.prompt).toContain("English execution frame 1")
+    expect(openAiRequests[0]?.prompt).toContain("28-year-old Asian woman")
+    expect(bundle.frameCount).toBe(4)
+    const manifest = JSON.parse(await readFile(bundle.manifestPath, "utf8")) as {
+      version: string
+      returnMode: string
+      promptSource: string
+      finalPromptLanguage: string
+      executionBriefVersion: string | null
+      modelTrace: { wireApi?: string; requestPath?: string; providerModelId?: string }
+      requestedFrameCount: number
+      returnedFrameCount: number
+      batchGroups: Array<{ returnedCount: number; fallbackUsed: boolean; promptHash: string }>
+      frames: Array<{
+        generationMode: string
+        batchId: string | null
+        promptHash: string
+        promptSource?: string
+        timestampRange?: string
+        narrativeRole?: string
+        visualGoal?: string
+        imagePromptHash?: string
+      }>
+      fallbackEvents: unknown[]
+    }
+    expect(manifest.version).toBe("keyframe-manifest-v3")
+    expect(manifest.returnMode).toBe("api_multi_image")
+    expect(manifest.promptSource).toBe("executionBrief.keyframePlan")
+    expect(manifest.finalPromptLanguage).toBe("en")
+    expect(manifest.executionBriefVersion).toBe("execution-brief-v1")
+    expect(manifest.modelTrace).toMatchObject({
+      providerModelId: "gpt-image-2",
+      wireApi: "images_generations",
+      requestPath: "/v1/images/generations",
+    })
+    expect(manifest.requestedFrameCount).toBe(4)
+    expect(manifest.returnedFrameCount).toBe(4)
+    expect(manifest.batchGroups[0]).toMatchObject({ returnedCount: 4, fallbackUsed: false })
+    expect(manifest.batchGroups[0]?.promptHash).toMatch(/[a-f0-9]{16}/)
+    expect(manifest.frames.every((frame) => frame.generationMode === "batch" && frame.batchId === "batch-1")).toBe(true)
+    expect(manifest.frames[0]).toMatchObject({
+      promptSource: "executionBrief.keyframePlan",
+      timestampRange: "0-15s",
+      narrativeRole: "Pain hook",
+      visualGoal: "Show beat 1 with the same woman in the same office.",
+    })
+    expect(manifest.frames.map((frame) => frame.timestampRange)).toEqual([
+      "0-15s",
+      "15-30s",
+      "30-45s",
+      "45-60s",
+    ])
+    expect(manifest.frames.map((frame) => frame.narrativeRole)).toEqual([
+      "Pain hook",
+      "Daily effort",
+      "Cycle explanation",
+      "Report CTA",
+    ])
+    expect(manifest.frames[0]?.imagePromptHash).toMatch(/[a-f0-9]{16}/)
+    expect(manifest.fallbackEvents).toEqual([])
+  })
+
+  it("keeps partial batch keyframes and repairs missing frames with single generation", async () => {
+    const providers = await import("../../../apps/worker/src/lib/providers")
+    const { encryptControlPlaneSecret } = await import("../../../apps/api/src/lib/model-control/crypto")
+
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "genergi-keyframe-batch-partial-"))
+    process.env.GENERGI_DATA_DIR = tempDir
+    process.env.GENERGI_MODEL_CONTROL_MASTER_KEY = "0123456789abcdef0123456789abcdef"
+
+    await replaceProviderRecords([
+      {
+        id: "provider_partial_image_batch",
+        providerKey: "partial-gpt-image2-batch",
+        providerType: "openai-compatible",
+        displayName: "Partial GPT-image2 provider",
+        authType: "bearer_token",
+        encryptedEndpoint: encryptControlPlaneSecret("https://api.anhesea.top:9443"),
+        encryptedSecret: encryptControlPlaneSecret("anhesea-secret"),
+        endpointHint: "https://api.anhesea.top:9443",
+        secretHint: "****cret",
+        status: "available",
+        lastValidatedAt: "2026-05-06T00:00:00.000Z",
+        lastValidationError: null,
+        createdAt: "2026-05-06T00:00:00.000Z",
+        updatedAt: "2026-05-06T00:00:00.000Z",
+      },
+    ] as any)
+
+    const detail = createTaskDetail({
+      taskId: "task_keyframe_batch_partial",
+      taskRunConfig: {
+        ...createTaskDetail().taskRunConfig,
+        imageModel: { id: "gpt-image2-partial", label: "GPT-image2 Partial", provider: "openai-compatible" },
+        visualSeedInput: "Consistent woman in an office.",
+        keyframeGenerationMode: "batch",
+        keyframeCount: 4,
+        slotSnapshots: [
+          {
+            slotType: "imageModel",
+            providerId: "provider_partial_image_batch",
+            providerKey: "partial-gpt-image2-batch",
+            providerType: "openai-compatible",
+            modelId: "model_gpt_image2_partial",
+            modelKey: "gpt-image2-partial",
+            providerModelId: "gpt-image-2",
+            displayName: "GPT-image2 Partial",
+            capabilityJson: {
+              imageTransport: "openai-images-generations",
+              quality: "high",
+              maxBatchImages: 4,
+              batchReturnMode: "api_multi_image",
+            },
+            validatedAt: "2026-05-06T00:00:00.000Z",
+          },
+        ],
+      },
+      scenes: Array.from({ length: 4 }, (_, index) => ({
+        id: `scene_${index + 1}`,
+        index,
+        title: `Scene ${index + 1}`,
+        sceneGoal: `Beat ${index + 1}`,
+        voiceoverScript: `Narration ${index + 1}.`,
+        startFrameDescription: `Frame ${index + 1}`,
+        script: `Narration ${index + 1}.`,
+        imagePrompt: `Scene ${index + 1} visual prompt.`,
+        videoPrompt: `Scene ${index + 1} video prompt.`,
+        startFrameIntent: `Start ${index + 1}`,
+        endFrameIntent: `End ${index + 1}`,
+        durationSec: 15,
+        startLabel: `00:${String(index * 15).padStart(2, "0")}`,
+        endLabel: `00:${String((index + 1) * 15).padStart(2, "0")}`,
+        reviewStatus: "pending" as const,
+        keyframeStatus: "pending" as const,
+        continuityConstraints: [],
+        reviewNote: null,
+        reviewedAt: null,
+        keyframeReviewNote: null,
+        keyframeReviewedAt: null,
+      })),
+    })
+
+    const singlePrompts: string[] = []
+    const bundle = await providers.createKeyframeBundle(
+      { taskId: detail.taskId, detail, model: detail.taskRunConfig.imageModel.id },
+      {
+        createOpenAIImagesGenerationArtifacts: async ({ count }) =>
+          Array.from({ length: Math.min(2, count ?? 1) }, (_, index) => ({
+            bytes: Buffer.from(`batch-frame-${index + 1}`, "utf8"),
+            extension: "png",
+            generationId: `remote-batch-${index + 1}`,
+          })),
+        createOpenAIImagesGenerationArtifact: async ({ prompt }) => {
+          singlePrompts.push(prompt)
+          return {
+            bytes: Buffer.from(`single-frame-${singlePrompts.length}`, "utf8"),
+            extension: "png",
+            generationId: `remote-single-${singlePrompts.length}`,
+          }
+        },
+      },
+    )
+
+    const manifest = JSON.parse(await readFile(bundle.manifestPath, "utf8")) as {
+      returnedFrameCount: number
+      batchGroups: Array<{ returnedCount: number; fallbackUsed: boolean }>
+      fallbackEvents: Array<{ affectedFrameIndexes: number[] }>
+      frames: Array<{ sceneIndex: number; generationMode: string; batchId: string | null }>
+    }
+
+    expect(bundle.frameCount).toBe(4)
+    expect(singlePrompts).toHaveLength(2)
+    expect(manifest.returnedFrameCount).toBe(4)
+    expect(manifest.batchGroups[0]).toMatchObject({ returnedCount: 2, fallbackUsed: true })
+    expect(manifest.fallbackEvents[0]?.affectedFrameIndexes).toEqual([2, 3])
+    expect(manifest.frames.map((frame) => [frame.sceneIndex, frame.generationMode, frame.batchId])).toEqual([
+      [0, "batch", "batch-1"],
+      [1, "batch", "batch-1"],
+      [2, "single", null],
+      [3, "single", null],
+    ])
+  })
+
+  it("splits a composite GPT-image2 grid into independent keyframes", async () => {
+    const providers = await import("../../../apps/worker/src/lib/providers")
+    const { encryptControlPlaneSecret } = await import("../../../apps/api/src/lib/model-control/crypto")
+
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "genergi-keyframe-composite-grid-"))
+    process.env.GENERGI_DATA_DIR = tempDir
+    process.env.GENERGI_MODEL_CONTROL_MASTER_KEY = "0123456789abcdef0123456789abcdef"
+
+    await replaceProviderRecords([
+      {
+        id: "provider_composite_grid",
+        providerKey: "anhesea-gpt-image2-composite",
+        providerType: "openai-compatible",
+        displayName: "GPT-image2 composite provider",
+        authType: "bearer_token",
+        encryptedEndpoint: encryptControlPlaneSecret("https://api.anhesea.top:9443"),
+        encryptedSecret: encryptControlPlaneSecret("anhesea-secret"),
+        endpointHint: "https://api.anhesea.top:9443",
+        secretHint: "****cret",
+        status: "available",
+        lastValidatedAt: "2026-05-09T00:00:00.000Z",
+        lastValidationError: null,
+        createdAt: "2026-05-09T00:00:00.000Z",
+        updatedAt: "2026-05-09T00:00:00.000Z",
+      },
+    ] as any)
+
+    const detail = createTaskDetail({
+      taskId: "task_keyframe_composite_grid",
+      taskRunConfig: {
+        ...createTaskDetail().taskRunConfig,
+        imageModel: { id: "gpt-image2-private", label: "GPT-image2 自用生图模型", provider: "openai-compatible" },
+        visualSeedInput: "Consistent woman in a late-night office.",
+        keyframeGenerationMode: "batch",
+        keyframeCount: 4,
+        executionBrief: {
+          version: "execution-brief-v1",
+          sourceBrief: "Explain why a career cycle can make hard work feel stuck.",
+          topic: "BaZi career cycle",
+          targetAudience: "People who feel stuck despite working hard",
+          corePainPoint: "Hard work is not turning into visible progress",
+          mainPromise: "A luck cycle may explain the timing",
+          conversionGoal: "Read the full report",
+          emotionalArc: "Tired, reflective, hopeful",
+          visualBrief: {
+            subject: "28-year-old Asian woman",
+            setting: "late-night office",
+            style: "soft cinematic anime illustration",
+            mood: "tired, reflective, hopeful",
+            negativeRules: ["no text overlays", "no watermarks"],
+            consistencyRules: ["keep the same woman in every panel"],
+          },
+          narrativeStructure: ["Pain hook", "Daily effort", "Cycle explanation", "Report CTA"],
+          keyframePlan: Array.from({ length: 4 }, (_, index) => ({
+            index: index + 1,
+            timestampRange: `${index * 15}-${(index + 1) * 15}s`,
+            narrativeRole: ["Pain hook", "Daily effort", "Cycle explanation", "Report CTA"][index] ?? "Story beat",
+            visualGoal: `Panel ${index + 1} keeps the same woman and office while showing a distinct story beat.`,
+            imagePrompt: `Composite panel ${index + 1}: 28-year-old Asian woman in late-night office, soft cinematic anime illustration.`,
+            videoPrompt: `Video beat ${index + 1}: quiet cinematic motion with the same woman and office.`,
+          })),
+          finalPromptLanguage: "en",
+        },
+        slotSnapshots: [
+          {
+            slotType: "imageModel",
+            providerId: "provider_composite_grid",
+            providerKey: "anhesea-gpt-image2-composite",
+            providerType: "openai-compatible",
+            modelId: "model_gpt_image2_composite",
+            modelKey: "gpt-image2-private",
+            providerModelId: "gpt-image-2",
+            displayName: "GPT-image2 Composite",
+            capabilityJson: {
+              imageTransport: "openai-images-generations",
+              quality: "high",
+              maxBatchImages: 4,
+              batchReturnMode: "composite_grid",
+              compositeGridSize: "2048x3072",
+              compositeGridLayout: "2x2",
+            },
+            validatedAt: "2026-05-09T00:00:00.000Z",
+          },
+        ],
+      },
+      scenes: Array.from({ length: 4 }, (_, index) => ({
+        id: `scene_${index + 1}`,
+        index,
+        title: `Scene ${index + 1}`,
+        sceneGoal: `Beat ${index + 1}`,
+        voiceoverScript: `Narration ${index + 1}.`,
+        startFrameDescription: `Frame ${index + 1}`,
+        script: `Narration ${index + 1}.`,
+        imagePrompt: `Scene ${index + 1} visual prompt.`,
+        videoPrompt: `Scene ${index + 1} video prompt.`,
+        startFrameIntent: `Start ${index + 1}`,
+        endFrameIntent: `End ${index + 1}`,
+        durationSec: 15,
+        startLabel: `00:${String(index * 15).padStart(2, "0")}`,
+        endLabel: `00:${String((index + 1) * 15).padStart(2, "0")}`,
+        reviewStatus: "pending" as const,
+        keyframeStatus: "pending" as const,
+        continuityConstraints: [],
+        reviewNote: null,
+        reviewedAt: null,
+        keyframeReviewNote: null,
+        keyframeReviewedAt: null,
+      })),
+    })
+
+    const requests: Array<{ count?: number; size: string; prompt: string }> = []
+    const bundle = await providers.createKeyframeBundle(
+      { taskId: detail.taskId, detail, model: detail.taskRunConfig.imageModel.id },
+      {
+        createOpenAIImagesGenerationArtifacts: async ({ count, size, prompt }) => {
+          requests.push({ count, size, prompt })
+          return [
+            {
+              bytes: Buffer.from("composite-master", "utf8"),
+              extension: "png",
+              generationId: "remote-grid-master",
+            },
+          ]
+        },
+        splitCompositeGridArtifact: async ({ scenes }) =>
+          scenes.map((scene, index) => ({
+            scene,
+            bytes: Buffer.from(`cropped-panel-${index + 1}`, "utf8"),
+            extension: "png",
+            generationId: `remote-grid-master:panel-${index + 1}`,
+            batchIndex: index,
+            cropSourceFileName: "composite-grid-master.png",
+            cropPanelRect: {
+              x: index % 2 === 0 ? 0 : 1024,
+              y: index < 2 ? 0 : 1536,
+              width: 1024,
+              height: 1536,
+            },
+          } as any)),
+      },
+    )
+
+    expect(requests).toHaveLength(1)
+    expect(requests[0]).toMatchObject({ count: 4, size: "2048x3072" })
+    expect(requests[0]?.prompt).toContain("single 2x2 composite storyboard grid")
+    expect(bundle.frameCount).toBe(4)
+
+    const manifest = JSON.parse(await readFile(bundle.manifestPath, "utf8")) as {
+      version: string
+      returnMode?: string
+      compositeLayout?: string | null
+      compositeSize?: string | null
+      panelSize?: string | null
+      promptSource?: string
+      batchGroups: Array<{ returnedCount: number; fallbackUsed: boolean; returnMode?: string; compositeLayout?: string }>
+      frames: Array<{
+        sceneIndex: number
+        generationMode: string
+        batchId: string | null
+        remoteTaskId: string | null
+        promptSource?: string
+        cropSourceFileName?: string
+        cropPanelRect?: { x: number; y: number; width: number; height: number }
+      }>
+      fallbackEvents: unknown[]
+    }
+
+    expect(manifest.version).toBe("keyframe-manifest-v3")
+    expect(manifest.returnMode).toBe("composite_grid")
+    expect(manifest.compositeLayout).toBe("2x2")
+    expect(manifest.compositeSize).toBe("2048x3072")
+    expect(manifest.panelSize).toBe("1024x1536")
+    expect(manifest.promptSource).toBe("executionBrief.keyframePlan")
+    expect(manifest.batchGroups[0]).toMatchObject({
+      returnedCount: 4,
+      fallbackUsed: false,
+      returnMode: "composite_grid",
+      compositeLayout: "2x2",
+    })
+    expect(manifest.frames.map((frame) => [frame.sceneIndex, frame.generationMode, frame.batchId, frame.remoteTaskId])).toEqual([
+      [0, "batch", "batch-1", "remote-grid-master:panel-1"],
+      [1, "batch", "batch-1", "remote-grid-master:panel-2"],
+      [2, "batch", "batch-1", "remote-grid-master:panel-3"],
+      [3, "batch", "batch-1", "remote-grid-master:panel-4"],
+    ])
+    expect(manifest.frames[0]).toMatchObject({
+      promptSource: "executionBrief.keyframePlan",
+      cropSourceFileName: "composite-grid-master.png",
+      cropPanelRect: { x: 0, y: 0, width: 1024, height: 1536 },
+    })
+    expect(manifest.fallbackEvents).toEqual([])
+  })
+
+  it("uses a three-panel composite grid for 45 second tasks instead of wasting a fourth slot", async () => {
+    const providers = await import("../../../apps/worker/src/lib/providers")
+
+    const layout = providers.resolveCompositeGridLayout(3, "9:16")
+
+    expect(layout).toMatchObject({
+      columns: 3,
+      rows: 1,
+      label: "3x1",
+      size: "3072x2048",
+      panelCount: 3,
+      panelWidth: 1024,
+      panelHeight: 2048,
+    })
+    expect(layout.note).toContain("45s/3-keyframe")
+  })
+
+  it("keeps 15 and 30 second composite layouts matched to their real frame counts", async () => {
+    const providers = await import("../../../apps/worker/src/lib/providers")
+
+    expect(providers.resolveCompositeGridLayout(1, "9:16")).toMatchObject({
+      columns: 1,
+      rows: 1,
+      label: "1x1",
+      panelCount: 1,
+      panelWidth: 1024,
+      panelHeight: 1792,
+    })
+    expect(providers.resolveCompositeGridLayout(2, "9:16")).toMatchObject({
+      columns: 2,
+      rows: 1,
+      label: "2x1",
+      panelCount: 2,
+      panelWidth: 1024,
+      panelHeight: 2048,
+    })
+  })
+
   it("replaces only the requested keyframe and preserves the rest of the manifest during a narrow retry", async () => {
     const providers = await import("../../../apps/worker/src/lib/providers")
 
@@ -1852,6 +2756,8 @@ Here's the thing. In Chinese destiny analysis, there's a pattern called "late bl
       "planning_prompt",
       "planning_response",
       "planning_audit",
+      "visual_plan",
+      "keyframe_prompt_summary",
       "storyboard",
     ])
   })
@@ -1960,6 +2866,8 @@ Here's the thing. In Chinese destiny analysis, there's a pattern called "late bl
       "planning_prompt",
       "planning_response",
       "planning_audit",
+      "visual_plan",
+      "keyframe_prompt_summary",
       "storyboard",
       "keyframe_bundle",
       "keyframe_image",
@@ -2420,6 +3328,279 @@ Here's the thing. In Chinese destiny analysis, there's a pattern called "late bl
       size: "1024x1024",
       quality: "high",
     })
+  })
+
+  it("switches keyframe image generation to a configured backup model on provider errors", async () => {
+    const providers = await import("../../../apps/worker/src/lib/providers")
+    const { encryptControlPlaneSecret } = await import("../../../apps/api/src/lib/model-control/crypto")
+
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "genergi-image-model-fallback-"))
+    process.env.GENERGI_DATA_DIR = tempDir
+    process.env.GENERGI_MODEL_CONTROL_MASTER_KEY = "0123456789abcdef0123456789abcdef"
+
+    await replaceProviderRecords([
+      {
+        id: "provider_primary_image",
+        providerKey: "primary-image",
+        providerType: "openai-compatible",
+        displayName: "Primary Image",
+        authType: "bearer_token",
+        encryptedEndpoint: encryptControlPlaneSecret("https://primary.example/v1"),
+        encryptedSecret: encryptControlPlaneSecret("primary-secret"),
+        endpointHint: "https://primary.example/v1",
+        secretHint: "****cret",
+        status: "available",
+        lastValidatedAt: "2026-05-09T00:00:00.000Z",
+        lastValidationError: null,
+        createdAt: "2026-05-09T00:00:00.000Z",
+        updatedAt: "2026-05-09T00:00:00.000Z",
+      },
+      {
+        id: "provider_backup_image",
+        providerKey: "backup-image",
+        providerType: "openai-compatible",
+        displayName: "Backup Image",
+        authType: "bearer_token",
+        encryptedEndpoint: encryptControlPlaneSecret("https://backup.example/v1"),
+        encryptedSecret: encryptControlPlaneSecret("backup-secret"),
+        endpointHint: "https://backup.example/v1",
+        secretHint: "****cret",
+        status: "available",
+        lastValidatedAt: "2026-05-09T00:00:00.000Z",
+        lastValidationError: null,
+        createdAt: "2026-05-09T00:00:00.000Z",
+        updatedAt: "2026-05-09T00:00:00.000Z",
+      },
+    ] as any)
+
+    const detail = createTaskDetail({
+      taskId: "task_image_model_fallback",
+      taskRunConfig: {
+        ...createTaskDetail().taskRunConfig,
+        keyframeGenerationMode: "single",
+        keyframeCount: 1,
+        imageModel: {
+          id: "gpt-image-primary",
+          label: "Primary GPT Image",
+          provider: "openai-compatible",
+        },
+        slotSnapshots: [
+          {
+            slotType: "imageModel",
+            providerId: "provider_primary_image",
+            providerKey: "primary-image",
+            providerType: "openai-compatible",
+            modelId: "model_primary_image",
+            modelKey: "gpt-image-primary",
+            providerModelId: "gpt-image-primary",
+            displayName: "Primary GPT Image",
+            capabilityJson: {
+              imageTransport: "openai-images-generations",
+            },
+            validatedAt: "2026-05-09T00:00:00.000Z",
+            fallbackCandidates: [
+              {
+                slotType: "imageModel",
+                providerId: "provider_backup_image",
+                providerKey: "backup-image",
+                providerType: "openai-compatible",
+                modelId: "model_backup_image",
+                modelKey: "gpt-image-backup",
+                providerModelId: "gpt-image-backup",
+                displayName: "Backup GPT Image",
+                capabilityJson: {
+                  imageTransport: "openai-images-generations",
+                },
+                fallbackTriggers: ["provider_error"],
+                validatedAt: "2026-05-09T00:00:00.000Z",
+              },
+            ],
+          },
+        ],
+      },
+      scenes: [
+        {
+          id: "scene_1",
+          index: 0,
+          title: "Fallback hero shot",
+          script: "Show a calm studio desk.",
+          imagePrompt: "A calm studio desk with warm light.",
+          videoPrompt: "A calm studio desk with warm light.",
+          durationSec: 8,
+          startLabel: "00:00",
+          endLabel: "00:08",
+          reviewStatus: "pending",
+          keyframeStatus: "pending",
+          reviewNote: null,
+          reviewedAt: null,
+          keyframeReviewNote: null,
+          keyframeReviewedAt: null,
+        },
+      ],
+    })
+
+    const requestedModels: string[] = []
+    const bundle = await providers.createKeyframeBundle(
+      {
+        taskId: detail.taskId,
+        detail,
+        model: "gpt-image-primary",
+      },
+      {
+        createOpenAIImagesGenerationArtifact: async (input) => {
+          requestedModels.push(input.model)
+          if (input.model === "gpt-image-primary") {
+            throw new Error("502 upstream provider failed")
+          }
+          return {
+            bytes: Buffer.from("backup-frame"),
+            extension: "png",
+            generationId: "backup-generation",
+          }
+        },
+      },
+    )
+
+    const manifest = JSON.parse(await readFile(bundle.manifestPath, "utf8")) as {
+      frames: Array<{ model?: string; remoteTaskId?: string | null }>
+      modelFallbackEvents: Array<{ trigger: string; fromModel: string; toModel: string }>
+    }
+
+    expect(requestedModels).toEqual(["gpt-image-primary", "gpt-image-backup"])
+    expect(manifest.frames[0]?.model).toBe("gpt-image-backup")
+    expect(manifest.frames[0]?.remoteTaskId).toBe("backup-generation")
+    expect(manifest.modelFallbackEvents[0]).toMatchObject({
+      trigger: "provider_error",
+      fromModel: "gpt-image-primary",
+      toModel: "gpt-image-backup",
+    })
+  })
+
+  it("does not switch image generation to a backup model on authentication errors", async () => {
+    const providers = await import("../../../apps/worker/src/lib/providers")
+    const { encryptControlPlaneSecret } = await import("../../../apps/api/src/lib/model-control/crypto")
+
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "genergi-image-model-auth-no-fallback-"))
+    process.env.GENERGI_DATA_DIR = tempDir
+    process.env.GENERGI_MODEL_CONTROL_MASTER_KEY = "0123456789abcdef0123456789abcdef"
+
+    await replaceProviderRecords([
+      {
+        id: "provider_primary_auth_image",
+        providerKey: "primary-auth-image",
+        providerType: "openai-compatible",
+        displayName: "Primary Auth Image",
+        authType: "bearer_token",
+        encryptedEndpoint: encryptControlPlaneSecret("https://primary-auth.example/v1"),
+        encryptedSecret: encryptControlPlaneSecret("primary-secret"),
+        endpointHint: "https://primary-auth.example/v1",
+        secretHint: "****cret",
+        status: "available",
+        lastValidatedAt: "2026-05-09T00:00:00.000Z",
+        lastValidationError: null,
+        createdAt: "2026-05-09T00:00:00.000Z",
+        updatedAt: "2026-05-09T00:00:00.000Z",
+      },
+      {
+        id: "provider_backup_auth_image",
+        providerKey: "backup-auth-image",
+        providerType: "openai-compatible",
+        displayName: "Backup Auth Image",
+        authType: "bearer_token",
+        encryptedEndpoint: encryptControlPlaneSecret("https://backup-auth.example/v1"),
+        encryptedSecret: encryptControlPlaneSecret("backup-secret"),
+        endpointHint: "https://backup-auth.example/v1",
+        secretHint: "****cret",
+        status: "available",
+        lastValidatedAt: "2026-05-09T00:00:00.000Z",
+        lastValidationError: null,
+        createdAt: "2026-05-09T00:00:00.000Z",
+        updatedAt: "2026-05-09T00:00:00.000Z",
+      },
+    ] as any)
+
+    const detail = createTaskDetail({
+      taskId: "task_image_auth_no_fallback",
+      taskRunConfig: {
+        ...createTaskDetail().taskRunConfig,
+        keyframeGenerationMode: "single",
+        keyframeCount: 1,
+        imageModel: {
+          id: "gpt-image-primary",
+          label: "Primary GPT Image",
+          provider: "openai-compatible",
+        },
+        slotSnapshots: [
+          {
+            slotType: "imageModel",
+            providerId: "provider_primary_auth_image",
+            providerKey: "primary-auth-image",
+            providerType: "openai-compatible",
+            modelId: "model_primary_auth_image",
+            modelKey: "gpt-image-primary",
+            providerModelId: "gpt-image-primary",
+            displayName: "Primary GPT Image",
+            capabilityJson: {
+              imageTransport: "openai-images-generations",
+            },
+            validatedAt: "2026-05-09T00:00:00.000Z",
+            fallbackCandidates: [
+              {
+                slotType: "imageModel",
+                providerId: "provider_backup_auth_image",
+                providerKey: "backup-auth-image",
+                providerType: "openai-compatible",
+                modelId: "model_backup_auth_image",
+                modelKey: "gpt-image-backup",
+                providerModelId: "gpt-image-backup",
+                displayName: "Backup GPT Image",
+                capabilityJson: {
+                  imageTransport: "openai-images-generations",
+                },
+                fallbackTriggers: ["provider_error"],
+                validatedAt: "2026-05-09T00:00:00.000Z",
+              },
+            ],
+          },
+        ],
+      },
+      scenes: [
+        {
+          id: "scene_1",
+          index: 0,
+          title: "Auth failure hero shot",
+          script: "Show a calm studio desk.",
+          imagePrompt: "A calm studio desk with warm light.",
+          videoPrompt: "A calm studio desk with warm light.",
+          durationSec: 8,
+          startLabel: "00:00",
+          endLabel: "00:08",
+          reviewStatus: "pending",
+          keyframeStatus: "pending",
+          reviewNote: null,
+          reviewedAt: null,
+          keyframeReviewNote: null,
+          keyframeReviewedAt: null,
+        },
+      ],
+    })
+
+    const requestedModels: string[] = []
+    await expect(providers.createKeyframeBundle(
+      {
+        taskId: detail.taskId,
+        detail,
+        model: "gpt-image-primary",
+      },
+      {
+        createOpenAIImagesGenerationArtifact: async (input) => {
+          requestedModels.push(input.model)
+          throw new Error("OpenAI images generation request failed (401 Unauthorized): Incorrect API key provided: sk-live-secret")
+        },
+      },
+    )).rejects.toThrow("401 Unauthorized")
+
+    expect(requestedModels).toEqual(["gpt-image-primary"])
   })
 
   it("keeps using the existing gateway image path for legacy image models", async () => {

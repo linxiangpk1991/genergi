@@ -99,6 +99,51 @@ describe("API auth", () => {
     expect(response.headers.get("set-cookie")).not.toContain("Secure")
   })
 
+  it("creates temporary test operator accounts and rejects them after expiration", async () => {
+    dataDir = await mkdtemp(path.join(os.tmpdir(), "genergi-auth-"))
+    process.env.GENERGI_DATA_DIR = dataDir
+    process.env.GENERGI_ADMIN_USERNAME = "admin"
+    process.env.GENERGI_ADMIN_PASSWORD = "password"
+    process.env.GENERGI_SESSION_SECRET = "secret"
+
+    const [{ app }, auth, store] = await Promise.all([
+      import("../../../apps/api/src/index"),
+      import("../../../apps/api/src/lib/auth"),
+      import("../../../apps/api/src/lib/user-store"),
+    ])
+    const cookie = `genergi_session=${auth.buildSessionValue("admin", "secret")}`
+
+    const createResponse = await app.request("/api/users/test-account", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: cookie,
+      },
+      body: JSON.stringify({ expiresInHours: 2 }),
+    })
+    expect(createResponse.status).toBe(201)
+    const createPayload = await createResponse.json() as {
+      user: { username: string; purpose?: string; expiresAt?: string | null }
+      password: string
+    }
+    expect(createPayload.user.username).toContain("test-operator")
+    expect(createPayload.user.purpose).toBe("test_operator")
+    expect(createPayload.user.expiresAt).toBeTruthy()
+
+    const login = await auth.resolveLoginCredentials(createPayload.user.username, createPayload.password)
+    expect(login.ok).toBe(true)
+
+    await store.createStoredUser({
+      username: "expired-test",
+      password: "expired-pass",
+      displayName: "Expired Test",
+      purpose: "test_operator",
+      expiresAt: "2020-01-01T00:00:00.000Z",
+    })
+    const expiredLogin = await auth.resolveLoginCredentials("expired-test", "expired-pass")
+    expect(expiredLogin).toEqual({ ok: false, reason: "USER_DISABLED" })
+  })
+
   it("sets secure session cookies for https logins", async () => {
     dataDir = await mkdtemp(path.join(os.tmpdir(), "genergi-auth-"))
     process.env.GENERGI_DATA_DIR = dataDir

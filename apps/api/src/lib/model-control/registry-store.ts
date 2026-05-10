@@ -17,9 +17,11 @@ import {
   normalizeModelCapability,
   normalizeVideoProviderModelId,
   readModelDefaults,
+  readModelRoutingPolicies,
   readModelRecords,
   readProviderRecords,
   replaceModelDefaults,
+  replaceModelRoutingPolicies,
   replaceModelRecords,
   replaceProviderRecords,
 } from "@genergi/shared"
@@ -186,6 +188,11 @@ export async function listModelRecords() {
 export async function getModelDefaultsDocument() {
   await ensureModelControlSeeded()
   return readModelDefaults()
+}
+
+export async function getModelRoutingPoliciesDocument() {
+  await ensureModelControlSeeded()
+  return readModelRoutingPolicies()
 }
 
 export async function createProviderRecord(input: {
@@ -427,6 +434,14 @@ export async function replaceModelControlDefaults(document: ModelControlDefaults
   const { replaceModelControlDefaults: replaceSharedDefaults } = await import("@genergi/shared")
   await replaceSharedDefaults(document)
   return readModelDefaults()
+}
+
+export async function updateModelRoutingPoliciesDocument(document: Awaited<ReturnType<typeof readModelRoutingPolicies>>) {
+  await replaceModelRoutingPolicies({
+    ...document,
+    updatedAt: now(),
+  })
+  return readModelRoutingPolicies()
 }
 
 export async function getDecryptedProviderConnection(providerId: string) {

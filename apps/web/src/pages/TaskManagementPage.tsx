@@ -563,6 +563,9 @@ export function TaskManagementPage() {
                       <td>
                         <strong>{task.title}</strong>
                         <div className="mono">{task.id}</div>
+                        <div className="muted">
+                          关键画面 {task.keyframeCount ?? Math.max(1, Math.ceil(task.targetDurationSec / 15))} 张 · {task.keyframeGenerationMode === "single" ? "单张生成" : "批量生成"}
+                        </div>
                         <ModelUsageSummary compact source={task.modelUsage} />
                         {task.archivedAt ? <span className="status-pill status-pill--disabled">已归档</span> : null}
                       </td>

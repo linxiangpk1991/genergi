@@ -85,9 +85,9 @@ describe("HomePage launch guards", () => {
       routeLabel: "单条成片",
     })
     expect(estimateLaunchProduction(30)).toMatchObject({
-      sceneCount: 4,
+      sceneCount: 2,
       routeLabel: "多段成片",
-      estimatedBudgetCny: 5,
+      estimatedBudgetCny: 2.5,
     })
   })
 })
