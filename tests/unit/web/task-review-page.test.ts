@@ -579,6 +579,8 @@ describe("TaskReviewPage", () => {
 
     const keyframeImage = container.querySelector('img[alt="第 1 张关键画面预览"]')
     expect(keyframeImage).toBeTruthy()
+    expect(keyframeImage?.getAttribute("loading")).toBe("lazy")
+    expect(keyframeImage?.getAttribute("decoding")).toBe("async")
 
     await act(async () => {
       keyframeImage?.dispatchEvent(new Event("error", { bubbles: true }))

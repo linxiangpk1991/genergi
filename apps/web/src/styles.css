@@ -981,7 +981,71 @@ select.input {
 .keyframe-review-card__actions {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
+  padding-top: 2px;
+}
+
+.keyframe-action-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+  border: 1px solid rgba(0, 71, 171, 0.16);
+  border-radius: 10px;
+  background: #ffffff;
+  color: var(--genergi-primary-deep);
+  padding: 8px 14px;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.2;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    border-color 0.15s,
+    transform 0.1s;
+}
+
+.keyframe-action-button:hover {
+  background: rgba(0, 71, 171, 0.045);
+  border-color: rgba(0, 71, 171, 0.26);
+}
+
+.keyframe-action-button:active {
+  transform: scale(0.98);
+}
+
+.keyframe-action-button:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.review-status-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: fit-content;
+  min-height: 28px;
+  border-radius: 999px;
+  background: #eef4ff;
+  color: var(--genergi-primary-deep);
+  padding: 5px 10px;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.review-status-chip--approved {
+  background: #ecfdf3;
+  color: #166534;
+}
+
+.review-status-chip--rejected {
+  background: #fff4ed;
+  color: #9e4300;
 }
 
 .model-trace-summary__items {
@@ -2556,8 +2620,13 @@ select.input {
   padding: 12px 14px;
   line-height: 1.6;
   color: var(--genergi-text);
+  font-size: 13px;
   word-break: break-word;
   overflow-wrap: anywhere;
+}
+
+.keyframe-review-card .field-label {
+  font-size: 12px;
 }
 
 .quality-reason-panel {

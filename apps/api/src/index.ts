@@ -44,6 +44,7 @@ import {
   appendTaskRetryRequest,
   readTaskTimeline,
   readTaskRetryRequests,
+  readTaskDetails,
   replaceModelDefaults,
   replaceModelRecords,
   replaceProviderRecords,
@@ -396,6 +397,13 @@ function enrichAssetsWithModelTrace(
 
 async function enrichSummary(task: Awaited<ReturnType<typeof listTasks>>[number]) {
   const detail = await getTaskDetail(task.id)
+  return enrichSummaryWithDetail(task, detail)
+}
+
+function enrichSummaryWithDetail(
+  task: Awaited<ReturnType<typeof listTasks>>[number],
+  detail: Awaited<ReturnType<typeof getTaskDetail>> | null | undefined,
+) {
   const cached = taskPlanningState.get(task.id)
   const planning =
     cached ??
@@ -407,6 +415,11 @@ async function enrichSummary(task: Awaited<ReturnType<typeof listTasks>>[number]
       task.routeReason,
     )
   return { ...task, planning, modelUsage: buildTaskModelUsage(detail?.taskRunConfig), modelTrace: buildTaskModelTrace(detail?.taskRunConfig) }
+}
+
+async function enrichSummaries(tasks: Awaited<ReturnType<typeof listTasks>>) {
+  const details = await readTaskDetails()
+  return tasks.map((task) => enrichSummaryWithDetail(task, details[task.id] ?? null))
 }
 
 function enrichDetail(detail: NonNullable<Awaited<ReturnType<typeof getTaskDetail>>>) {
@@ -3434,7 +3447,7 @@ requireAuthNamespace("/api/tasks")
 app.get("/api/tasks", async (c) => {
   const includeArchived = c.req.query("includeArchived") === "1" || c.req.query("includeArchived") === "true"
   const tasks = await listTasks({ includeArchived })
-  return c.json({ tasks: await Promise.all(tasks.map(enrichSummary)) })
+  return c.json({ tasks: await enrichSummaries(tasks) })
 })
 
 app.post(

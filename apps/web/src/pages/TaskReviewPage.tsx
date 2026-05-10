@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { Link, useSearchParams } from "react-router-dom"
 import { ModelUsageSummary } from "../components/ModelUsageSummary"
 import {
@@ -84,6 +84,16 @@ function getReviewDecisionLabel(decision: TaskBlueprintReviewRecord["decision"])
   return decision === "approved" ? "已通过" : "已驳回"
 }
 
+function getReviewStatusChipClass(status: TaskBlueprintRecord["status"] | null | undefined) {
+  if (status === "approved") {
+    return "review-status-chip review-status-chip--approved"
+  }
+  if (status === "rejected") {
+    return "review-status-chip review-status-chip--rejected"
+  }
+  return "review-status-chip"
+}
+
 export function TaskReviewPage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const routeTaskId = searchParams.get("taskId") ?? ""
@@ -102,6 +112,7 @@ export function TaskReviewPage() {
   const [selectedQualityReasons, setSelectedQualityReasons] = useState<QualityIssueCategory[]>([])
   const [qualityNote, setQualityNote] = useState("")
   const [emptyFilterNotice, setEmptyFilterNotice] = useState<ReviewTaskFilter | null>(null)
+  const taskListPollingRef = useRef(false)
 
   const selectedTaskId = detail?.taskId ?? routeTaskId
   const selectedTaskOption = useMemo(
@@ -258,6 +269,10 @@ export function TaskReviewPage() {
     let active = true
 
     const timer = window.setInterval(() => {
+      if (taskListPollingRef.current) {
+        return
+      }
+      taskListPollingRef.current = true
       void api.listTasks()
         .then((taskResult) => {
           if (!active) {
@@ -266,6 +281,9 @@ export function TaskReviewPage() {
           setTasks(taskResult.tasks)
         })
         .catch(() => {})
+        .finally(() => {
+          taskListPollingRef.current = false
+        })
     }, 5000)
 
     return () => {
@@ -695,13 +713,17 @@ export function TaskReviewPage() {
                     <h3>{`第 ${scene.index + 1} 张关键画面`}</h3>
                     <span className="muted">{scene.sceneGoal}</span>
                   </div>
-                  <span className="pill pill--sm">{getBlueprintStatusLabel(blueprint.status)}</span>
+                  <span className={getReviewStatusChipClass(blueprint.status)}>
+                    {getBlueprintStatusLabel(blueprint.status)}
+                  </span>
                 </div>
                 <div className="keyframe-review-card__body">
                   <div className="keyframe-review-card__media">
                     <img
                       alt={`第 ${scene.index + 1} 张关键画面预览`}
                       className="visual-preview__image"
+                      decoding="async"
+                      loading="lazy"
                       onError={() => markKeyframeImageFailed(scene.id)}
                       src={buildKeyframePreviewUrl(detail?.taskId ?? blueprint?.taskId ?? "", scene.id)}
                     />
@@ -750,7 +772,7 @@ export function TaskReviewPage() {
                 </div>
                 <div className="keyframe-review-card__actions">
                   <button
-                    className="ghost-button"
+                    className="keyframe-action-button"
                     disabled={!detail || submitting || !canSubmitReview || !["waiting_review", "failed"].includes(selectedTask?.status ?? "")}
                     onClick={() => void retryKeyframe(scene.id)}
                     title={selectedTask?.status === "waiting_review" ? "只重做这一张关键画面" : "只有待审核或失败任务可以局部重做"}
@@ -778,7 +800,9 @@ export function TaskReviewPage() {
                       </button>
                     </>
                   ) : (
-                    <span className="pill pill--sm">{isApproved ? "方案已通过" : isRejected ? "方案已驳回" : "等待方案"}</span>
+                    <span className={getReviewStatusChipClass(blueprint?.status)}>
+                      {isApproved ? "方案已通过" : isRejected ? "方案已驳回" : "等待方案"}
+                    </span>
                   )}
                 </div>
               </section>
