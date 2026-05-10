@@ -197,7 +197,7 @@ export function ModelControlCenterPage() {
 
       <div className="model-control-section-label">
         <strong>常用操作路径</strong>
-        <span>先处理接入方，再登记模型，最后调整默认模型。</span>
+        <span>先处理接入方，再维护模型清单，最后调整默认模型。</span>
       </div>
       <section className="model-control-link-grid">
         <Link className="card model-control-link-card" to="/model-control-center/providers">

@@ -243,6 +243,67 @@ function getFailureCategoryLabel(category: string) {
   }
 }
 
+function getTaskIssueLabel(task: TaskSummary) {
+  const lane = getTaskLane(task)
+
+  if (lane === "failed") {
+    return getFailureCategoryLabel(getFailureCategory(task))
+  }
+
+  if (lane === "blocked") {
+    if (task.status === "canceled") {
+      return "任务已终止"
+    }
+    if (task.status === "canceling" || task.cancelRequestedAt) {
+      return "终止处理中"
+    }
+    if (isStaleRunningTask(task)) {
+      return "超过 10 分钟无进展"
+    }
+    return "需要人工处理"
+  }
+
+  if (lane === "waiting_review") {
+    return "等待人工审核"
+  }
+
+  return "正常推进"
+}
+
+function getLaneDisplayLabel(task: TaskSummary) {
+  const lane = getTaskLane(task)
+  if (lane === "blocked" && task.status === "canceled") {
+    return "已终止"
+  }
+  if (lane === "blocked" && task.status === "canceling") {
+    return "终止中"
+  }
+  return productionLanes.find((item) => item.id === lane)?.label ?? lane
+}
+
+function getTaskProgressDetail(task: TaskSummary) {
+  const lane = getTaskLane(task)
+  const statusDetail = normalizeOperatorCopy(task.statusDetail)
+
+  if (lane === "failed") {
+    return statusDetail && !/等待.*生成服务|开始处理|恢复处理/.test(statusDetail)
+      ? statusDetail
+      : "任务已失败，请先查看失败素材和原因"
+  }
+
+  if (lane === "blocked") {
+    if (task.status === "canceled") {
+      return "任务已终止，建议复核后归档"
+    }
+    if (isStaleRunningTask(task)) {
+      return statusDetail ? `${statusDetail} · 长时间无进展` : "长时间无进展，等待人工处理"
+    }
+    return statusDetail || "等待人工处理"
+  }
+
+  return statusDetail || `重试 ${task.retryCount} · ${task.actualDurationSec ? `偏差 ${formatDurationDelta(task)}` : "等待成片"}`
+}
+
 function getStatusDisplayLabel(status: TaskSummary["status"]) {
   switch (status) {
     case "queued":
@@ -487,18 +548,22 @@ export function BatchDashboardPage() {
   const capacityState = useMemo(() => {
     const workerStatus = runtime?.worker.status ?? "degraded"
     const redisStatus = runtime?.redis.status ?? "degraded"
-    const isDegraded = workerStatus !== "healthy" || redisStatus !== "healthy" || metrics.blockedCount > 0
-    const recommendation = isDegraded
-      ? "先处理卡住和失败的任务，再追加新任务；不要重复提交同一条视频内容。"
+    const serviceDegraded = workerStatus !== "healthy" || redisStatus !== "healthy"
+    const businessBlocked = metrics.blockedCount > 0 || metrics.failedCount > 0
+    const isDegraded = serviceDegraded || businessBlocked
+    const recommendation = serviceDegraded
+      ? "生成或排队服务状态异常，请先确认服务恢复后再追加任务。"
+      : businessBlocked
+        ? "服务在线，但有卡住或失败任务；先处理异常，再追加新任务。"
       : metrics.queuedCount > metrics.runningCount + 2
         ? "排队数偏高，先暂停追加大批量任务，等生成服务消化。"
         : "容量可接受，可以继续观察排队任务是否开始生成。"
 
     return {
-      status: isDegraded ? "需关注" : "可用",
+      status: isDegraded ? (serviceDegraded ? "服务异常" : "业务需处理") : "可用",
       recommendation,
     }
-  }, [metrics.blockedCount, metrics.queuedCount, metrics.runningCount, runtime?.redis.status, runtime?.worker.status])
+  }, [metrics.blockedCount, metrics.failedCount, metrics.queuedCount, metrics.runningCount, runtime?.redis.status, runtime?.worker.status])
 
   const reviewQueue = useMemo(
     () =>
@@ -528,7 +593,9 @@ export function BatchDashboardPage() {
         <div className="topbar-actions">
           <span className="pill">任务总数 {tasks.length}</span>
           <span className="pill pill--accent">生成中 {metrics.runningCount}</span>
-          <span className="pill">卡住 {metrics.blockedCount}</span>
+          <span className={metrics.blockedCount || metrics.failedCount ? "pill pill--danger" : "pill"}>
+            异常 {metrics.blockedCount + metrics.failedCount}
+          </span>
         </div>
       </header>
 
@@ -569,6 +636,9 @@ export function BatchDashboardPage() {
             <div className="metric-card"><span>待审方案</span><strong>{metrics.blueprintReviewCount}</strong></div>
             <div className="metric-card"><span>待继续生成</span><strong>{metrics.blueprintResumeCount}</strong></div>
           </div>
+          <p className="section-note">
+            “已有成片”和“时长达标”按是否已经产出视频文件统计，可能包含待审核或待交付任务，不等同于已完成数量。
+          </p>
         </section>
 
         <section className="card">
@@ -583,7 +653,6 @@ export function BatchDashboardPage() {
               const actions = getTaskActions(task)
               const isFocused = focusedTaskId === task.id
               const lane = getTaskLane(task)
-              const failureCategory = getFailureCategory(task)
               const recommendedAction = getRecommendedAction(task)
 
               return (
@@ -601,7 +670,7 @@ export function BatchDashboardPage() {
                     <div className="task-item__title-row">
                       <strong>{task.title}</strong>
                       <span className={lane === "blocked" || lane === "failed" ? "pill pill--sm pill--danger" : "pill pill--sm"}>
-                        {productionLanes.find((item) => item.id === lane)?.label ?? lane}
+                        {getLaneDisplayLabel(task)}
                       </span>
                       {isFocused ? <span className="pill pill--sm pill--accent">当前定位</span> : null}
                     </div>
@@ -619,14 +688,14 @@ export function BatchDashboardPage() {
                   </div>
                   <div>
                     <strong>{task.progressPct}%</strong>
-                    <span>{normalizeOperatorCopy(task.statusDetail) || `重试 ${task.retryCount} · ${task.actualDurationSec ? `偏差 ${formatDurationDelta(task)}` : "等待成片"}`}</span>
+                    <span>{getTaskProgressDetail(task)}</span>
                     <span className="task-item__subline">预计剩余 {getTaskEta(task)}</span>
                   </div>
                   <div>
                     <strong>¥{task.estimatedCostCny.toFixed(2)}</strong>
                     <span>{getStatusDisplayLabel(task.status)} · {task.channelId} · {getTaskExceptionLabel(task)}</span>
                     <span className="task-item__subline">
-                      {getTaskHeartbeat(task)} · 问题类型 {getFailureCategoryLabel(failureCategory)}
+                      {getTaskHeartbeat(task)} · 问题类型 {getTaskIssueLabel(task)}
                     </span>
                   </div>
                   <div className="task-item__actions">
@@ -681,6 +750,14 @@ export function BatchDashboardPage() {
             <div className="task-list compact-list">
               <div className="task-item"><strong>生成服务</strong><span>{runtime?.worker.status ?? "unknown"} · {normalizeOperatorCopy(runtime?.worker.message) || "N/A"}</span></div>
               <div className="task-item"><strong>排队服务</strong><span>{runtime?.redis.status ?? "unknown"} · {normalizeOperatorCopy(runtime?.redis.message) || "N/A"}</span></div>
+              <div className={metrics.blockedCount || metrics.failedCount ? "task-item task-item--blocked" : "task-item"}>
+                <strong>业务队列</strong>
+                <span>
+                  {metrics.blockedCount || metrics.failedCount
+                    ? `需处理：卡住 ${metrics.blockedCount} / 失败 ${metrics.failedCount}`
+                    : "当前没有卡住或失败任务"}
+                </span>
+              </div>
             </div>
           </section>
 
@@ -692,10 +769,10 @@ export function BatchDashboardPage() {
                   <div key={task.id} className="task-item task-item--blocked">
                     <div className="task-item__title-row">
                       <strong>{task.title}</strong>
-                      <span className="pill pill--sm pill--danger">卡住</span>
+                      <span className="pill pill--sm pill--danger">{getLaneDisplayLabel(task)}</span>
                     </div>
                     <span>{getTaskHeartbeat(task)} · 预计剩余 {getTaskEta(task)}</span>
-                    <span className="task-item__subline">{getRecommendedAction(task)}</span>
+                    <span className="task-item__subline">问题类型 {getTaskIssueLabel(task)} · {getRecommendedAction(task)}</span>
                     <div className="task-item__actions">
                       <Link className="ghost-button" to={buildAssetCenterUrl(task.id)}>
                         查看素材文件

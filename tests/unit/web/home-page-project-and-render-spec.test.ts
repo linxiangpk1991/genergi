@@ -329,7 +329,8 @@ describe("HomePage project and terminal preset flow", () => {
       expect(text).toContain("4:3")
       expect(text).toContain("审核优先")
       expect(text).toContain("单一路径")
-      expect(text).toContain("本次模型路线")
+      expect(text).toContain("本次会用到的 AI 服务")
+      expect(text).not.toContain("模型槽位")
       expect(text).toContain("GPT-5.5")
       expect(text).toContain("GPT Image")
       expect(text).toContain("Veo 3.1")
@@ -512,9 +513,9 @@ describe("HomePage P0-P2 launch console behavior", () => {
     vi.clearAllMocks()
   })
 
-  async function renderHomePage() {
+  async function renderHomePage(operator = "ops-a") {
     await act(async () => {
-      root.render(createElement(HomePage))
+      root.render(createElement(HomePage, { operator }))
     })
 
     await waitFor(() => {
@@ -533,26 +534,42 @@ describe("HomePage P0-P2 launch console behavior", () => {
     expect(text).toMatch(/启动前检查|启动前确认|预检/)
   })
 
-  it("shows field-level errors and review-blueprint submit copy for empty title and source content", async () => {
+  it("keeps submit disabled until required fields are ready", async () => {
     await renderHomePage()
 
     const submitButton = findHomeButton(
       container,
-      /提交，先生成审核内容|确认流程/,
+      /补齐必填后提交|提交，先生成审核内容/,
     )
     expect(submitButton).toBeTruthy()
+    expect(submitButton?.disabled).toBe(true)
+
+    const titleInput = container.querySelector('input[placeholder*="夏季新品种草短视频"]') as HTMLInputElement | null
+    const scriptInput = container.querySelector('textarea[placeholder*="直接写你想表达的内容"]') as HTMLTextAreaElement | null
+    expect(titleInput).toBeTruthy()
+    expect(scriptInput).toBeTruthy()
 
     await act(async () => {
-      submitButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }))
+      setInputValue(titleInput!, "Campaign launch")
+      setInputValue(scriptInput!, "Audience: young professionals. Product: skin serum. CTA: buy now.")
     })
 
     await waitFor(() => {
-      const text = container.textContent ?? ""
-      expect(text).toMatch(/提交，先生成审核内容|确认流程/)
-      expect(text).toMatch(/任务名称.*(必填|不能为空|请填写任务名称)/)
-      expect(text).toMatch(/视频内容.*(必填|不能为空|请填写视频内容)/)
+      expect(findHomeButton(container, /提交，先生成审核内容/)?.disabled).toBe(false)
     })
     expect(vi.mocked(api.createTask)).not.toHaveBeenCalled()
+  })
+
+  it("does not restore another operator's task launch draft", async () => {
+    window.localStorage.setItem(
+      "genergi.task-launch.draft.v1.ops-a",
+      JSON.stringify({ title: "Ops A draft", script: "Private draft content" }),
+    )
+
+    await renderHomePage("ops-b")
+
+    expect(container.textContent ?? "").not.toContain("已恢复当前账号")
+    expect(container.textContent ?? "").not.toContain("Ops A draft")
   })
 
   it("shows a preflight warning when source content is too short", async () => {

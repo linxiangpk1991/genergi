@@ -51,13 +51,13 @@ export function App() {
   return (
     <AppLayout operator={operator}>
       <Routes>
-        <Route path="/" element={<HomePage />} />
+        <Route path="/" element={<HomePage operator={operator} />} />
         <Route path="/batch-dashboard" element={<BatchDashboardPage />} />
         <Route path="/task-management" element={<TaskManagementPage />} />
         <Route path="/task-review" element={<TaskReviewPage />} />
         <Route path="/project-library" element={<ProjectLibraryPage />} />
         <Route path="/asset-center" element={<AssetsPage />} />
-        <Route path="/user-center" element={<UserCenterPage />} />
+        <Route path="/user-center" element={<UserCenterPage operator={operator} />} />
         <Route path="/help-center" element={<HelpCenterHomePage />} />
         <Route path="/help-center/workflows/:workflowId" element={<HelpWorkflowPage />} />
         <Route path="/help-center/features/:featureId" element={<HelpFeaturePage />} />

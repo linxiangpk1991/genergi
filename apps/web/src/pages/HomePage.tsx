@@ -177,9 +177,13 @@ const SCRIPT_TEMPLATES = [
   },
 ]
 
-function getStoredLaunchDraft(): Partial<DraftPayload> | null {
+function getLaunchDraftStorageKey(operator: string | undefined) {
+  return operator ? `${LAUNCH_DRAFT_STORAGE_KEY}.${operator}` : LAUNCH_DRAFT_STORAGE_KEY
+}
+
+function getStoredLaunchDraft(operator: string | undefined): Partial<DraftPayload> | null {
   try {
-    const raw = window.localStorage.getItem(LAUNCH_DRAFT_STORAGE_KEY)
+    const raw = window.localStorage.getItem(getLaunchDraftStorageKey(operator))
     return raw ? (JSON.parse(raw) as Partial<DraftPayload>) : null
   } catch {
     return null
@@ -252,6 +256,13 @@ function getRoutePreviewTone(routePreview: ModelRoutePreviewResponse | null) {
     : "ready"
 }
 
+function normalizeLaunchModelRouteCopy(value: string | null | undefined) {
+  return (value ?? "")
+    .replaceAll("模型槽位", "AI 服务")
+    .replaceAll("模型路线", "AI 服务组合")
+    .replaceAll("路由策略", "选择规则")
+}
+
 function buildModelOverridePayload(overrides: Partial<Record<ModelControlSlotType, string>>) {
   return MODEL_CONTROL_SLOT_ORDER.reduce<NonNullable<DraftPayload["modelOverrides"]>>((accumulator, slot) => {
     const value = overrides[slot]
@@ -275,14 +286,15 @@ function toCreateTaskOverrides(overrides: Partial<Record<ModelControlSlotType, s
   }, {})
 }
 
-export function HomePage() {
+export function HomePage({ operator }: { operator?: string } = {}) {
   const [bootstrap, setBootstrap] = useState<BootstrapResponse | null>(null);
   const [projects, setProjects] = useState<ProjectRecord[]>([]);
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
   const [modelPools, setModelPools] = useState<SelectableModelPoolsResponse | null>(null);
   const [modelRoutePreview, setModelRoutePreview] = useState<ModelRoutePreviewResponse | null>(null);
   const [modelRoutePreviewError, setModelRoutePreviewError] = useState("");
-  const storedDraft = useMemo(() => getStoredLaunchDraft(), []);
+  const draftStorageKey = useMemo(() => getLaunchDraftStorageKey(operator), [operator]);
+  const storedDraft = useMemo(() => getStoredLaunchDraft(operator), [operator]);
   const [title, setTitle] = useState(storedDraft?.title ?? "");
   const [script, setScript] = useState(storedDraft?.script ?? "");
   const [visualSeedInput, setVisualSeedInput] = useState(storedDraft?.visualSeedInput ?? "");
@@ -321,6 +333,14 @@ export function HomePage() {
   const scriptInputRef = useRef<HTMLTextAreaElement | null>(null);
 
   useEffect(() => {
+    if (draftStorageKey !== LAUNCH_DRAFT_STORAGE_KEY) {
+      try {
+        window.localStorage.removeItem(LAUNCH_DRAFT_STORAGE_KEY)
+      } catch {}
+    }
+  }, [draftStorageKey])
+
+  useEffect(() => {
     async function load() {
       try {
         const [bootstrapRes, taskRes, projectRes, modelPoolRes, modelRoutePreviewRes] = await Promise.all([
@@ -329,7 +349,7 @@ export function HomePage() {
           api.listProjects(),
           api.getSelectableModelPools(DEFAULT_LAUNCH_MODE_ID).catch(() => null),
           api.getModelRoutePreview(DEFAULT_LAUNCH_MODE_ID).catch((err) => {
-            setModelRoutePreviewError(err instanceof Error ? err.message : "模型路线预览加载失败")
+            setModelRoutePreviewError(err instanceof Error ? err.message : "AI 服务组合预览加载失败")
             return null
           }),
         ]);
@@ -388,7 +408,7 @@ export function HomePage() {
     try {
       if (hasDraft) {
         window.localStorage.setItem(
-          LAUNCH_DRAFT_STORAGE_KEY,
+          draftStorageKey,
           JSON.stringify({
             title,
             script,
@@ -404,10 +424,10 @@ export function HomePage() {
           } satisfies DraftPayload),
         )
       } else {
-        window.localStorage.removeItem(LAUNCH_DRAFT_STORAGE_KEY)
+        window.localStorage.removeItem(draftStorageKey)
       }
     } catch {}
-  }, [audioStrategy, keyframeGenerationMode, modelOverrides, projectId, script, subtitleStrategy, targetDurationSec, terminalPresetId, title, visualSeedInput])
+  }, [audioStrategy, draftStorageKey, keyframeGenerationMode, modelOverrides, projectId, script, subtitleStrategy, targetDurationSec, terminalPresetId, title, visualSeedInput])
 
   useEffect(() => {
     const hasDraft = Boolean(title.trim() || script.trim() || visualSeedInput.trim())
@@ -512,11 +532,12 @@ export function HomePage() {
     modelRoutePreview?.slots.reduce((count, slot) => count + slot.warnings.length, 0) ??
     (modelRoutePreviewError ? 1 : 0)
   const modelRouteSummary = modelOverrideCount
-    ? `本次已手动覆盖 ${modelOverrideCount} 个环节，提交时会优先使用你选的模型。`
-    : modelRoutePreview?.summary
+    ? `本次已手动指定 ${modelOverrideCount} 个环节，提交时会优先使用你选的 AI 服务。`
+    : normalizeLaunchModelRouteCopy(modelRoutePreview?.summary)
   const readyCheckCount = launchReadiness.checks.filter((check) => check.status === "ready").length
   const riskyCheckCount = launchReadiness.checks.filter((check) => check.status === "risk").length
   const suggestionCheckCount = launchReadiness.checks.filter((check) => check.status === "suggestion").length
+  const requiredFieldsReady = Boolean(title.trim() && script.trim())
 
   function focusFirstInvalidField(nextErrors: FieldErrors) {
     window.setTimeout(() => {
@@ -665,7 +686,7 @@ export function HomePage() {
       setConfirmOpen(false);
       setDraftRestored(false);
       try {
-        window.localStorage.removeItem(LAUNCH_DRAFT_STORAGE_KEY)
+        window.localStorage.removeItem(draftStorageKey)
       } catch {}
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : "创建任务失败";
@@ -710,7 +731,7 @@ export function HomePage() {
       {draftRestored ? (
         <section className="planning-summary-card launch-draft-card">
           <strong>已恢复未提交草稿</strong>
-          <span>任务名称、视频内容、画面参考和输出设置已从本机草稿恢复。提交成功后会自动清理草稿。</span>
+          <span>已恢复当前账号在这台设备上的草稿。提交成功后会自动清理。</span>
           <button className="ghost-button ghost-button--compact" onClick={() => setDraftRestored(false)} type="button">
             知道了
           </button>
@@ -1014,12 +1035,12 @@ export function HomePage() {
             <div className={`model-route-preview model-route-preview--${modelRoutePreviewTone}`}>
               <div className="model-route-preview__header">
                 <div>
-                  <h3>本次模型路线</h3>
+                  <h3>本次会用到的 AI 服务</h3>
                   <p>
                     {modelRouteSummary ??
                       (modelRoutePreviewError
-                        ? "模型路线暂时没有加载成功，请先确认模型管理服务可用。"
-                        : "正在确认本次会使用的模型路线。")}
+                        ? "AI 服务组合暂时没有加载成功，请先确认模型设置可用。"
+                        : "正在确认本次会使用的 AI 服务。")}
                   </p>
                 </div>
                 <span className={modelRouteWarningCount ? "pill pill--sm pill--warning" : "pill pill--sm"}>
@@ -1032,7 +1053,7 @@ export function HomePage() {
               </div>
               {modelRoutePreviewError ? (
                 <div className="alert alert--warning">
-                  <strong>模型路线加载失败</strong>
+                  <strong>AI 服务组合加载失败</strong>
                   <span>{modelRoutePreviewError}</span>
                 </div>
               ) : null}
@@ -1051,16 +1072,16 @@ export function HomePage() {
                       </div>
                       <div className="model-route-slot__meta">
                         <span>{providerName}</span>
-                        <span>{overrideOption ? "本次手动指定" : previewSlot?.routingStrategy ?? "默认路线"}</span>
+                        <span>{overrideOption ? "本次手动指定" : normalizeLaunchModelRouteCopy(previewSlot?.routingStrategy) || "默认组合"}</span>
                       </div>
                       <p>
                         {overrideOption
                           ? "这次任务会优先使用这个模型，不跟随默认策略自动变化。"
-                          : previewSlot?.selectionReason ?? "正在读取模型管理里的当前配置。"}
+                          : normalizeLaunchModelRouteCopy(previewSlot?.selectionReason) || "正在读取模型设置里的当前配置。"}
                       </p>
                       <div className="model-route-slot__footer">
                         <span className={fallbackCount ? "info-chip info-chip--accent" : "info-chip"}>
-                          {overrideOption ? "手动覆盖" : `备用 ${fallbackCount}`}
+                          {overrideOption ? "手动覆盖" : fallbackCount ? `备用 ${fallbackCount}` : "暂无备用"}
                         </span>
                         {overrideOption ? (
                           <span className="status-text--success">提交后会固定到本任务</span>
@@ -1133,9 +1154,9 @@ export function HomePage() {
               <div className="model-override-panel">
                 <div className="section-header">
                   <div>
-                    <h3>本次模型覆盖</h3>
+                    <h3>本次指定 AI 服务</h3>
                     <p className="section-note">
-                      默认使用模型管理里的{MODEL_CONTROL_MODE_LABELS[DEFAULT_LAUNCH_MODE_ID]}组合。只有排查质量问题或临时试模型时，才需要单独覆盖。
+                      默认使用模型设置里的{MODEL_CONTROL_MODE_LABELS[DEFAULT_LAUNCH_MODE_ID]}组合。只有排查质量问题或临时试模型时，才需要单独指定。
                     </p>
                   </div>
                   {modelOverrideCount ? (
@@ -1206,9 +1227,9 @@ export function HomePage() {
             <div className="metric-row"><span>成片组织</span><strong>{productionEstimate.routeLabel}</strong></div>
             <div className="metric-row"><span>预计预算</span><strong>¥{productionEstimate.estimatedBudgetCny.toFixed(2)}</strong></div>
             <div className="metric-row"><span>音频/字幕</span><strong>{selectedAudioStrategy.label} / {getSubtitleStrategyLabel(subtitleStrategy)}</strong></div>
-            <div className="metric-row"><span>模型覆盖</span><strong>{modelOverrideCount ? modelOverrideLabels.join("、") : "使用默认组合"}</strong></div>
+            <div className="metric-row"><span>AI 服务</span><strong>{modelOverrideCount ? modelOverrideLabels.join("、") : "使用默认组合"}</strong></div>
             <div className="metric-row">
-              <span>模型路线</span>
+              <span>AI 服务</span>
               <strong>
                 {modelOverrideCount
                   ? `覆盖 ${modelOverrideCount} 个环节`
@@ -1236,6 +1257,9 @@ export function HomePage() {
               <div className="alert alert--warning">
                 <strong>当前有异常任务</strong>
                 <span>建议先去生产看板处理失败或卡住的任务，再追加同类内容，避免重复占用队列。</span>
+                <a className="ghost-button ghost-button--compact" href="/batch-dashboard">
+                  查看全部异常任务
+                </a>
               </div>
             ) : null}
             <div className="muted">最近刷新：{tasksUpdatedAt || "刚刚进入页面"}</div>
@@ -1263,8 +1287,8 @@ export function HomePage() {
         <button className="ghost-button" onClick={handleClearDraft} type="button">
           清空草稿
         </button>
-        <button className="primary-button" disabled={submitting} form="launch-form" type="submit">
-          {submitting ? "正在提交…" : "提交，先生成审核内容"}
+        <button className="primary-button" disabled={submitting || !requiredFieldsReady} form="launch-form" type="submit">
+          {submitting ? "正在提交…" : requiredFieldsReady ? "提交，先生成审核内容" : "补齐必填后提交"}
         </button>
       </div>
 
@@ -1295,7 +1319,7 @@ export function HomePage() {
             </div>
             <div className="action-row">
               <button className="ghost-button" onClick={() => setConfirmOpen(false)} type="button">返回修改</button>
-              <button className="primary-button" disabled={submitting} onClick={() => void handleCreateTask()} type="button">
+              <button className="primary-button" disabled={submitting || !requiredFieldsReady} onClick={() => void handleCreateTask()} type="button">
                 {submitting ? "正在提交…" : "确认提交，先生成审核内容"}
               </button>
             </div>

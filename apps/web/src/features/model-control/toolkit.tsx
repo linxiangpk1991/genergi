@@ -12,7 +12,7 @@ import { MODEL_CONTROL_MODE_LABELS, MODEL_CONTROL_SLOT_LABELS } from "../../api"
 const MODEL_CONTROL_NAV_ITEMS = [
   { to: "/model-control-center", label: "总览" },
   { to: "/model-control-center/providers", label: "接入方" },
-  { to: "/model-control-center/registry", label: "模型路由" },
+  { to: "/model-control-center/registry", label: "模型清单" },
   { to: "/model-control-center/defaults", label: "默认与覆盖" },
   { to: "/model-control-center/routing", label: "路由策略" },
   { to: "/model-control-center/diagnostics", label: "诊断记录" },
@@ -166,7 +166,7 @@ export function EffectiveDefaultsPanel({
         <div>
           <h3>当前新任务生效组合</h3>
           <p className="section-note">
-            当前模式：{MODEL_CONTROL_MODE_LABELS[modeId]}。这里显示任务创建时会被冻结的四个模型槽位。
+            当前模式：{MODEL_CONTROL_MODE_LABELS[modeId]}。这里显示任务创建时会固定下来的四个 AI 服务。
           </p>
         </div>
       </div>

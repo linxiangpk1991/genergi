@@ -226,6 +226,8 @@ export function TaskReviewPage() {
         setFailedKeyframeImages([])
         setSelectedQualityReasons([])
         setQualityNote("")
+        setError("")
+        setLoading(false)
         const sourceAsset = findAsset(assetsResult.assets, "source_script")
         if (sourceAsset) {
           try {
@@ -244,7 +246,6 @@ export function TaskReviewPage() {
         } else {
           setSourceScript("")
         }
-        setError("")
       } catch (loadError) {
         if (!active) {
           return

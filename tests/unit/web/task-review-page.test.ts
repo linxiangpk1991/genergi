@@ -589,6 +589,31 @@ describe("TaskReviewPage", () => {
     expect(container.textContent ?? "").toContain("这张关键画面暂时打不开，请到素材页确认文件是否生成成功。")
   })
 
+  it("renders the review page before optional source script preview finishes loading", async () => {
+    globalThis.fetch = vi.fn(() => new Promise(() => undefined)) as any
+
+    await act(async () => {
+      root.render(
+        createElement(
+          MemoryRouter,
+          { initialEntries: ["/task-review?taskId=task_reviewable"] },
+          createElement(
+            Routes,
+            null,
+            createElement(Route, { path: "/task-review", element: createElement(TaskReviewPage) }),
+          ),
+        ),
+      )
+    })
+
+    await waitFor(() => {
+      const text = container.textContent ?? ""
+      expect(text).toContain("方案 v3")
+      expect(text).toContain("第 1 张关键画面")
+      expect(text).not.toContain("正在加载审核内容")
+    })
+  })
+
   it("shows plain-language quality reason choices for rejecting a blueprint", async () => {
     await act(async () => {
       root.render(

@@ -15,7 +15,7 @@ const emptyUserForm: UserFormState = {
   status: "active",
 }
 
-export function UserCenterPage() {
+export function UserCenterPage({ operator }: { operator?: string } = {}) {
   const [users, setUsers] = useState<UserRecord[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState("")
@@ -157,6 +157,10 @@ export function UserCenterPage() {
   }
 
   async function handleToggleStatus(user: UserRecord) {
+    if (operator && user.username === operator && user.status === "active") {
+      setError("不能停用当前登录账号，请先切换到其他管理员账号再操作。")
+      return
+    }
     setActionUserId(user.id)
     try {
       await api.updateUser(user.id, {
@@ -339,8 +343,9 @@ export function UserCenterPage() {
                         </button>
                         <button
                           className="ghost-button"
-                          disabled={actionUserId === user.id}
+                          disabled={actionUserId === user.id || (operator === user.username && user.status === "active")}
                           onClick={() => void handleToggleStatus(user)}
+                          title={operator === user.username && user.status === "active" ? "不能停用当前登录账号" : undefined}
                           type="button"
                         >
                           {user.status === "active" ? "停用" : "启用"}
