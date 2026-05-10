@@ -1404,7 +1404,7 @@ export function AssetsPage() {
     <>
       <header className="topbar">
         <div>
-          <div className="eyebrow">Asset Center</div>
+          <div className="eyebrow">素材工作台</div>
           <h1>素材与交付</h1>
           <p>先确认成片、字幕、脚本和封面是否齐全，再检查关键画面、分段视频和排查文件。</p>
         </div>
